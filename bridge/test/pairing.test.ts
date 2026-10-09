@@ -32,22 +32,15 @@ test('pairing display is uncached, loopback, protected from foreign origins and 
   } finally { await display.close(); }
 });
 
-test('expired pairing display no longer returns the QR image', async () => {
-  const display = await startPairingDisplay('ws://192.168.1.10:8765/device', token, 10);
+test('pairing display remains available beyond five minutes without a refresh timer', async (t) => {
+  const display = await startPairingDisplay('ws://192.168.1.10:8765/device', token);
   try {
-    await new Promise(resolve => setTimeout(resolve, 30));
-    const response = await fetch(display.url);
-    assert.equal(response.status, 410);
-    assert.doesNotMatch(await response.text(), /data:image/);
-  } finally { await display.close(); }
-});
-
-test('late visitors refresh at the original deadline, not a new full lifetime', async () => {
-  const display = await startPairingDisplay('ws://192.168.1.10:8765/device', token, 3500);
-  try {
-    await new Promise(resolve => setTimeout(resolve, 2600));
+    const later = Date.now() + 600_000;
+    t.mock.method(Date, 'now', () => later);
     const response = await fetch(display.url);
     assert.equal(response.status, 200);
-    assert.match(await response.text(), /http-equiv="refresh" content="1"/);
+    const html = await response.text();
+    assert.match(html, /data:image\/png;base64,/);
+    assert.doesNotMatch(html, /http-equiv="refresh"/);
   } finally { await display.close(); }
 });

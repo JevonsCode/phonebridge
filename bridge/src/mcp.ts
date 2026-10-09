@@ -3,12 +3,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { schemas, toolDescriptions, validateToken, type Method, type Reply } from './protocol.js';
 import { validateScreenshot } from './screenshot.js';
 import { validateHubUrl } from './hub-url.js';
+import { loadSavedToken } from './credentials.js';
 
-const token = process.env.PHONEBRIDGE_TOKEN ?? '';
+const token = process.env.PHONEBRIDGE_TOKEN ?? await loadSavedToken() ?? '';
 const url = new URL(process.env.PHONEBRIDGE_URL ?? 'http://127.0.0.1:8765');
 validateToken(token);
 validateHubUrl(url);
-const server = new McpServer({ name: 'phonebridge', version: '0.1.1' });
+const server = new McpServer({ name: 'phonebridge', version: '0.2.0' });
 for (const method of Object.keys(schemas) as Method[]) {
   server.registerTool(`phone_${method}`, {
     description: toolDescriptions[method], inputSchema: schemas[method].shape,

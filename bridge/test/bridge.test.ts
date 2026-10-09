@@ -1,7 +1,10 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { networkInterfaces } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { loadOrCreateSavedToken } from '../src/credentials.js';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -70,6 +73,10 @@ test('validates parameters and never forwards arbitrary commands', async t => {
     assert.equal((await rpc(method, params)).status, 400);
   }
   assert.throws(() => parseCommand({ method: '__proto__', params: {} }));
+  for (const params of [{ text: 'hello' }, { packageName: 'com.tencent.mm', text: '' },
+    { packageName: 'com.tencent.mm', text: 'x'.repeat(4001) }, { packageName: 'invalid', text: 'hello' }]) {
+    assert.equal((await rpc('commit_text', params)).status, 400);
+  }
 });
 
 test('round-trips Unicode text and preserves device READ_ONLY errors', async t => {
@@ -82,6 +89,8 @@ test('round-trips Unicode text and preserves device READ_ONLY errors', async t =
   });
   const result = await (await rpc('set_text', { nodeId: 'epoch:1', text: '你好，世界 🌍' })).json();
   assert.equal(result.error.code, 'READ_ONLY');
+  const focused = await (await rpc('commit_text', { packageName: 'com.example.test', text: '你好，世界 🌍' })).json();
+  assert.equal(focused.error.code, 'READ_ONLY');
 });
 
 test('single-flight rejects concurrent commands and ignores unrelated replies', async t => {
@@ -152,10 +161,18 @@ test(`MCP stdio discovers tools and returns state/image/error through real hub (
     phone.send(JSON.stringify(request.method === 'tap' ? { id: request.id, error: { code: 'READ_ONLY', message: 'Owner consent required.' } } : { id: request.id, result }));
   });
   const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
-  const transport = new StdioClientTransport({ command: process.execPath, args: ['--import', 'tsx', fileURLToPath(new URL('../src/mcp.ts', import.meta.url))], env: { ...env, PHONEBRIDGE_URL: url, PHONEBRIDGE_TOKEN: token }, stderr: 'pipe' });
+  const clientEnv = { ...env, PHONEBRIDGE_URL: url, PHONEBRIDGE_TOKEN: token } as Record<string, string>;
+  if (host !== '127.0.0.1') {
+    const credentialsDir = await mkdtemp(join(tmpdir(), 'phonebridge-mcp-'));
+    t.after(() => rm(credentialsDir, { recursive: true, force: true }));
+    clientEnv.PHONEBRIDGE_CREDENTIAL_FILE = join(credentialsDir, 'pairing.json');
+    await loadOrCreateSavedToken(clientEnv.PHONEBRIDGE_CREDENTIAL_FILE, token);
+    delete clientEnv.PHONEBRIDGE_TOKEN;
+  }
+  const transport = new StdioClientTransport({ command: process.execPath, args: ['--import', 'tsx', fileURLToPath(new URL('../src/mcp.ts', import.meta.url))], env: clientEnv, stderr: 'pipe' });
   const client = new Client({ name: 'test', version: '1' });
   await client.connect(transport); t.after(() => client.close());
-  const list = await client.listTools(); assert.equal(list.tools.length, 8);
+  const list = await client.listTools(); assert.equal(list.tools.length, 9);
   assert.equal(list.tools.find(x => x.name === 'phone_state')?.annotations?.readOnlyHint, true);
   const state = await client.callTool({ name: 'phone_state', arguments: {} });
   assert.match(JSON.stringify(state.content), /你好/);

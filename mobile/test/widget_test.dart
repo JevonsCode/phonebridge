@@ -9,9 +9,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   final calls = <MethodCall>[];
   var connected = false;
+  var saved = false;
+  var autoReconnect = false;
   setUp(() {
     calls.clear();
     connected = false;
+    saved = false;
+    autoReconnect = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
@@ -22,9 +26,16 @@ void main() {
               'connecting': false,
               'actionsEnabled': false,
               'lastError': '',
+              'hasSavedPairing': saved,
+              'savedEndpoint': saved ? 'ws://192.168.1.10:8765/device' : '',
+              'autoReconnectEnabled': autoReconnect,
             };
           }
-          if (call.method == 'disconnect') connected = false;
+          if (call.method == 'disconnect') {
+            connected = false;
+            autoReconnect = false;
+          }
+          if (call.method == 'forgetSavedConnection') saved = false;
           return null;
         });
   });
@@ -69,6 +80,68 @@ void main() {
     expect(connected, false);
     await tester.pumpWidget(const SizedBox());
   });
+
+  testWidgets(
+    'saved pairing resumes without exposing token or asking for QR again',
+    (tester) async {
+      saved = true;
+      await tester.pumpWidget(const PhoneBridgeApp());
+      await tester.pump();
+      expect(find.byKey(const Key('scan-pairing')), findsNothing);
+      expect(find.widgetWithText(TextField, '配对密钥'), findsNothing);
+      final resume = find.byKey(const Key('resume-saved'));
+      await tester.ensureVisible(resume);
+      await tester.pumpAndSettle();
+      await tester.tap(resume);
+      await tester.pump();
+      expect(calls.any((c) => c.method == 'resumeSavedConnection'), true);
+      expect(calls.any((c) => c.method == 'connect'), false);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'stop stays reachable during network reconnect and saved pairing remains',
+    (tester) async {
+      saved = true;
+      autoReconnect = true;
+      await tester.pumpWidget(const PhoneBridgeApp());
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('stop')));
+      await tester.pump();
+      expect(autoReconnect, false);
+      expect(saved, true);
+      expect(find.byKey(const Key('resume-saved')), findsOneWidget);
+      expect(find.byKey(const Key('stop')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'forgetting pairing returns to first-time consent without reconnecting',
+    (tester) async {
+      saved = true;
+      await tester.pumpWidget(const PhoneBridgeApp());
+      await tester.pump();
+      final forget = find.byKey(const Key('forget-saved'));
+      await tester.ensureVisible(forget);
+      await tester.pumpAndSettle();
+      await tester.tap(forget);
+      await tester.pump();
+      expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      expect(
+        tester.widget<CheckboxListTile>(find.byKey(const Key('consent'))).value,
+        false,
+      );
+      expect(
+        calls.any(
+          (c) => c.method == 'resumeSavedConnection' || c.method == 'connect',
+        ),
+        false,
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
   testWidgets('playground supports observable tap and Unicode text', (
     tester,
   ) async {

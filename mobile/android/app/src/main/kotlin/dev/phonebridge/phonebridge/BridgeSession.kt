@@ -18,10 +18,7 @@ import okio.ByteString
 import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
-/**
- * All session state is main-thread confined, including socket callbacks.
- * No preferences, saved state, work scheduler, reconnect loop, or disk token store.
- */
+/** Main-thread state; encrypted owner trust is separate from the disposable transport. */
 object BridgeSession {
     val main = Handler(Looper.getMainLooper())
     var service: PhoneAccessibilityService? = null
@@ -38,23 +35,56 @@ object BridgeSession {
     private var socket: WebSocket? = null
     private var client: OkHttpClient? = null
     private var packages = emptySet<String>()
+    private var desiredActions = false
     private var pending: String? = null
     private var timeout: Runnable? = null
     private var connectTimeout: Runnable? = null
+    private var retryTask: Runnable? = null
+    private var retryAttempt = 0
+    private var appContext: Context? = null
+    private var store: TrustedPairingStore? = null
+    private var saved: TrustedPairing? = null
+    private var loaded = false
     private const val CHANNEL = "phonebridge_session"
     private const val NOTIFICATION_ID = 8721
     const val STOP_ACTION = "dev.phonebridge.phonebridge.STOP_SESSION"
 
+    fun initialize(context: Context) {
+        appContext = context.applicationContext
+        if (loaded) return
+        try {
+            val storage = store ?: TrustedPairingStore(context.applicationContext).also { store = it }
+            saved = storage.load()?.also { validatePairing(it) }
+            loaded = true
+        } catch (_: Exception) {
+            // Do not erase an unreadable record; the Keystore may temporarily be unavailable.
+            saved = null
+            lastError = "Saved pairing is unavailable. Unlock the phone and reopen PhoneBridge."
+        }
+    }
+
     fun attach(value: PhoneAccessibilityService) {
         service = value
+        initialize(value)
         if (lastError == "Accessibility service stopped.") lastError = ""
+        tryAutoResume()
     }
 
     fun detach(value: PhoneAccessibilityService) {
         if (service === value) {
-            disconnect("Accessibility service stopped.")
+            closeTransport("Accessibility service stopped.")
             service = null
         }
+    }
+
+    fun serviceInterrupted() {
+        closeTransport("Accessibility was interrupted.")
+        scheduleReconnect()
+    }
+
+    fun onOwnerActivityResumed(context: Context) {
+        initialize(context)
+        tryAutoResume()
     }
 
     fun status(): Map<String, Any> = mapOf(
@@ -64,9 +94,38 @@ object BridgeSession {
         "actionsEnabled" to actionsEnabled,
         "lastError" to lastError,
         "endpoint" to endpoint,
+        "hasSavedPairing" to (saved != null),
+        "savedEndpoint" to (saved?.endpoint ?: ""),
+        "autoReconnectEnabled" to (saved?.resumeAllowed == true),
+        "rememberedActions" to (saved?.actionsEnabled == true),
+        "reconnecting" to (retryTask != null),
     )
 
     fun isAllowed(packageName: String) = packageName in packages
+
+    private fun validatePairing(record: TrustedPairing) {
+        EndpointPolicy.validate(record.endpoint, record.allowInsecureLocal)
+        EndpointPolicy.validateToken(record.token)
+        require(record.packages.isNotEmpty() && record.packages.size <= 64 &&
+            record.packages.all { it.length <= 255 && it.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")) }) {
+            "Enter 1–64 valid allowed package names."
+        }
+    }
+
+    private fun persist(record: TrustedPairing) {
+        try {
+            (store ?: throw IllegalStateException()).save(record)
+            saved = record
+            loaded = true
+        } catch (_: Exception) {
+            // Do not leave older action/resume permission on disk after a failed revocation.
+            try { store?.clear() } catch (_: Exception) { }
+            saved = null
+            loaded = false
+            closeTransport("Could not safely save pairing. Please pair again.")
+            throw BridgeFailure("PAIRING_STORAGE_FAILED", "Could not safely save pairing. Please pair again.")
+        }
+    }
 
     fun requireNotifications(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
@@ -74,26 +133,114 @@ object BridgeSession {
             OperationPolicy.requireNotifications(manager.areNotificationsEnabled(),
                 manager.getNotificationChannel(CHANNEL)?.importance)
         } catch (error: BridgeFailure) {
-            disconnect("PhoneBridge session notifications were disabled.")
+            pause("PhoneBridge session notifications were disabled.", ReconnectPolicy.EndReason.NOTIFICATIONS)
             throw error
         }
     }
 
-    fun connect(url: String, token: String, allowInsecureLocal: Boolean, allowed: List<String>) {
+    fun connect(url: String, token: String, allowInsecureLocal: Boolean, allowed: List<String>, remember: Boolean = true) {
         val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Enable PhoneBridge in Accessibility settings.")
-        val normalized = EndpointPolicy.validate(url, allowInsecureLocal)
-        EndpointPolicy.validateToken(token)
-        require(allowed.isNotEmpty() && allowed.size <= 64 &&
-            allowed.all { it.length <= 255 && it.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")) }) {
-            "Enter 1–64 valid allowed package names."
-        }
+        initialize(native)
+        val record = TrustedPairing(EndpointPolicy.validate(url, allowInsecureLocal), token,
+            allowInsecureLocal, allowed.distinct(), false, true)
+        validatePairing(record)
         native.requireUnlocked()
         val manager = native.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "PhoneBridge session", NotificationManager.IMPORTANCE_LOW))
         requireNotifications(native)
-        disconnect()
-        endpoint = normalized
-        packages = allowed.toSet()
+        closeTransport()
+        retryAttempt = 0
+        if (remember) persist(record) else forgetSavedConnection()
+        openTransport(record)
+    }
+
+    fun resumeSavedConnection() {
+        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Enable PhoneBridge in Accessibility settings.")
+        initialize(native)
+        val record = saved ?: throw BridgeFailure("NO_SAVED_PAIRING", "Pair with your computer first.")
+        validatePairing(record)
+        native.requireUnlocked()
+        requireNotifications(native)
+        closeTransport()
+        retryAttempt = 0
+        val resumed = record.copy(resumeAllowed = true)
+        persist(resumed)
+        openTransport(resumed)
+    }
+
+    fun forgetSavedConnection() {
+        closeTransport()
+        try {
+            store?.clear()
+            saved = null
+            loaded = true
+        } catch (_: Exception) {
+            saved = null
+            loaded = false
+            lastError = "Saved pairing could not be removed. Try again."
+            throw BridgeFailure("PAIRING_STORAGE_FAILED", lastError)
+        }
+    }
+
+    private fun tryAutoResume() {
+        if (connected || connecting || retryTask != null) return
+        val record = saved ?: return
+        if (!ReconnectPolicy.shouldReconnect(true, record.resumeAllowed, service != null)) return
+        try {
+            validatePairing(record)
+            requireNotifications(service!!)
+            service!!.requireUnlocked()
+            openTransport(record)
+        } catch (error: BridgeFailure) {
+            if (error.code == "DEVICE_LOCKED") {
+                lastError = "Waiting for the phone to be unlocked."
+                scheduleReconnect()
+            } else if (error.code != "NOTIFICATIONS_DISABLED") {
+                pause("Saved connection needs local attention.", ReconnectPolicy.EndReason.PROTOCOL)
+            }
+        } catch (_: Exception) {
+            pause("Saved pairing is invalid. Pair with your computer again.", ReconnectPolicy.EndReason.PROTOCOL)
+        }
+    }
+
+    private fun scheduleReconnect() {
+        if (!ReconnectPolicy.shouldReconnect(saved != null, saved?.resumeAllowed == true, service != null) ||
+            retryTask != null || connected || connecting) return
+        val delay = ReconnectPolicy.delayMillis(retryAttempt++)
+        retryTask = Runnable {
+            retryTask = null
+            tryAutoResume()
+        }.also { main.postDelayed(it, delay) }
+        showNotification()
+    }
+
+    private fun transportLost(message: String) {
+        closeTransport(message)
+        scheduleReconnect()
+    }
+
+    private fun pause(message: String, reason: ReconnectPolicy.EndReason) {
+        closeTransport(message)
+        if (!ReconnectPolicy.permitsAutomaticResume(reason)) {
+            try { store?.pauseAutomaticResume() } catch (_: Exception) {
+                lastError = "Could not persist Stop. Forget this computer before closing PhoneBridge."
+            }
+            saved?.let {
+                try {
+                    persist(it.copy(resumeAllowed = ReconnectPolicy.resumeAllowedAfterEnd(it.resumeAllowed, reason)))
+                } catch (_: BridgeFailure) { }
+            }
+        }
+    }
+
+    private fun openTransport(record: TrustedPairing) {
+        // This is a new connection only. Pending RPC IDs and messages are never replayed.
+        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Accessibility is unavailable.")
+        native.requireUnlocked()
+        requireNotifications(native)
+        endpoint = record.endpoint
+        packages = record.packages.toSet()
+        desiredActions = record.actionsEnabled
         connecting = true
         val current = generation
         showNotification()
@@ -106,8 +253,8 @@ object BridgeSession {
             .followSslRedirects(false)
             .build()
         client = transport
-        // The token exists only in this in-memory Request and is never logged.
-        val request = Request.Builder().url(normalized).header("Authorization", "Bearer $token").build()
+        val request = Request.Builder().url(record.endpoint)
+            .header("Authorization", "Bearer " + record.token).build()
         socket = transport.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 main.post {
@@ -115,66 +262,102 @@ object BridgeSession {
                         webSocket.cancel()
                         return@post
                     }
+                    try {
+                        native.requireUnlocked()
+                        requireNotifications(native)
+                    } catch (error: BridgeFailure) {
+                        if (error.code == "DEVICE_LOCKED") transportLost("Waiting for the phone to be unlocked.")
+                        return@post
+                    }
                     connectTimeout?.let { main.removeCallbacks(it) }
                     connectTimeout = null
                     connecting = false
                     connected = true
+                    actionsEnabled = desiredActions
+                    retryAttempt = 0
                     lastError = ""
-                    webSocket.send(JSONObject().put("type", "hello").put("protocol", 1)
-                        .put("device", "Android").put("readOnly", true).toString())
+                    if (!webSocket.send(JSONObject().put("type", "hello").put("protocol", 1)
+                            .put("device", "Android").put("readOnly", !actionsEnabled).toString())) {
+                        transportLost("Connection was interrupted.")
+                        return@post
+                    }
                     showNotification()
                 }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (text.length > 32768 || text.toByteArray(Charsets.UTF_8).size > 32768) {
-                    main.post { if (generation == current) disconnect("Command exceeded the size limit.") }
+                    main.post { if (generation == current) pause("Command exceeded the size limit.", ReconnectPolicy.EndReason.PROTOCOL) }
                     return
                 }
                 main.post { if (generation == current && socket === webSocket) receive(text, current) }
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                main.post { if (generation == current) disconnect("Binary commands are not supported.") }
+                main.post { if (generation == current) pause("Binary commands are not supported.", ReconnectPolicy.EndReason.PROTOCOL) }
             }
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                main.post { if (generation == current) disconnect("Desktop disconnected.") }
+                main.post {
+                    if (generation != current) return@post
+                    if (code == 1002 || code == 1003 || code == 1007 || code == 1008 || code == 1009) {
+                        pause("Desktop rejected this session. Resume locally after checking pairing.", ReconnectPolicy.EndReason.PROTOCOL)
+                    } else transportLost("Desktop disconnected. Reconnecting to the trusted computer.")
+                }
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                main.post { if (generation == current) disconnect("Desktop disconnected.") }
+                main.post { if (generation == current) transportLost("Desktop disconnected. Reconnecting to the trusted computer.") }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                // Exceptions, server bodies, and peer close reasons may contain secrets.
-                main.post { if (generation == current) disconnect("Connection failed. Check pairing, network, and certificate.") }
+                main.post {
+                    if (generation != current) return@post
+                    if (ReconnectPolicy.isPermanentHttpRejection(response?.code) || t is javax.net.ssl.SSLException) {
+                        pause("Pairing or certificate was rejected. Check your computer, then resume locally.",
+                            ReconnectPolicy.EndReason.AUTHENTICATION)
+                    } else transportLost("Connection lost. Reconnecting to the trusted computer.")
+                }
             }
         })
-        connectTimeout = Runnable { if (generation == current && connecting) disconnect("Connection timed out.") }
-            .also { main.postDelayed(it, 12000) }
+        connectTimeout = Runnable {
+            if (generation == current && connecting) transportLost("Connection timed out. Reconnecting to the trusted computer.")
+        }.also { main.postDelayed(it, 12000) }
     }
 
     fun setActionsEnabled(enabled: Boolean) {
         if (enabled) {
             if (!connected) throw BridgeFailure("NO_SESSION", "Connect before enabling actions.")
             service?.requireUnlocked() ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Accessibility is unavailable.")
+            requireNotifications(service!!)
         }
+        // Revocation takes effect in memory before touching the encrypted record.
+        if (!enabled) { actionsEnabled = false; desiredActions = false }
+        saved?.let { persist(it.copy(actionsEnabled = enabled)) }
         actionsEnabled = enabled
+        desiredActions = enabled
         service?.invalidateNodes()
         showNotification()
     }
 
+    /** Explicit owner Stop; keeps credentials, but disables persisted automatic resume. */
     fun disconnect(error: String = "") {
+        pause(error, ReconnectPolicy.EndReason.OWNER_STOP)
+    }
+
+    private fun closeTransport(error: String = "") {
         generation++
         connected = false
         connecting = false
         actionsEnabled = false
+        desiredActions = false
         pending = null
         timeout?.let { main.removeCallbacks(it) }
         connectTimeout?.let { main.removeCallbacks(it) }
+        retryTask?.let { main.removeCallbacks(it) }
         timeout = null
         connectTimeout = null
+        retryTask = null
         service?.invalidateNodes()
         val oldSocket = socket
         socket = null
@@ -185,19 +368,19 @@ object BridgeSession {
         packages = emptySet()
         endpoint = ""
         lastError = error
-        service?.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+        appContext?.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
     }
 
     private fun receive(text: String, expectedGeneration: Long) {
         if (!connected) return
         val request = try { JSONObject(text) } catch (_: Exception) {
-            disconnect("Invalid command format.")
+            pause("Invalid command format.", ReconnectPolicy.EndReason.PROTOCOL)
             return
         }
         val id = request.opt("id") as? String
         val method = request.opt("method") as? String
         if (id == null || !id.matches(Regex("[A-Za-z0-9_-]{1,128}")) || method == null) {
-            disconnect("Invalid command format.")
+            pause("Invalid command format.", ReconnectPolicy.EndReason.PROTOCOL)
             return
         }
         if (pending != null) {
@@ -213,7 +396,11 @@ object BridgeSession {
         timeout = Runnable {
             if (generation == expectedGeneration && pending == id) {
                 send(id, null, BridgeFailure("TIMEOUT", "Operation timed out; outcome may be unknown. Do not retry automatically."))
-                disconnect("Operation timed out. Reconnect locally and observe before retrying.")
+                if (ReconnectPolicy.timedOutReadCanReconnect(method)) {
+                    transportLost("Observation timed out. Reconnecting to the trusted computer.")
+                } else {
+                    pause("Operation timed out. Resume locally and observe before retrying.", ReconnectPolicy.EndReason.TIMEOUT)
+                }
             }
         }.also { main.postDelayed(it, 12000) }
         val complete: (JSONObject?, BridgeFailure?) -> Unit = complete@{ result, error ->
@@ -226,8 +413,8 @@ object BridgeSession {
         try {
             val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Accessibility is unavailable.")
             native.execute(method, params, expectedGeneration, complete)
-        } catch (e: BridgeFailure) {
-            complete(null, e)
+        } catch (error: BridgeFailure) {
+            complete(null, error)
         } catch (_: Exception) {
             complete(null, BridgeFailure("UNAVAILABLE", "Android could not complete the operation."))
         }
@@ -238,23 +425,27 @@ object BridgeSession {
         if (error != null) message.put("error", JSONObject().put("code", error.code).put("message", error.message))
         else message.put("result", result ?: JSONObject())
         val encoded = message.toString()
-        if (encoded.length > 3 * 1024 * 1024 || socket?.send(encoded) != true) {
-            disconnect("Could not send operation result.")
+        if (encoded.length > 3 * 1024 * 1024) {
+            pause("Operation result exceeded the size limit.", ReconnectPolicy.EndReason.PROTOCOL)
+        } else if (socket?.send(encoded) != true) {
+            transportLost("Result could not be delivered. Observe after reconnection; never retry automatically.")
         }
     }
 
     private fun showNotification() {
-        val context = service ?: return
-        if (!connected && !connecting) return
+        val context = appContext ?: return
+        if (!connected && !connecting && retryTask == null) return
         val stop = PendingIntent.getBroadcast(context, 1,
             Intent(context, StopSessionReceiver::class.java).setAction(STOP_ACTION),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val open = PendingIntent.getActivity(context, 2, Intent(context, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val state = if (retryTask != null) "Reconnecting" else if (connecting) "Connecting"
+            else if (actionsEnabled) "Actions enabled" else "Read only"
         val notification = Notification.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentTitle("PhoneBridge • " + if (connecting) "Connecting" else if (actionsEnabled) "Actions enabled" else "Read only")
-            .setContentText("Your paired computer can inspect allowed apps. Tap Stop to end access.")
+            .setContentTitle("PhoneBridge • " + state)
+            .setContentText("Trusted computer access. Stop pauses access and automatic reconnection.")
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
@@ -267,6 +458,9 @@ object BridgeSession {
 
 class StopSessionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == BridgeSession.STOP_ACTION) BridgeSession.disconnect()
+        if (intent.action == BridgeSession.STOP_ACTION) {
+            BridgeSession.initialize(context)
+            BridgeSession.disconnect()
+        }
     }
 }

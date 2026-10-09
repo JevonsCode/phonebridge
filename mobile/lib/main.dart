@@ -47,11 +47,14 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Timer? timer;
   Map<String, dynamic> status = {};
   bool consent = false, insecureLocal = false, busy = false, polling = false;
+  bool remember = true;
   String? error;
   bool pairingPrefilled = false;
   bool get connected => status['connected'] == true;
   bool get connecting => status['connecting'] == true;
   bool get enabled => status['accessibilityEnabled'] == true;
+  bool get hasSavedPairing => status['hasSavedPairing'] == true;
+  bool get autoReconnect => status['autoReconnectEnabled'] == true;
 
   @override
   void initState() {
@@ -98,7 +101,14 @@ class _ConnectionPageState extends State<ConnectionPage> {
     });
     try {
       await channel.invokeMethod<void>(method, args);
-      if (method == 'disconnect' || method == 'connect') token.clear();
+      if (['disconnect', 'connect', 'forgetSavedConnection'].contains(method)) {
+        token.clear();
+      }
+      if (method == 'forgetSavedConnection') {
+        consent = false;
+        insecureLocal = false;
+        pairingPrefilled = false;
+      }
       await refresh();
     } on PlatformException catch (e) {
       if (mounted) setState(() => error = e.message ?? '操作失败，请检查手机状态');
@@ -121,6 +131,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       'endpoint': endpoint.text.trim(),
       'token': token.text.trim(),
       'allowInsecureLocal': insecureLocal,
+      'remember': remember,
       'packages': packages.text
           .split(RegExp(r'[\s,;]+'))
           .where((s) => s.isNotEmpty)
@@ -168,7 +179,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     final message =
         error ?? (nativeError?.isNotEmpty == true ? nativeError : null);
     return Scaffold(
-      bottomNavigationBar: connected || connecting
+      bottomNavigationBar: connected || connecting || autoReconnect
           ? SafeArea(
               child: Padding(
                 padding: const EdgeInsets.all(16),
@@ -245,6 +256,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
                                         : '已连接 · 只读')
                                   : connecting
                                   ? '正在连接…'
+                                  : autoReconnect
+                                  ? '等待电脑 · 自动重连中'
+                                  : hasSavedPairing
+                                  ? '已记住电脑 · 当前已停止'
                                   : '由你开启，随时停止',
                               style: const TextStyle(
                                 color: Colors.white,
@@ -257,7 +272,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
                               connected
                                   ? '停止后，电脑将立即失去访问权限'
                                   : enabled
-                                  ? '无障碍已就绪，等待与电脑配对'
+                                  ? (hasSavedPairing
+                                        ? '已有可信电脑，无需重新扫码'
+                                        : '无障碍已就绪，等待与电脑配对')
                                   : '完成下面的授权与配对即可开始',
                               style: const TextStyle(
                                 color: Color(0xFFCAD8D1),
@@ -301,102 +318,146 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   ),
                 ]),
                 const SizedBox(height: 14),
-                section('02', '连接你的电脑', [
-                  const Text(
-                    '在电脑上启动 PhoneBridge，扫描电脑显示的配对码；也可以手动填写。密钥只保存在当前会话内。',
-                    style: TextStyle(height: 1.6),
-                  ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    key: const Key('scan-pairing'),
-                    onPressed: busy || connected || connecting
-                        ? null
-                        : scanPairing,
-                    icon: const Icon(Icons.qr_code_scanner_rounded),
-                    label: const Text('扫描电脑配对码'),
-                  ),
-                  if (pairingPrefilled) ...[
+                if (hasSavedPairing) ...[
+                  section('02', '已记住的电脑', [
+                    Text(
+                      status['savedEndpoint'] as String? ?? '',
+                      key: const Key('saved-endpoint'),
+                    ),
                     const SizedBox(height: 12),
+                    const Text('连接信息已加密保存在手机内。重启或更新后恢复连接；主动停止后保持停止。'),
+                    if (!connected && !connecting)
+                      FilledButton.icon(
+                        key: const Key('resume-saved'),
+                        onPressed: busy || !enabled
+                            ? null
+                            : () => perform('resumeSavedConnection'),
+                        icon: const Icon(Icons.link_rounded),
+                        label: const Text('连接已记住的电脑'),
+                      ),
+                    TextButton.icon(
+                      key: const Key('forget-saved'),
+                      onPressed: busy
+                          ? null
+                          : () => perform('forgetSavedConnection'),
+                      icon: const Icon(Icons.link_off),
+                      label: const Text('忘记电脑并撤销授权'),
+                    ),
+                  ]),
+                  const SizedBox(height: 14),
+                ],
+                if (!hasSavedPairing)
+                  section('02', '连接你的电脑', [
                     const Text(
-                      '已填写连接信息。请核对电脑地址，再勾选下方授权并连接。',
-                      key: Key('pairing-prefilled'),
+                      '首次扫描电脑显示的配对码；记住电脑后，重启或更新无需重新扫码。也可以手动填写。',
+                      style: TextStyle(height: 1.6),
                     ),
-                  ],
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: endpoint,
-                    enabled: !connected && !connecting,
-                    autocorrect: false,
-                    decoration: const InputDecoration(
-                      labelText: '设备连接地址',
-                      helperText: '扫码会自动填写；局域网请使用电脑的私有 IP',
+                    const SizedBox(height: 12),
+                    OutlinedButton.icon(
+                      key: const Key('scan-pairing'),
+                      onPressed: busy || connected || connecting
+                          ? null
+                          : scanPairing,
+                      icon: const Icon(Icons.qr_code_scanner_rounded),
+                      label: const Text('扫描电脑配对码'),
                     ),
-                    keyboardType: TextInputType.url,
-                  ),
-                  const SizedBox(height: 16),
-                  if (!connected)
+                    if (pairingPrefilled) ...[
+                      const SizedBox(height: 12),
+                      const Text(
+                        '已填写连接信息。请核对电脑地址，再勾选下方授权并连接。',
+                        key: Key('pairing-prefilled'),
+                      ),
+                    ],
+                    const SizedBox(height: 16),
                     TextField(
-                      controller: token,
-                      enabled: !connecting,
-                      obscureText: true,
-                      enableSuggestions: false,
+                      controller: endpoint,
+                      enabled: !connected && !connecting,
                       autocorrect: false,
                       decoration: const InputDecoration(
-                        labelText: '配对密钥',
-                        prefixIcon: Icon(Icons.key_rounded),
+                        labelText: '设备连接地址',
+                        helperText: '扫码会自动填写；局域网请使用电脑的私有 IP',
+                      ),
+                      keyboardType: TextInputType.url,
+                    ),
+                    const SizedBox(height: 16),
+                    if (!connected)
+                      TextField(
+                        controller: token,
+                        enabled: !connecting,
+                        obscureText: true,
+                        enableSuggestions: false,
+                        autocorrect: false,
+                        decoration: const InputDecoration(
+                          labelText: '配对密钥',
+                          prefixIcon: Icon(Icons.key_rounded),
+                        ),
+                      ),
+                    if (!connected) const SizedBox(height: 16),
+                    TextField(
+                      controller: packages,
+                      enabled: !connected && !connecting,
+                      minLines: 2,
+                      maxLines: 5,
+                      autocorrect: false,
+                      decoration: const InputDecoration(
+                        labelText: '允许访问的应用包名',
+                        helperText: '每行一个；默认仅此应用和微信',
                       ),
                     ),
-                  if (!connected) const SizedBox(height: 16),
-                  TextField(
-                    controller: packages,
-                    enabled: !connected && !connecting,
-                    minLines: 2,
-                    maxLines: 5,
-                    autocorrect: false,
-                    decoration: const InputDecoration(
-                      labelText: '允许访问的应用包名',
-                      helperText: '每行一个；默认仅此应用和微信',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  CheckboxListTile(
-                    key: const Key('insecure-local'),
-                    contentPadding: EdgeInsets.zero,
-                    value: insecureLocal,
-                    onChanged: connected || connecting
-                        ? null
-                        : (v) => setState(() => insecureLocal = v ?? false),
-                    title: const Text('允许本次使用本地明文连接'),
-                    subtitle: const Text(
-                      '仅用于 USB 回环或可信私有网络。网络内其他人可能看到传输内容；跨网络请使用 WSS。',
-                    ),
-                    controlAffinity: ListTileControlAffinity.leading,
-                  ),
-                  CheckboxListTile(
-                    key: const Key('consent'),
-                    contentPadding: EdgeInsets.zero,
-                    value: consent,
-                    onChanged: connected || connecting
-                        ? null
-                        : (v) => setState(() => consent = v ?? false),
-                    title: const Text('我同意把允许应用的界面内容发送给配对的电脑'),
-                    subtitle: const Text(
-                      '连接的 AI 可能将内容发送给其模型服务商。请确认该 AI 的数据设置；PhoneBridge 不自建云端、不收集遥测。',
-                    ),
-                    controlAffinity: ListTileControlAffinity.leading,
-                  ),
-                  const SizedBox(height: 8),
-                  if (!connected && !connecting)
-                    FilledButton.icon(
-                      key: const Key('connect'),
-                      onPressed: busy || !consent || !enabled ? null : connect,
-                      icon: const Icon(Icons.link_rounded),
-                      label: const Text('连接 · 默认只读'),
-                      style: FilledButton.styleFrom(
-                        minimumSize: const Size.fromHeight(52),
+                    const SizedBox(height: 10),
+                    CheckboxListTile(
+                      key: const Key('insecure-local'),
+                      contentPadding: EdgeInsets.zero,
+                      value: insecureLocal,
+                      onChanged: connected || connecting
+                          ? null
+                          : (v) => setState(() => insecureLocal = v ?? false),
+                      title: const Text('允许与这台电脑使用本地明文连接'),
+                      subtitle: const Text(
+                        '仅用于 USB 回环或可信私有网络。网络内其他人可能看到传输内容；跨网络请使用 WSS。',
                       ),
+                      controlAffinity: ListTileControlAffinity.leading,
                     ),
-                ]),
+                    CheckboxListTile(
+                      key: const Key('consent'),
+                      contentPadding: EdgeInsets.zero,
+                      value: consent,
+                      onChanged: connected || connecting
+                          ? null
+                          : (v) => setState(() => consent = v ?? false),
+                      title: const Text('我同意把允许应用的界面内容发送给配对的电脑'),
+                      subtitle: const Text(
+                        '连接的 AI 可能将内容发送给其模型服务商。请确认该 AI 的数据设置；PhoneBridge 不自建云端、不收集遥测。',
+                      ),
+                      controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                    const SizedBox(height: 8),
+                    CheckboxListTile(
+                      key: const Key('remember-pairing'),
+                      contentPadding: EdgeInsets.zero,
+                      value: remember,
+                      onChanged: connected || connecting
+                          ? null
+                          : (v) => setState(() => remember = v ?? false),
+                      title: const Text('记住这台电脑和我的授权'),
+                      subtitle: const Text(
+                        '加密保存连接信息，重启、更新或网络恢复后自动连接。主动停止会暂停自动连接。',
+                      ),
+                      controlAffinity: ListTileControlAffinity.leading,
+                    ),
+                    if (!connected && !connecting)
+                      FilledButton.icon(
+                        key: const Key('connect'),
+                        onPressed: busy || !consent || !enabled
+                            ? null
+                            : connect,
+                        icon: const Icon(Icons.link_rounded),
+                        label: const Text('连接 · 默认只读'),
+                        style: FilledButton.styleFrom(
+                          minimumSize: const Size.fromHeight(52),
+                        ),
+                      ),
+                  ]),
                 const SizedBox(height: 14),
                 section('03', '由你决定是否允许操作', [
                   SwitchListTile(
@@ -407,8 +468,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         ? (v) => perform('setActionsEnabled', {'enabled': v})
                         : null,
                     title: const Text('允许 AI 点击和输入'),
-                    subtitle: const Text(
-                      '仅对本次连接有效。开启后，AI 能在允许的应用里操作；发送、购买等动作请先在 AI 客户端确认。',
+                    subtitle: Text(
+                      hasSavedPairing || remember
+                          ? '会记住你对这台电脑的选择。开启后，AI 能在允许的应用里操作；可随时停止或忘记电脑。'
+                          : '仅对本次连接有效。开启后，AI 能在允许的应用里操作。',
                     ),
                   ),
                   const SizedBox(height: 8),

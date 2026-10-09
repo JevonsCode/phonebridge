@@ -2,16 +2,18 @@ import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { PhoneHub } from './hub.js';
 import { startPairingDisplay } from './pairing.js';
+import { credentialPath, loadOrCreateSavedToken } from './credentials.js';
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    console.log('PhoneBridge hub\n  npm start -- [--allow-lan] [--pairing-qr] [--show-pairing]\nEnvironment: PHONEBRIDGE_TOKEN, PHONEBRIDGE_HOST, PHONEBRIDGE_PORT, PHONEBRIDGE_TLS_CERT, PHONEBRIDGE_TLS_KEY, PHONEBRIDGE_DEVICE_URL\nDefault: loopback:8765. --pairing-qr opens a private loopback pairing page; --show-pairing explicitly prints a session secret. Keep both private.'); return;
+    console.log('PhoneBridge hub\n  npm start -- [--allow-lan] [--pairing-qr] [--remember-pairing] [--show-pairing]\nEnvironment: PHONEBRIDGE_TOKEN, PHONEBRIDGE_HOST, PHONEBRIDGE_PORT, PHONEBRIDGE_TLS_CERT, PHONEBRIDGE_TLS_KEY, PHONEBRIDGE_DEVICE_URL, PHONEBRIDGE_CREDENTIAL_FILE\nDefault: loopback:8765. --pairing-qr opens a private loopback pairing page; --show-pairing explicitly prints a session secret. Keep both private. --remember-pairing reuses a per-user saved identity across restarts (Windows DPAPI; POSIX private file).'); return;
   }
-  if (args.some(a => !['--allow-lan', '--show-pairing', '--pairing-qr'].includes(a))) throw new Error('Unknown argument. Use --help.');
+  if (args.some(a => !['--allow-lan', '--show-pairing', '--pairing-qr', '--remember-pairing'].includes(a))) throw new Error('Unknown argument. Use --help.');
   const show = args.includes('--show-pairing');
   const qr = args.includes('--pairing-qr');
-  const token = process.env.PHONEBRIDGE_TOKEN ?? (show || qr ? randomBytes(32).toString('base64url') : '');
+  const remember = args.includes('--remember-pairing');
+  const token = remember ? await loadOrCreateSavedToken(credentialPath(), process.env.PHONEBRIDGE_TOKEN) : process.env.PHONEBRIDGE_TOKEN ?? (show || qr ? randomBytes(32).toString('base64url') : '');
   if (!token) throw new Error('Set PHONEBRIDGE_TOKEN or explicitly use --show-pairing to generate and display a session token.');
   const cert = process.env.PHONEBRIDGE_TLS_CERT, key = process.env.PHONEBRIDGE_TLS_KEY;
   if (!!cert !== !!key) throw new Error('Provide both TLS certificate and key paths.');
@@ -26,6 +28,7 @@ async function main(): Promise<void> {
   console.log(`PhoneBridge listening at ${url}\nDevice endpoint: ${url.replace(/^http/, 'ws')}/device\nNo screen contents or commands are logged. Ctrl+C stops the hub.`);
   if (show) console.log(`PAIRING SECRET (keep private): ${token}`);
   if (pairing) console.log(`Private pairing page (open only on this computer): ${pairing.url}`);
+  if (remember) console.log('Trusted pairing identity retained for this OS user. Restart with --remember-pairing to reuse it.');
   let stopping = false;
   const stop = () => { if (stopping) return; stopping = true; void Promise.all([hub.close(), pairing?.close()]).then(() => { process.exitCode = 0; }); };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);

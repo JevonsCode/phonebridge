@@ -16,6 +16,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        BridgeSession.initialize(this)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.phonebridge/control")
             .also { controlChannel = it }
             .setMethodCallHandler { call, result ->
@@ -35,6 +36,7 @@ class MainActivity : FlutterActivity() {
                                 call.argument<String>("token") ?: "",
                                 call.argument<Boolean>("allowInsecureLocal") == true,
                                 call.argument<List<String>>("packages") ?: listOf(packageName, "com.tencent.mm"),
+                                call.argument<Boolean>("remember") ?: true,
                             )
                             result.success(BridgeSession.status())
                         }
@@ -44,6 +46,14 @@ class MainActivity : FlutterActivity() {
                         }
                         "disconnect" -> {
                             BridgeSession.disconnect()
+                            result.success(BridgeSession.status())
+                        }
+                        "resumeSavedConnection" -> {
+                            BridgeSession.resumeSavedConnection()
+                            result.success(BridgeSession.status())
+                        }
+                        "forgetSavedConnection" -> {
+                            BridgeSession.forgetSavedConnection()
                             result.success(BridgeSession.status())
                         }
                         else -> result.notImplemented()
@@ -56,6 +66,11 @@ class MainActivity : FlutterActivity() {
                     result.error("UNAVAILABLE", "Android could not complete this request.", null)
                 }
             }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        BridgeSession.onOwnerActivityResumed(this)
     }
 
     private fun requestNotificationPermission(result: MethodChannel.Result) {

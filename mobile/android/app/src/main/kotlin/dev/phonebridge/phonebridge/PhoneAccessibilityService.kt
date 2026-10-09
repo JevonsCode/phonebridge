@@ -3,6 +3,7 @@
 package dev.phonebridge.phonebridge
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.app.KeyguardManager
 import android.content.Intent
@@ -10,6 +11,8 @@ import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
+import android.os.Build
+import android.text.InputType
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.Base64
@@ -34,6 +37,9 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        if (Build.VERSION.SDK_INT >= 33) {
+            serviceInfo = serviceInfo.apply { flags = flags or AccessibilityServiceInfo.FLAG_INPUT_METHOD_EDITOR }
+        }
         BridgeSession.attach(this)
     }
 
@@ -43,7 +49,7 @@ class PhoneAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
-        BridgeSession.disconnect("Accessibility was interrupted.")
+        BridgeSession.serviceInterrupted()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
@@ -141,7 +147,10 @@ class PhoneAccessibilityService : AccessibilityService() {
             val crop = WindowGeometry.safeApplicationBounds(
                 geometry(screen), geometry(appBounds), geometry(rootBounds),
                 WindowGeometry.Insets(bars.left, bars.top, bars.right, bars.bottom))
-                ?: throw BridgeFailure("WINDOW_UNSAFE", "Application bounds cannot be verified.")
+                ?: throw BridgeFailure("WINDOW_UNSAFE", "Application bounds cannot be verified. window=" +
+                    rootId + " screen=" + screen.toShortString() + " app=" + appBounds.toShortString() +
+                    " root=" + rootBounds.toShortString() + " insets=[" +
+                    bars.left + "," + bars.top + "," + bars.right + "," + bars.bottom + "]")
             val bounds = Rect(crop.left, crop.top, crop.right, crop.bottom)
             val foreign = mutableListOf<Rect>()
             for (window in visible) {
@@ -157,6 +166,12 @@ class PhoneAccessibilityService : AccessibilityService() {
                     throw BridgeFailure("WINDOW_UNSAFE", "Dismiss other apps, focused panels, and accessibility overlays first.")
                 }
                 foreign.add(area)
+            }
+            // Service window metrics can omit ROM system-bar insets. Use actual
+            // OS window rectangles to exclude edge bars/IME from the app crop.
+            for (area in foreign) {
+                val trimmed = WindowGeometry.trimEdgeOcclusion(geometry(bounds), geometry(area))
+                bounds.set(trimmed.left, trimmed.top, trimmed.right, trimmed.bottom)
             }
             return WindowScope(activePackage, rootId, bounds, screen.width(), screen.height(), foreign)
         } finally {
@@ -180,7 +195,7 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     fun execute(method: String, params: JSONObject, generation: Long,
                 complete: (JSONObject?, BridgeFailure?) -> Unit) {
-        val mutation = method in setOf("tap", "long_press", "swipe", "set_text", "global_action", "launch_app")
+        val mutation = method in setOf("tap", "long_press", "swipe", "set_text", "commit_text", "global_action", "launch_app")
         requireSession(generation, mutation)
         when (method) {
             "state" -> {
@@ -196,6 +211,35 @@ class PhoneAccessibilityService : AccessibilityService() {
             "set_text" -> {
                 validateKeys(params, setOf("nodeId", "text"))
                 setText(params, generation)
+                complete(completed(), null)
+            }
+            "commit_text" -> {
+                validateKeys(params, setOf("text", "packageName"))
+                if (Build.VERSION.SDK_INT < 33) throw BridgeFailure("UNSUPPORTED", "Focused input requires Android 13 or later.")
+                val text = params.opt("text") as? String ?: throw BridgeFailure("INVALID_ARGUMENT", "text must be a string.")
+                if (text.isEmpty() || text.length > 4000) throw BridgeFailure("INVALID_ARGUMENT", "Text must contain 1..4000 characters.")
+                val scope = windowScope()
+                requireClearCrop(scope)
+                if (params.optString("packageName") != scope.packageName) throw BridgeFailure("WINDOW_CHANGED", "Focused app does not match the requested package.")
+                val ime = inputMethod ?: throw BridgeFailure("FOCUS_REQUIRED", "Tap an input field first.")
+                val editor = ime.currentInputEditorInfo ?: throw BridgeFailure("FOCUS_REQUIRED", "No focused input field.")
+                val connection = ime.currentInputConnection ?: throw BridgeFailure("FOCUS_REQUIRED", "No focused input connection.")
+                val kind = editor.inputType and InputType.TYPE_MASK_CLASS
+                val variation = editor.inputType and InputType.TYPE_MASK_VARIATION
+                if (editor.packageName != scope.packageName || kind == InputType.TYPE_NULL ||
+                    (kind == InputType.TYPE_CLASS_TEXT && variation in setOf(InputType.TYPE_TEXT_VARIATION_PASSWORD,
+                        InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD, InputType.TYPE_TEXT_VARIATION_WEB_PASSWORD)) ||
+                    (kind == InputType.TYPE_CLASS_NUMBER && variation == InputType.TYPE_NUMBER_VARIATION_PASSWORD)) {
+                    throw BridgeFailure("NODE_BLOCKED", "Focused input must belong to the allowed app and must not be a password.")
+                }
+                requireSession(generation, true)
+                val recheck = windowScope()
+                requireSameWindow(scope, recheck)
+                requireClearCrop(recheck)
+                if (!ime.currentInputStarted || ime.currentInputEditorInfo !== editor)
+                    throw BridgeFailure("FOCUS_REQUIRED", "Input focus changed. Observe again.")
+                invalidateNodes()
+                connection.commitText(text, 1, null)
                 complete(completed(), null)
             }
             "global_action" -> {

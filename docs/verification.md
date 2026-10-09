@@ -7,14 +7,14 @@ This document records evidence, not planned capabilities. Update it when tests f
 | Layer | Check | Result |
 |---|---|---|
 | Desktop | TypeScript production build | Passed |
-| Desktop | 20 node:test cases, including actual MCP stdio + hub + simulated phone, QR payload, private display access restrictions and expiry | Passed |
+| Desktop | 22 node:test cases, including actual MCP stdio on loopback/LAN, saved credential reuse from a fresh process, corruption refusal and private QR display | 21 passed; POSIX permissions case skipped on Windows |
 | Flutter | Static analysis | Passed with no issues |
-| Flutter | Pairing parser, scanner consent, stop, token cleanup and playground tests | 14 passed |
-| Native | Endpoint, session, read-only, notification, observation and geometry JVM tests | 18 passed, confirmed from Gradle JUnit XML (0 failures/errors) |
-| Android | Normal debug APK compilation | v0.1.1 split-per-ABI build passed; test entrypoint excluded |
+| Flutter | Pairing parser, scanner consent, saved trust/resume/forget, stop, token cleanup and playground tests | 17 passed |
+| Native | Endpoint, session, read-only, notification, observation, geometry, pairing crypto and reconnect JVM tests | 34 passed, confirmed from Gradle JUnit XML (0 failures/errors) |
+| Android | Normal debug APK compilation | v0.2.0 split-per-ABI build passed; test entrypoint excluded |
 | Android 11 emulator | Real accessibility service integration | Passed: UI tree, real JPEG screenshot, actual counter click, focused Unicode input, read-only/allowlist/stale-ID/stop refusal |
-| Physical Android 16 device | Install and owner-authorized test | v0.1.1 ARM64 installed; accessibility enabled by owner; direct-LAN QR pairing in progress |
-| WeChat | Real visible-UI reading/navigation | Not yet tested |
+| Physical Android 16 device | Install and owner-authorized test | v0.2.0 ARM64 installed. App updates and desktop Hub restart restored connection and action consent without QR pairing. |
+| WeChat | Real visible-UI reading/navigation | Android 16: launched WeChat, visually identified the owner-requested recipient, tapped chat/input, inserted Chinese using accessibility InputMethod, tapped Send, verified outgoing bubble and empty input via App screenshot. No ADB UI input used; no claim of recipient reading. Node tree remains empty on this device; screenshot fallback verified. |
 
 Simulated phone tests validate the desktop protocol, not Android behavior. Widget tests mock the platform channel and do not validate AccessibilityService. JVM tests cover pure policies, not window/gesture behavior. A successful build alone does not establish runtime compatibility.
 

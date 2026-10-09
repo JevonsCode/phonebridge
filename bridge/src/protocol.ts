@@ -8,6 +8,7 @@ export const schemas = {
   long_press: z.object({ x: coordinate, y: coordinate, durationMs: z.number().int().min(400).max(2000).optional() }).strict(),
   swipe: z.object({ x1: coordinate, y1: coordinate, x2: coordinate, y2: coordinate, durationMs: z.number().int().min(100).max(2000).optional() }).strict(),
   set_text: z.object({ nodeId: z.string().min(1).max(100), text: z.string().max(4000) }).strict(),
+  commit_text: z.object({ packageName: z.string().regex(/^[a-zA-Z][\w]*(?:\.[a-zA-Z][\w]*)+$/).max(200), text: z.string().min(1).max(4000) }).strict(),
   global_action: z.object({ action: z.enum(['back', 'home', 'recents']) }).strict(),
   launch_app: z.object({ packageName: z.string().regex(/^[a-zA-Z][\w]*(?:\.[a-zA-Z][\w]*)+$/).max(200) }).strict(),
 } as const;
@@ -35,6 +36,7 @@ export const toolDescriptions: Record<Method, string> = {
   long_press: 'Long press physical screen coordinates. Requires phone action consent. Observe after completion; never retry timed-out mutations.',
   swipe: 'Swipe between physical screen coordinates within the allowed app window. Requires phone action consent. Observe after completion; never retry timed-out mutations.',
   set_text: 'Replace text in a FOCUSED editable non-password node from the most recent state. First tap the input and observe again for a fresh nodeId. Supports Unicode. Does not submit. Requires phone action consent. Observe after completion.',
+  commit_text: 'Insert Unicode text into the currently focused non-password input on Android 13+. First visually verify and tap the intended input. packageName must match the active app and input owner. Useful when app nodes are unavailable. Does not submit. Observe after completion and never automatically retry.',
   global_action: 'Press Android Back, Home or Recents. Requires allowed active app and phone action consent. This may leave the allowed app; then launch an allowlisted app before observing again.',
   launch_app: 'Launch a package explicitly allowed by the phone owner. Requires phone action consent. Dispatch success is not proof of the resulting screen; observe afterward.',
 };
