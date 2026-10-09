@@ -11,11 +11,14 @@ void main() {
   var connected = false;
   var saved = false;
   var autoReconnect = false;
+  var rememberedActions = false, connecting = false;
   setUp(() {
     calls.clear();
     connected = false;
     saved = false;
     autoReconnect = false;
+    rememberedActions = false;
+    connecting = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
@@ -23,7 +26,8 @@ void main() {
             return {
               'accessibilityEnabled': true,
               'connected': connected,
-              'connecting': false,
+              'connecting': connecting,
+              'rememberedActions': rememberedActions,
               'actionsEnabled': false,
               'lastError': '',
               'hasSavedPairing': saved,
@@ -43,11 +47,61 @@ void main() {
     () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null),
   );
+  Future<void> openManual(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('start-pairing')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('manual-pairing')));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('saved action consent remains clear while disconnected', (
+    tester,
+  ) async {
+    saved = true;
+    rememberedActions = true;
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    final toggle = tester.widget<SwitchListTile>(
+      find.byKey(const Key('actions')),
+    );
+    expect(toggle.value, true);
+    expect(toggle.onChanged, isNull);
+    expect(find.text('操作授权已保留，重连后恢复'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+  testWidgets('pairing connection keeps stop above system navigation inset', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 600);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    tester.view.viewPadding = const FakeViewPadding(bottom: 24);
+    tester.view.padding = const FakeViewPadding(bottom: 24);
+    addTearDown(tester.view.resetViewPadding);
+    addTearDown(tester.view.resetPadding);
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('start-pairing')));
+    await tester.pumpAndSettle();
+    connecting = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    final rect = tester.getRect(find.byKey(const Key('stop')));
+    expect(rect.bottom, lessThanOrEqualTo(576));
+    expect(find.byKey(const Key('nav-settings')), findsNothing);
+    await tester.tap(find.byKey(const Key('stop')));
+    await tester.pump();
+    expect(calls.any((c) => c.method == 'disconnect'), true);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
   testWidgets('connection requires consent; actions default off', (
     tester,
   ) async {
     await tester.pumpWidget(const PhoneBridgeApp());
     await tester.pump();
+    await openManual(tester);
     await tester.scrollUntilVisible(
       find.byKey(const Key('connect')),
       400,
@@ -58,11 +112,8 @@ void main() {
       isNull,
     );
     expect(calls.where((c) => c.method == 'connect'), isEmpty);
-    await tester.scrollUntilVisible(
-      find.byKey(const Key('actions')),
-      200,
-      scrollable: find.byType(Scrollable).first,
-    );
+    await tester.tap(find.byTooltip('返回'));
+    await tester.pumpAndSettle();
     final toggle = tester.widget<SwitchListTile>(
       find.byKey(const Key('actions')),
     );
@@ -123,12 +174,18 @@ void main() {
       saved = true;
       await tester.pumpWidget(const PhoneBridgeApp());
       await tester.pump();
+      await tester.tap(find.byKey(const Key('nav-settings')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('已记住的电脑'));
+      await tester.pumpAndSettle();
       final forget = find.byKey(const Key('forget-saved'));
       await tester.ensureVisible(forget);
       await tester.pumpAndSettle();
       await tester.tap(forget);
       await tester.pump();
       expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('manual-pairing')));
+      await tester.pumpAndSettle();
       expect(
         tester.widget<CheckboxListTile>(find.byKey(const Key('consent'))).value,
         false,
@@ -161,6 +218,7 @@ void main() {
   ) async {
     await tester.pumpWidget(const PhoneBridgeApp());
     await tester.pump();
+    await openManual(tester);
     final field = find.widgetWithText(TextField, '配对密钥');
     await tester.ensureVisible(field);
     await tester.pumpAndSettle();
@@ -171,6 +229,7 @@ void main() {
     connected = false;
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();
+    await openManual(tester);
     final tokenField = tester.widget<TextField>(
       find.widgetWithText(TextField, '配对密钥'),
     );

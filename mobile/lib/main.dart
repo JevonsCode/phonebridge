@@ -2,10 +2,19 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'playground.dart';
+import 'design.dart';
+import 'package:flutter/foundation.dart';
 import 'pairing.dart';
 import 'pairing_scanner.dart';
 
-void main() => runApp(const PhoneBridgeApp());
+void main() {
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks([
+      'Noto Sans SC',
+    ], await rootBundle.loadString('assets/fonts/OFL.txt'));
+  });
+  runApp(const PhoneBridgeApp());
+}
 
 class PhoneBridgeApp extends StatelessWidget {
   const PhoneBridgeApp({super.key});
@@ -13,19 +22,7 @@ class PhoneBridgeApp extends StatelessWidget {
   Widget build(BuildContext context) => MaterialApp(
     title: 'PhoneBridge',
     debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      useMaterial3: true,
-      colorScheme: ColorScheme.fromSeed(
-        seedColor: const Color(0xFFBD532D),
-        surface: const Color(0xFFFAF8F3),
-      ),
-      scaffoldBackgroundColor: const Color(0xFFFAF8F3),
-      inputDecorationTheme: const InputDecorationTheme(
-        border: OutlineInputBorder(),
-        filled: true,
-        fillColor: Colors.white,
-      ),
-    ),
+    theme: phoneTheme(),
     home: const ConnectionPage(),
   );
 }
@@ -50,6 +47,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
   bool remember = true;
   String? error;
   bool pairingPrefilled = false;
+  int tab = 0;
+  bool showPairing = false, manual = false;
   bool get connected => status['connected'] == true;
   bool get connecting => status['connecting'] == true;
   bool get enabled => status['accessibilityEnabled'] == true;
@@ -82,7 +81,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
       final next = await channel.invokeMapMethod<String, dynamic>('status');
       if (mounted) {
         final wasActive = connected || connecting;
-        setState(() => status = next ?? {});
+        setState(() {
+          status = next ?? {};
+          if (connected) showPairing = false;
+        });
         if (wasActive && !connected && !connecting) token.clear();
       }
     } on PlatformException catch (e) {
@@ -108,6 +110,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         consent = false;
         insecureLocal = false;
         pairingPrefilled = false;
+        showPairing = true;
       }
       await refresh();
     } on PlatformException catch (e) {
@@ -173,324 +176,182 @@ class _ConnectionPageState extends State<ConnectionPage> {
     }
   }
 
+  String get computerAddress {
+    final value =
+        status['savedEndpoint'] as String? ??
+        status['endpoint'] as String? ??
+        endpoint.text;
+    final uri = Uri.tryParse(value);
+    return uri?.host.isNotEmpty == true ? uri!.host : '你的电脑';
+  }
+
+  void openPairing() => setState(() {
+    showPairing = true;
+    manual = false;
+  });
+
+  Future<void> showInfo(String title, String body) =>
+      showModalBottomSheet<void>(
+        context: context,
+        showDragHandle: true,
+        isScrollControlled: true,
+        backgroundColor: Colors.white,
+        builder: (context) => SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(28, 4, 28, 32),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(title, style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 16),
+                Text(body, style: Theme.of(context).textTheme.bodyLarge),
+              ],
+            ),
+          ),
+        ),
+      );
+
   @override
   Widget build(BuildContext context) {
     final nativeError = status['lastError'] as String?;
     final message =
         error ?? (nativeError?.isNotEmpty == true ? nativeError : null);
-    return Scaffold(
-      bottomNavigationBar: connected || connecting || autoReconnect
-          ? SafeArea(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: FilledButton.tonalIcon(
-                  key: const Key('stop'),
-                  onPressed: busy ? null : () => perform('disconnect'),
-                  icon: const Icon(Icons.stop_circle_outlined),
-                  label: const Text('立即停止并断开'),
-                  style: FilledButton.styleFrom(
-                    minimumSize: const Size.fromHeight(52),
+    return PopScope(
+      canPop: !showPairing,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) setState(() => showPairing = false);
+      },
+      child: Scaffold(
+        appBar: AppBar(
+          titleSpacing: 24,
+          leading: showPairing
+              ? IconButton(
+                  tooltip: '返回',
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  onPressed: () => setState(() => showPairing = false),
+                )
+              : null,
+          title: Text(
+            showPairing
+                ? '连接电脑'
+                : tab == 0
+                ? 'PhoneBridge'
+                : '设置',
+          ),
+          actions: !showPairing && tab == 0
+              ? [
+                  IconButton(
+                    tooltip: '帮助',
+                    onPressed: () => showInfo(
+                      '连接，一次就好',
+                      '首次扫描电脑端的配对码。记住电脑后，更新 App 或网络恢复时会自动重连。\n\n保持手机解锁，电脑端服务运行即可。你可以随时暂停连接。',
+                    ),
+                    icon: const Icon(Icons.help_outline_rounded, size: 22),
                   ),
+                  const SizedBox(width: 12),
+                ]
+              : null,
+        ),
+        bottomNavigationBar:
+            showPairing && !(connected || connecting || autoReconnect)
+            ? null
+            : SafeArea(
+                top: false,
+                bottom: showPairing,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (connected || connecting || autoReconnect)
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(24, 8, 24, 6),
+                        child: SizedBox(
+                          width: 512,
+                          child: OutlinedButton.icon(
+                            key: const Key('stop'),
+                            onPressed: busy
+                                ? null
+                                : () => perform('disconnect'),
+                            icon: const Icon(Icons.pause_rounded, size: 20),
+                            label: const Text('暂停连接'),
+                          ),
+                        ),
+                      ),
+                    if (!showPairing)
+                      NavigationBar(
+                        selectedIndex: tab,
+                        onDestinationSelected: (value) =>
+                            setState(() => tab = value),
+                        destinations: const [
+                          NavigationDestination(
+                            key: Key('nav-connection'),
+                            icon: Icon(Icons.devices_outlined),
+                            selectedIcon: Icon(Icons.devices_rounded),
+                            label: '连接',
+                          ),
+                          NavigationDestination(
+                            key: Key('nav-settings'),
+                            icon: Icon(Icons.settings_outlined),
+                            selectedIcon: Icon(Icons.settings_rounded),
+                            label: '设置',
+                          ),
+                        ],
+                      ),
+                  ],
                 ),
               ),
-            )
-          : null,
-      appBar: AppBar(
-        title: const Row(
-          children: [
-            Icon(Icons.device_hub_rounded),
-            SizedBox(width: 10),
-            Text('PhoneBridge'),
-          ],
-        ),
-        actions: const [
-          Padding(
-            padding: EdgeInsets.only(right: 16),
-            child: Chip(label: Text('开源预览版')),
-          ),
-        ],
-      ),
-      body: SafeArea(
-        child: Align(
-          alignment: Alignment.topCenter,
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 680),
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 36),
-              children: [
-                Text(
-                  '让 AI 帮你用手机',
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 10),
-                const Text(
-                  '你决定何时连接、能看哪些应用，以及是否允许操作。',
-                  style: TextStyle(fontSize: 16, height: 1.6),
-                ),
-                const SizedBox(height: 24),
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF253B35),
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(
-                        connected
-                            ? Icons.check_circle
-                            : Icons.radio_button_unchecked,
-                        color: const Color(0xFFB7DBBC),
-                      ),
-                      const SizedBox(width: 14),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              connected
-                                  ? (status['actionsEnabled'] == true
-                                        ? '已连接 · 可操作'
-                                        : '已连接 · 只读')
-                                  : connecting
-                                  ? '正在连接…'
-                                  : autoReconnect
-                                  ? '等待电脑 · 自动重连中'
-                                  : hasSavedPairing
-                                  ? '已记住电脑 · 当前已停止'
-                                  : '由你开启，随时停止',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 18,
-                                fontWeight: FontWeight.w600,
+        body: SafeArea(
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 560),
+              child: SingleChildScrollView(
+                key: ValueKey(showPairing ? 'pairing-page' : 'page-$tab'),
+                padding: const EdgeInsets.fromLTRB(24, 8, 24, 28),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (message != null)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 16),
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFCEEEB),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Icon(
+                                Icons.info_outline_rounded,
+                                size: 20,
+                                color: Color(0xFF9C4033),
                               ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              connected
-                                  ? '停止后，电脑将立即失去访问权限'
-                                  : enabled
-                                  ? (hasSavedPairing
-                                        ? '已有可信电脑，无需重新扫码'
-                                        : '无障碍已就绪，等待与电脑配对')
-                                  : '完成下面的授权与配对即可开始',
-                              style: const TextStyle(
-                                color: Color(0xFFCAD8D1),
-                                height: 1.5,
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: Text(
+                                  message,
+                                  key: const Key('error'),
+                                  style: const TextStyle(
+                                    color: Color(0xFF9C4033),
+                                    fontSize: 13,
+                                  ),
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
-                    ],
-                  ),
+                    if (showPairing)
+                      ...pairingView()
+                    else if (tab == 0)
+                      ...homeView()
+                    else
+                      ...settingsView(),
+                  ],
                 ),
-                if (message != null) ...[
-                  const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.errorContainer,
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Text(message, key: const Key('error')),
-                  ),
-                ],
-                const SizedBox(height: 20),
-                section('01', '授权给你的手机助手', [
-                  const Text(
-                    '无障碍服务用于读取界面文字、截图、点击、滑动和输入。你需要在系统设置中亲自开启它。',
-                    style: TextStyle(height: 1.6),
-                  ),
-                  const SizedBox(height: 12),
-                  OutlinedButton.icon(
-                    onPressed: busy
-                        ? null
-                        : () => perform('openAccessibilitySettings'),
-                    icon: Icon(
-                      enabled
-                          ? Icons.check_circle_outline
-                          : Icons.accessibility_new,
-                    ),
-                    label: Text(enabled ? '已开启 · 查看无障碍设置' : '打开无障碍设置'),
-                  ),
-                ]),
-                const SizedBox(height: 14),
-                if (hasSavedPairing) ...[
-                  section('02', '已记住的电脑', [
-                    Text(
-                      status['savedEndpoint'] as String? ?? '',
-                      key: const Key('saved-endpoint'),
-                    ),
-                    const SizedBox(height: 12),
-                    const Text('连接信息已加密保存在手机内。重启或更新后恢复连接；主动停止后保持停止。'),
-                    if (!connected && !connecting)
-                      FilledButton.icon(
-                        key: const Key('resume-saved'),
-                        onPressed: busy || !enabled
-                            ? null
-                            : () => perform('resumeSavedConnection'),
-                        icon: const Icon(Icons.link_rounded),
-                        label: const Text('连接已记住的电脑'),
-                      ),
-                    TextButton.icon(
-                      key: const Key('forget-saved'),
-                      onPressed: busy
-                          ? null
-                          : () => perform('forgetSavedConnection'),
-                      icon: const Icon(Icons.link_off),
-                      label: const Text('忘记电脑并撤销授权'),
-                    ),
-                  ]),
-                  const SizedBox(height: 14),
-                ],
-                if (!hasSavedPairing)
-                  section('02', '连接你的电脑', [
-                    const Text(
-                      '首次扫描电脑显示的配对码；记住电脑后，重启或更新无需重新扫码。也可以手动填写。',
-                      style: TextStyle(height: 1.6),
-                    ),
-                    const SizedBox(height: 12),
-                    OutlinedButton.icon(
-                      key: const Key('scan-pairing'),
-                      onPressed: busy || connected || connecting
-                          ? null
-                          : scanPairing,
-                      icon: const Icon(Icons.qr_code_scanner_rounded),
-                      label: const Text('扫描电脑配对码'),
-                    ),
-                    if (pairingPrefilled) ...[
-                      const SizedBox(height: 12),
-                      const Text(
-                        '已填写连接信息。请核对电脑地址，再勾选下方授权并连接。',
-                        key: Key('pairing-prefilled'),
-                      ),
-                    ],
-                    const SizedBox(height: 16),
-                    TextField(
-                      controller: endpoint,
-                      enabled: !connected && !connecting,
-                      autocorrect: false,
-                      decoration: const InputDecoration(
-                        labelText: '设备连接地址',
-                        helperText: '扫码会自动填写；局域网请使用电脑的私有 IP',
-                      ),
-                      keyboardType: TextInputType.url,
-                    ),
-                    const SizedBox(height: 16),
-                    if (!connected)
-                      TextField(
-                        controller: token,
-                        enabled: !connecting,
-                        obscureText: true,
-                        enableSuggestions: false,
-                        autocorrect: false,
-                        decoration: const InputDecoration(
-                          labelText: '配对密钥',
-                          prefixIcon: Icon(Icons.key_rounded),
-                        ),
-                      ),
-                    if (!connected) const SizedBox(height: 16),
-                    TextField(
-                      controller: packages,
-                      enabled: !connected && !connecting,
-                      minLines: 2,
-                      maxLines: 5,
-                      autocorrect: false,
-                      decoration: const InputDecoration(
-                        labelText: '允许访问的应用包名',
-                        helperText: '每行一个；默认仅此应用和微信',
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    CheckboxListTile(
-                      key: const Key('insecure-local'),
-                      contentPadding: EdgeInsets.zero,
-                      value: insecureLocal,
-                      onChanged: connected || connecting
-                          ? null
-                          : (v) => setState(() => insecureLocal = v ?? false),
-                      title: const Text('允许与这台电脑使用本地明文连接'),
-                      subtitle: const Text(
-                        '仅用于 USB 回环或可信私有网络。网络内其他人可能看到传输内容；跨网络请使用 WSS。',
-                      ),
-                      controlAffinity: ListTileControlAffinity.leading,
-                    ),
-                    CheckboxListTile(
-                      key: const Key('consent'),
-                      contentPadding: EdgeInsets.zero,
-                      value: consent,
-                      onChanged: connected || connecting
-                          ? null
-                          : (v) => setState(() => consent = v ?? false),
-                      title: const Text('我同意把允许应用的界面内容发送给配对的电脑'),
-                      subtitle: const Text(
-                        '连接的 AI 可能将内容发送给其模型服务商。请确认该 AI 的数据设置；PhoneBridge 不自建云端、不收集遥测。',
-                      ),
-                      controlAffinity: ListTileControlAffinity.leading,
-                    ),
-                    const SizedBox(height: 8),
-                    CheckboxListTile(
-                      key: const Key('remember-pairing'),
-                      contentPadding: EdgeInsets.zero,
-                      value: remember,
-                      onChanged: connected || connecting
-                          ? null
-                          : (v) => setState(() => remember = v ?? false),
-                      title: const Text('记住这台电脑和我的授权'),
-                      subtitle: const Text(
-                        '加密保存连接信息，重启、更新或网络恢复后自动连接。主动停止会暂停自动连接。',
-                      ),
-                      controlAffinity: ListTileControlAffinity.leading,
-                    ),
-                    if (!connected && !connecting)
-                      FilledButton.icon(
-                        key: const Key('connect'),
-                        onPressed: busy || !consent || !enabled
-                            ? null
-                            : connect,
-                        icon: const Icon(Icons.link_rounded),
-                        label: const Text('连接 · 默认只读'),
-                        style: FilledButton.styleFrom(
-                          minimumSize: const Size.fromHeight(52),
-                        ),
-                      ),
-                  ]),
-                const SizedBox(height: 14),
-                section('03', '由你决定是否允许操作', [
-                  SwitchListTile(
-                    key: const Key('actions'),
-                    contentPadding: EdgeInsets.zero,
-                    value: status['actionsEnabled'] == true,
-                    onChanged: connected && !busy
-                        ? (v) => perform('setActionsEnabled', {'enabled': v})
-                        : null,
-                    title: const Text('允许 AI 点击和输入'),
-                    subtitle: Text(
-                      hasSavedPairing || remember
-                          ? '会记住你对这台电脑的选择。开启后，AI 能在允许的应用里操作；可随时停止或忘记电脑。'
-                          : '仅对本次连接有效。开启后，AI 能在允许的应用里操作。',
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  OutlinedButton.icon(
-                    onPressed: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const PlaygroundPage(),
-                      ),
-                    ),
-                    icon: const Icon(Icons.science_outlined),
-                    label: const Text('打开操作练习场'),
-                  ),
-                ]),
-                const SizedBox(height: 20),
-                const Text(
-                  '保持手机解锁。分屏、键盘或其他悬浮窗口可能阻止截图与操作；遇到限制时先回到目标应用。系统受保护内容无法读取。',
-                  style: TextStyle(color: Color(0xFF68645F), height: 1.6),
-                ),
-              ],
+              ),
             ),
           ),
         ),
@@ -498,40 +359,432 @@ class _ConnectionPageState extends State<ConnectionPage> {
     );
   }
 
-  Widget section(String number, String title, List<Widget> children) =>
-      Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFFE9E4DA)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+  List<Widget> homeView() {
+    final active = connected || connecting || autoReconnect;
+    final granted = connected
+        ? status['actionsEnabled'] == true
+        : hasSavedPairing && status['rememberedActions'] == true;
+    final title = connected
+        ? '已连接'
+        : connecting || autoReconnect
+        ? '正在连接'
+        : hasSavedPairing
+        ? '连接已暂停'
+        : '连接你的电脑';
+    final subtitle = connected
+        ? '手机已与这台电脑连接'
+        : autoReconnect
+        ? '正在等待电脑，连接会自动恢复'
+        : hasSavedPairing
+        ? '电脑已记住，随时可以继续'
+        : '连接电脑，让 AI 帮你处理手机上的事';
+    return [
+      const SizedBox(height: 12),
+      Center(child: ConnectionIllustration(connected: connected)),
+      const SizedBox(height: 22),
+      Text(
+        title,
+        textAlign: TextAlign.center,
+        style: Theme.of(context).textTheme.displaySmall,
+      ),
+      const SizedBox(height: 10),
+      Text(
+        subtitle,
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 14, color: muted),
+      ),
+      const SizedBox(height: 32),
+      if (hasSavedPairing || connected) ...[
+        SurfaceGroup(
           children: [
-            Row(
-              children: [
-                Text(
-                  number,
+            SettingsRow(
+              icon: Icons.computer_rounded,
+              title: '我的电脑',
+              subtitle: computerAddress,
+              onTap: () => setState(() => tab = 1),
+              trailing: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 5,
+                ),
+                decoration: BoxDecoration(
+                  color: connected
+                      ? const Color(0xFFE9F4ED)
+                      : const Color(0xFFF0F2F5),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  connected ? '已连接' : '已记住',
                   style: TextStyle(
-                    color: Theme.of(context).colorScheme.primary,
-                    fontWeight: FontWeight.w700,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    color: connected ? const Color(0xFF26734D) : muted,
                   ),
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ),
-              ],
+              ),
             ),
-            const SizedBox(height: 16),
-            ...children,
           ],
         ),
-      );
+        const SizedBox(height: 16),
+      ],
+      if (!hasSavedPairing && !connected) ...[
+        FilledButton.icon(
+          key: const Key('start-pairing'),
+          onPressed: busy ? null : openPairing,
+          icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
+          label: const Text('连接电脑'),
+        ),
+        const SizedBox(height: 20),
+      ],
+      SurfaceGroup(
+        children: [
+          SwitchListTile(
+            key: const Key('actions'),
+            contentPadding: const EdgeInsets.fromLTRB(20, 8, 16, 8),
+            value: granted,
+            onChanged: connected && !busy
+                ? (v) => perform('setActionsEnabled', {'enabled': v})
+                : null,
+            title: const Text(
+              '允许操作',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
+            ),
+            subtitle: Text(
+              !connected && granted
+                  ? '操作授权已保留，重连后恢复'
+                  : granted
+                  ? 'AI 可以点击、滑动和输入'
+                  : '关闭时，AI 只能查看界面',
+              style: const TextStyle(fontSize: 12, color: muted, height: 1.6),
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20),
+            child: Divider(),
+          ),
+          SettingsRow(
+            icon: Icons.touch_app_outlined,
+            title: '试一试',
+            subtitle: '在练习场体验点击与输入',
+            onTap: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const PlaygroundPage()),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 24),
+      if (!active && hasSavedPairing)
+        FilledButton.icon(
+          key: const Key('resume-saved'),
+          onPressed: busy || !enabled
+              ? null
+              : () => perform('resumeSavedConnection'),
+          icon: const Icon(Icons.play_arrow_rounded, size: 20),
+          label: const Text('继续连接'),
+        ),
+      if (!enabled) ...[
+        const SizedBox(height: 16),
+        TextButton(
+          onPressed: busy ? null : () => perform('openAccessibilitySettings'),
+          child: const Text('开启无障碍服务以继续'),
+        ),
+      ],
+      const SizedBox(height: 16),
+      Text(
+        active
+            ? (hasSavedPairing ? '配对与授权已保留 · 随时可以暂停' : '仅限本次连接 · 随时可以暂停')
+            : '只连接你信任的电脑',
+        textAlign: TextAlign.center,
+        style: const TextStyle(color: Color(0xFF777F8B), fontSize: 11),
+      ),
+    ];
+  }
+
+  List<Widget> settingsView() => [
+    const SizedBox(height: 12),
+    sectionLabel('连接与权限'),
+    SurfaceGroup(
+      children: [
+        SettingsRow(
+          icon: Icons.accessibility_new_rounded,
+          title: '无障碍服务',
+          subtitle: enabled ? '已开启' : '尚未开启',
+          onTap: busy ? null : () => perform('openAccessibilitySettings'),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Divider(),
+        ),
+        SettingsRow(
+          icon: Icons.laptop_mac_outlined,
+          title: '已记住的电脑',
+          subtitle: hasSavedPairing ? computerAddress : '尚未配对',
+          onTap: hasSavedPairing ? () => showComputer() : openPairing,
+        ),
+      ],
+    ),
+    const SizedBox(height: 28),
+    sectionLabel('关于'),
+    SurfaceGroup(
+      children: [
+        SettingsRow(
+          icon: Icons.privacy_tip_outlined,
+          title: '隐私与数据',
+          subtitle: '了解界面内容如何传输',
+          onTap: () => showInfo(
+            '隐私与数据',
+            'PhoneBridge 将允许应用的界面内容发送给配对电脑，不建立云端、不收集遥测、不保存聊天记录。\n\n连接的 AI 可能将内容发送给其模型服务商，请查看该客户端的数据设置。截图可能包含个人信息。\n\n手机会加密保存配对与授权。忘记电脑后，保存的授权会被删除。',
+          ),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Divider(),
+        ),
+        SettingsRow(
+          icon: Icons.code_rounded,
+          title: '开源许可',
+          subtitle: 'PhoneBridge · MIT License',
+          onTap: () => showLicensePage(
+            context: context,
+            applicationName: 'PhoneBridge',
+            applicationVersion: '0.2.1',
+            applicationLegalese: 'MIT License',
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 28),
+    const Center(
+      child: Text(
+        'PhoneBridge 0.2.1',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 12, height: 2, color: Color(0xFF89919C)),
+      ),
+    ),
+  ];
+
+  Widget sectionLabel(String text) => Padding(
+    padding: const EdgeInsets.only(left: 4, bottom: 12),
+    child: Text(
+      text,
+      style: const TextStyle(
+        fontSize: 12,
+        fontWeight: FontWeight.w500,
+        color: muted,
+      ),
+    ),
+  );
+
+  Future<void> showComputer() => showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    backgroundColor: Colors.white,
+    builder: (sheetContext) => SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(28, 4, 28, 28),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.laptop_mac_outlined, size: 36, color: blue),
+            const SizedBox(height: 16),
+            Text(
+              '我的电脑',
+              textAlign: TextAlign.center,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              status['savedEndpoint'] as String? ?? '',
+              key: const Key('saved-endpoint'),
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13, color: muted),
+            ),
+            const SizedBox(height: 24),
+            const Text(
+              '连接信息和你的授权已加密保存在手机中。更新 App 或网络恢复后，无需重新扫码。',
+              style: TextStyle(height: 1.7),
+            ),
+            const SizedBox(height: 24),
+            TextButton.icon(
+              key: const Key('forget-saved'),
+              onPressed: busy
+                  ? null
+                  : () {
+                      Navigator.of(sheetContext).pop();
+                      perform('forgetSavedConnection');
+                    },
+              style: TextButton.styleFrom(
+                foregroundColor: const Color(0xFFB13B31),
+              ),
+              icon: const Icon(Icons.link_off_rounded, size: 20),
+              label: const Text('忘记这台电脑'),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
+
+  List<Widget> pairingView() => [
+    const SizedBox(height: 8),
+    if (!manual && !pairingPrefilled) ...[
+      const SizedBox(height: 20),
+      const Center(child: ConnectionIllustration(connected: false)),
+      const SizedBox(height: 28),
+    ],
+    Text('只需配对一次', style: Theme.of(context).textTheme.headlineMedium),
+    const SizedBox(height: 10),
+    const Text('扫描电脑端的二维码。之后的连接，交给 PhoneBridge。'),
+    const SizedBox(height: 24),
+    if (!enabled) ...[
+      SurfaceGroup(
+        children: [
+          SettingsRow(
+            icon: Icons.accessibility_new_rounded,
+            title: '先开启无障碍服务',
+            subtitle: '用于读取界面和执行操作',
+            onTap: busy ? null : () => perform('openAccessibilitySettings'),
+          ),
+        ],
+      ),
+      const SizedBox(height: 16),
+    ],
+    FilledButton.icon(
+      key: const Key('scan-pairing'),
+      onPressed: busy || connected || connecting ? null : scanPairing,
+      icon: const Icon(Icons.qr_code_scanner_rounded),
+      label: const Text('扫描电脑配对码'),
+    ),
+    const SizedBox(height: 8),
+    TextButton(
+      key: const Key('manual-pairing'),
+      onPressed: () => setState(() => manual = !manual),
+      child: Text(manual ? '收起手动设置' : '手动输入连接信息'),
+    ),
+    if (pairingPrefilled) ...[
+      const SizedBox(height: 12),
+      SurfaceGroup(
+        children: [
+          SettingsRow(
+            icon: Icons.check_circle_outline_rounded,
+            title: '已识别电脑',
+            subtitle: Uri.tryParse(endpoint.text)?.host,
+            trailing: const Icon(Icons.check_rounded, color: Color(0xFF18845A)),
+          ),
+        ],
+      ),
+      const Padding(
+        padding: EdgeInsets.only(top: 12),
+        child: Text('核对电脑地址后，确认以下连接选项。', key: Key('pairing-prefilled')),
+      ),
+    ],
+    if (manual) ...[
+      const SizedBox(height: 16),
+      TextField(
+        controller: endpoint,
+        enabled: !connected && !connecting,
+        autocorrect: false,
+        decoration: const InputDecoration(labelText: '设备连接地址'),
+        keyboardType: TextInputType.url,
+      ),
+      const SizedBox(height: 16),
+      TextField(
+        controller: token,
+        enabled: !connected && !connecting,
+        obscureText: true,
+        enableSuggestions: false,
+        autocorrect: false,
+        decoration: const InputDecoration(labelText: '配对密钥'),
+      ),
+      const SizedBox(height: 16),
+      TextField(
+        controller: packages,
+        enabled: !connected && !connecting,
+        minLines: 2,
+        maxLines: 5,
+        autocorrect: false,
+        decoration: const InputDecoration(
+          labelText: '允许访问的应用包名',
+          helperText: '每行一个；默认此应用和微信',
+        ),
+      ),
+    ],
+    if (manual || pairingPrefilled) ...[
+      const SizedBox(height: 24),
+      SurfaceGroup(
+        children: [
+          CheckboxListTile(
+            key: const Key('insecure-local'),
+            value: insecureLocal,
+            onChanged: connected || connecting
+                ? null
+                : (v) => setState(() => insecureLocal = v ?? false),
+            title: const Text('使用可信本地网络', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '允许本地明文连接；同一网络内的其他人可能看到传输内容。',
+              style: TextStyle(fontSize: 12),
+            ),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 6,
+            ),
+          ),
+          const Divider(indent: 20, endIndent: 20),
+          CheckboxListTile(
+            key: const Key('consent'),
+            value: consent,
+            onChanged: connected || connecting
+                ? null
+                : (v) => setState(() => consent = v ?? false),
+            title: const Text('允许共享应用界面', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '内容发送给配对电脑；AI 客户端可能转发给模型服务商。',
+              style: TextStyle(fontSize: 12),
+            ),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 6,
+            ),
+          ),
+          const Divider(indent: 20, endIndent: 20),
+          CheckboxListTile(
+            key: const Key('remember-pairing'),
+            value: remember,
+            onChanged: connected || connecting
+                ? null
+                : (v) => setState(() => remember = v ?? false),
+            title: const Text('记住电脑与授权', style: TextStyle(fontSize: 14)),
+            subtitle: const Text(
+              '更新或网络恢复后，自动连接。',
+              style: TextStyle(fontSize: 12),
+            ),
+            controlAffinity: ListTileControlAffinity.leading,
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 6,
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 24),
+      FilledButton.icon(
+        key: const Key('connect'),
+        onPressed: busy || !consent || !enabled || connected || connecting
+            ? null
+            : connect,
+        icon: const Icon(Icons.link_rounded),
+        label: Text(connecting ? '正在连接…' : '确认连接'),
+      ),
+      const SizedBox(height: 12),
+      const Text(
+        '首次连接为只读，操作开关由你开启。',
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 12, color: muted),
+      ),
+    ],
+  ];
 }

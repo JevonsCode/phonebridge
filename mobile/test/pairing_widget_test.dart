@@ -63,6 +63,10 @@ void main() {
   ) async {
     await tester.pumpWidget(app());
     await tester.pump();
+    await tester.tap(find.byKey(const Key('start-pairing')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('manual-pairing')));
+    await tester.pumpAndSettle();
     for (final key in ['insecure-local', 'consent']) {
       final toggle = find.byKey(Key(key));
       await tester.ensureVisible(toggle);
@@ -112,6 +116,10 @@ void main() {
   ) async {
     await tester.pumpWidget(app(cancel: true));
     await tester.pump();
+    await tester.tap(find.byKey(const Key('start-pairing')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('manual-pairing')));
+    await tester.pumpAndSettle();
     final tokenField = find.widgetWithText(TextField, '配对密钥');
     await tester.ensureVisible(tokenField);
     await tester.pumpAndSettle();
