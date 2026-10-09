@@ -1,6 +1,7 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { networkInterfaces } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -14,9 +15,9 @@ import { validateScreenshot } from '../src/screenshot.js';
 
 const validScreenshot = { mimeType: 'image/jpeg', data: encode({ data: Buffer.from([255, 0, 0, 255]), width: 1, height: 1 }, 65).data.toString('base64'), width: 1, height: 1, screenWidth: 100, screenHeight: 220, cropLeft: 0, cropTop: 20, cropWidth: 100, cropHeight: 200 };
 
-async function setup(t: TestContext, timeoutMs = 1000) {
+async function setup(t: TestContext, timeoutMs = 1000, host = '127.0.0.1') {
   const token = randomBytes(32).toString('base64url');
-  const hub = new PhoneHub({ token, port: 0, timeoutMs });
+  const hub = new PhoneHub({ token, port: 0, timeoutMs, host, allowLan: host !== '127.0.0.1' });
   const url = await hub.start();
   t.after(() => hub.close());
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
@@ -140,8 +141,10 @@ test('request size and JSON content type are bounded', async t => {
   assert.equal(wrongType.status, 415);
 });
 
-test('MCP stdio discovers tools and returns state/image/error through real hub', async t => {
-  const { token, url, connect } = await setup(t);
+const localLanAddress = Object.values(networkInterfaces()).flat().find(item => item && item.family === 'IPv4' && !item.internal)?.address;
+for (const host of ['127.0.0.1', ...(localLanAddress ? [localLanAddress] : [])]) {
+test(`MCP stdio discovers tools and returns state/image/error through real hub (${host === '127.0.0.1' ? 'loopback' : 'local LAN interface'})`, async t => {
+  const { token, url, connect } = await setup(t, 1000, host);
   const phone = await connect();
   phone.on('message', bytes => {
     const request = JSON.parse(bytes.toString());
@@ -162,6 +165,7 @@ test('MCP stdio discovers tools and returns state/image/error through real hub',
   const denied = await client.callTool({ name: 'phone_tap', arguments: { x: 1, y: 2 } });
   assert.equal(denied.isError, true);
 });
+}
 
 test('screenshots validate real JPEG data, dimensions, decoded byte limit, and crop bounds', () => {
   assert.equal(validateScreenshot(validScreenshot).width, 1);

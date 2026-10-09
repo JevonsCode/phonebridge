@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'playground.dart';
+import 'pairing.dart';
+import 'pairing_scanner.dart';
 
 void main() => runApp(const PhoneBridgeApp());
 
@@ -29,7 +31,8 @@ class PhoneBridgeApp extends StatelessWidget {
 }
 
 class ConnectionPage extends StatefulWidget {
-  const ConnectionPage({super.key});
+  const ConnectionPage({super.key, this.pairingScannerBuilder});
+  final WidgetBuilder? pairingScannerBuilder;
   @override
   State<ConnectionPage> createState() => _ConnectionPageState();
 }
@@ -45,6 +48,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Map<String, dynamic> status = {};
   bool consent = false, insecureLocal = false, busy = false, polling = false;
   String? error;
+  bool pairingPrefilled = false;
   bool get connected => status['connected'] == true;
   bool get connecting => status['connecting'] == true;
   bool get enabled => status['accessibilityEnabled'] == true;
@@ -107,8 +111,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   Future<void> connect() async {
     if (!consent || !enabled) return;
-    if (token.text.trim().length < 32) {
-      setState(() => error = '请输入电脑端生成的完整配对密钥（至少 32 个字符）');
+    if (!RegExp(r'^[A-Za-z0-9_-]{32,256}$').hasMatch(token.text.trim())) {
+      setState(() => error = '请输入电脑端生成的完整配对密钥（32–256 个字母、数字、- 或 _）');
       return;
     }
     await perform('requestNotificationPermission');
@@ -123,6 +127,39 @@ class _ConnectionPageState extends State<ConnectionPage> {
           .toSet()
           .toList(),
     });
+  }
+
+  Future<void> scanPairing() async {
+    if (busy || connected || connecting) return;
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final pairing = await Navigator.of(context).push<PairingData>(
+        MaterialPageRoute<PairingData>(
+          builder:
+              widget.pairingScannerBuilder ?? (_) => const PairingScannerPage(),
+        ),
+      );
+      if (!mounted || pairing == null) return;
+      await refresh();
+      if (!mounted) return;
+      if (connected || connecting) {
+        setState(() => error = '请先停止当前连接，再扫描新的配对码。');
+        return;
+      }
+      setState(() {
+        endpoint.text = pairing.endpoint;
+        token.text = pairing.token;
+        // A different computer must never inherit an earlier acknowledgement.
+        consent = false;
+        insecureLocal = false;
+        pairingPrefilled = true;
+      });
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
   }
 
   @override
@@ -266,9 +303,25 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 const SizedBox(height: 14),
                 section('02', '连接你的电脑', [
                   const Text(
-                    '先按项目 README 启动电脑端服务，再填入设备地址和配对密钥。密钥只保存在当前会话内。',
+                    '在电脑上启动 PhoneBridge，扫描电脑显示的配对码；也可以手动填写。密钥只保存在当前会话内。',
                     style: TextStyle(height: 1.6),
                   ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    key: const Key('scan-pairing'),
+                    onPressed: busy || connected || connecting
+                        ? null
+                        : scanPairing,
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: const Text('扫描电脑配对码'),
+                  ),
+                  if (pairingPrefilled) ...[
+                    const SizedBox(height: 12),
+                    const Text(
+                      '已填写连接信息。请核对电脑地址，再勾选下方授权并连接。',
+                      key: Key('pairing-prefilled'),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   TextField(
                     controller: endpoint,
@@ -276,7 +329,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     autocorrect: false,
                     decoration: const InputDecoration(
                       labelText: '设备连接地址',
-                      helperText: 'USB 默认地址；局域网时填写电脑的私有 IP',
+                      helperText: '扫码会自动填写；局域网请使用电脑的私有 IP',
                     ),
                     keyboardType: TextInputType.url,
                   ),
@@ -307,6 +360,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   ),
                   const SizedBox(height: 10),
                   CheckboxListTile(
+                    key: const Key('insecure-local'),
                     contentPadding: EdgeInsets.zero,
                     value: insecureLocal,
                     onChanged: connected || connecting

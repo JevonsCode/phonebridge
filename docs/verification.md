@@ -7,13 +7,13 @@ This document records evidence, not planned capabilities. Update it when tests f
 | Layer | Check | Result |
 |---|---|---|
 | Desktop | TypeScript production build | Passed |
-| Desktop | 14 node:test cases, including actual MCP stdio + hub + simulated phone | Passed |
+| Desktop | 20 node:test cases, including actual MCP stdio + hub + simulated phone, QR payload, private display access restrictions and expiry | Passed |
 | Flutter | Static analysis | Passed with no issues |
-| Flutter | Consent, stop, token cleanup, playground widget tests | 4 passed |
+| Flutter | Pairing parser, scanner consent, stop, token cleanup and playground tests | 14 passed |
 | Native | Endpoint, session, read-only, notification, observation and geometry JVM tests | 18 passed, confirmed from Gradle JUnit XML (0 failures/errors) |
-| Android | Normal debug APK compilation | Passed after runtime fixes; test entrypoint excluded |
+| Android | Normal debug APK compilation | v0.1.1 split-per-ABI build passed; test entrypoint excluded |
 | Android 11 emulator | Real accessibility service integration | Passed: UI tree, real JPEG screenshot, actual counter click, focused Unicode input, read-only/allowlist/stale-ID/stop refusal |
-| Physical Android 16 device | Install and owner-authorized test | Installed and accessibility enabled by owner; pairing in progress |
+| Physical Android 16 device | Install and owner-authorized test | v0.1.1 ARM64 installed; accessibility enabled by owner; direct-LAN QR pairing in progress |
 | WeChat | Real visible-UI reading/navigation | Not yet tested |
 
 Simulated phone tests validate the desktop protocol, not Android behavior. Widget tests mock the platform channel and do not validate AccessibilityService. JVM tests cover pure policies, not window/gesture behavior. A successful build alone does not establish runtime compatibility.
