@@ -4,7 +4,7 @@
 
 **个人自用优先 · MIT 开源 · Android 11+ · Flutter + Kotlin · MCP**
 
-[官方网站](https://phonebridge.jevons-code.chatgpt.site) · [下载 Android 预览版](https://github.com/JevonsCode/phonebridge/releases) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
+[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [下载 Android 预览版](https://github.com/JevonsCode/phonebridge/releases) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
 
 这是一个早期开发者预览版。它提供手机执行工具，不内置大模型，也不承诺“完全控制手机”。无障碍权限需要机主在系统设置中亲自开启。微信功能基于可见界面，不读取私有聊天数据库。真机兼容性与验证范围见 [验证记录](docs/verification.md)。
 
