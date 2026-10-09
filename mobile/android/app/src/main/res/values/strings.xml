@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="accessibility_description">PhoneBridge lets your paired computer read the visible screen and, only after you enable actions locally, operate allowed apps. Screen text and screenshots leave this phone for your paired computer. Password fields are excluded from text observations, but screenshots may contain sensitive information. Stop the session at any time in PhoneBridge or its notification.</string>
+</resources>

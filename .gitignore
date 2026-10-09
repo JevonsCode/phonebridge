@@ -1,0 +1,16 @@
+.worktrees/
+.codebase-memory/
+node_modules/
+dist/
+artifacts/
+**/build/
+*.log
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.pem
+*.p12
+key.properties
+.DS_Store
