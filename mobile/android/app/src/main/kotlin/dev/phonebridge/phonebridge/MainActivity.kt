@@ -3,6 +3,7 @@ package dev.phonebridge.phonebridge
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
@@ -25,6 +26,15 @@ class MainActivity : FlutterActivity() {
                         "status" -> result.success(BridgeSession.status())
                         "openAccessibilitySettings" -> {
                             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                            result.success(null)
+                        }
+                        "openProjectLink" -> {
+                            val url = when (call.argument<String>("destination")) {
+                                "github" -> "https://github.com/JevonsCode/phonebridge"
+                                "website" -> "https://phonebridge.jevons-code.chatgpt.site"
+                                else -> throw IllegalArgumentException("Unknown project link.")
+                            }
+                            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE))
                             result.success(null)
                         }
                         "requestNotificationPermission" -> {

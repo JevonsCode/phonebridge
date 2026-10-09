@@ -4,6 +4,8 @@
 
 **个人自用优先 · MIT 开源 · Android 11+ · Flutter + Kotlin · MCP**
 
+[官方网站](https://phonebridge.jevons-code.chatgpt.site) · [下载 Android 预览版](https://github.com/JevonsCode/phonebridge/releases) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
+
 这是一个早期开发者预览版。它提供手机执行工具，不内置大模型，也不承诺“完全控制手机”。无障碍权限需要机主在系统设置中亲自开启。微信功能基于可见界面，不读取私有聊天数据库。真机兼容性与验证范围见 [验证记录](docs/verification.md)。
 
 ```text
@@ -19,7 +21,7 @@ PhoneBridge MCP → 本机 Hub ← 经过配对的 Android 手机
 - 读取允许应用当前界面的控件、文字、坐标；密码控件文字会隐藏。
 - 截取允许应用的窗口，返回缩放与裁剪坐标映射。
 - 点击、长按、滑动、输入中文，执行返回 / 主页 / 最近任务。
-- 打开机主明确允许的应用；内置练习场验证点击和输入。
+- 打开机主明确允许的应用。
 - 默认只读；手机端单独开启操作；通知栏和 App 内均可停止。
 
 不能绕过锁屏、指纹、应用沙箱或受保护截图。系统栏和边缘键盘会从截图与操作范围中裁掉；分屏、悬浮窗或无法裁掉的遮挡仍可能拒绝部分操作。AI 必须每次操作后重新观察结果，不能把“指令已接受”当成任务已完成。
@@ -133,6 +135,10 @@ PhoneBridge 没有账号系统、遥测、内置云端或聊天历史收集；�
 当前版本依靠本机只读开关、应用白名单、会话停止和受认证连接限制操作，**不提供逐笔交易审批保证**。只连接你信任的 AI 客户端。Android 无障碍并非任意后台控制权限，Google Play 对自主规划执行的无障碍应用有明确限制；本仓库的开源发布不代表已获商店上架资格。
 
 后续发行准备包含 MIT 许可、协议版本、依赖锁文件、测试与构建 CI、隐私说明、安全报告渠道。正式发行还需要独立签名、目标机型验证、分发渠道审核与进一步安全评估。参阅 [SECURITY.md](SECURITY.md)、[贡献指南](CONTRIBUTING.md)。
+
+## 官方网站
+
+官网源码在 [`website/dist`](website/dist)，使用无需构建的 HTML、CSS 与 JavaScript。可用任意静态服务器预览；字体为 Noto Sans SC 的页面字符子集，许可见同目录 `OFL.txt`。正式 App 的“设置 → 关于”提供 GitHub 和官网入口。无障碍测试页面仅保留在 `mobile/test/support`，不包含在正式 App 中。
 
 ## English overview
 

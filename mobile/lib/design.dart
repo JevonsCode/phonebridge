@@ -129,12 +129,12 @@ class SurfaceGroup extends StatelessWidget {
   const SurfaceGroup({required this.children, super.key});
   final List<Widget> children;
   @override
-  Widget build(BuildContext context) => ClipRRect(
+  Widget build(BuildContext context) => Material(
+    color: Colors.white,
+    elevation: 0,
     borderRadius: BorderRadius.circular(24),
-    child: ColoredBox(
-      color: Colors.white,
-      child: Column(children: children),
-    ),
+    clipBehavior: Clip.antiAlias,
+    child: Column(children: children),
   );
 }
 

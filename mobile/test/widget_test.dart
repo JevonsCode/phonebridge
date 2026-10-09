@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:phonebridge/main.dart';
-import 'package:phonebridge/playground.dart';
+import 'support/playground.dart';
 
 void main() {
   const channel = MethodChannel('dev.phonebridge/control');
@@ -53,6 +53,30 @@ void main() {
     await tester.tap(find.byKey(const Key('manual-pairing')));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('home has no playground and About opens public project links', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    expect(find.text('试一试'), findsNothing);
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pumpAndSettle();
+    for (final entry in {'GitHub': 'github', '官方网站': 'website'}.entries) {
+      await tester.ensureVisible(find.text(entry.key));
+      await tester.tap(find.text(entry.key));
+      await tester.pumpAndSettle();
+      expect(
+        calls.any(
+          (c) =>
+              c.method == 'openProjectLink' &&
+              c.arguments['destination'] == entry.value,
+        ),
+        true,
+      );
+    }
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('saved action consent remains clear while disconnected', (
     tester,

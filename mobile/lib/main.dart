@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'playground.dart';
 import 'design.dart';
 import 'package:flutter/foundation.dart';
 import 'pairing.dart';
@@ -458,18 +457,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
               style: const TextStyle(fontSize: 12, color: muted, height: 1.6),
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 20),
-            child: Divider(),
-          ),
-          SettingsRow(
-            icon: Icons.touch_app_outlined,
-            title: '试一试',
-            subtitle: '在练习场体验点击与输入',
-            onTap: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(builder: (_) => const PlaygroundPage()),
-            ),
-          ),
         ],
       ),
       const SizedBox(height: 24),
@@ -528,6 +515,26 @@ class _ConnectionPageState extends State<ConnectionPage> {
     SurfaceGroup(
       children: [
         SettingsRow(
+          icon: Icons.open_in_new_rounded,
+          title: 'GitHub',
+          subtitle: '查看源码、下载与反馈',
+          onTap: () => perform('openProjectLink', {'destination': 'github'}),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Divider(),
+        ),
+        SettingsRow(
+          icon: Icons.language_rounded,
+          title: '官方网站',
+          subtitle: '了解 PhoneBridge 与安装方法',
+          onTap: () => perform('openProjectLink', {'destination': 'website'}),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Divider(),
+        ),
+        SettingsRow(
           icon: Icons.privacy_tip_outlined,
           title: '隐私与数据',
           subtitle: '了解界面内容如何传输',
@@ -547,7 +554,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           onTap: () => showLicensePage(
             context: context,
             applicationName: 'PhoneBridge',
-            applicationVersion: '0.2.1',
+            applicationVersion: '0.2.2',
             applicationLegalese: 'MIT License',
           ),
         ),
@@ -556,7 +563,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     const SizedBox(height: 28),
     const Center(
       child: Text(
-        'PhoneBridge 0.2.1',
+        'PhoneBridge 0.2.2',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 12, height: 2, color: Color(0xFF89919C)),
       ),

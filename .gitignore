@@ -2,6 +2,8 @@
 .codebase-memory/
 node_modules/
 dist/
+!website/dist/
+!website/dist/**
 artifacts/
 **/build/
 *.log

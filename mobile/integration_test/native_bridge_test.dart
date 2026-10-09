@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:phonebridge/main.dart';
-import 'package:phonebridge/playground.dart';
+import '../test/support/playground.dart';
 
 // Run only on an isolated emulator, with AccessibilityService enabled by the
 // test operator and a local hub reachable via adb reverse. No production hooks.
