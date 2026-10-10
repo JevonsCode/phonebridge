@@ -32,32 +32,59 @@ namespace PhoneBridge.Desktop
 
         public ChildProcess StartSupervisor(string nodePath, string entryPoint, string workingDirectory)
         {
-            var startup = new StartupInformation();
-            startup.Size = (uint)Marshal.SizeOf(typeof(StartupInformation));
-            ProcessInformation info;
+            var startup = new ExtendedStartupInformation();
+            startup.StartupInfo.Size = (uint)Marshal.SizeOf(typeof(ExtendedStartupInformation));
             var command = new StringBuilder(Quote(nodePath) + " " + Quote(entryPoint) + " --allow-lan --remember-pairing");
-            // Suspend before any Node code runs: descendants cannot escape assignment.
-            if (!Native.CreateProcessW(nodePath, command, IntPtr.Zero, IntPtr.Zero, false,
-                0x08000004, IntPtr.Zero, workingDirectory, ref startup, out info))
-                throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot start PhoneBridge Supervisor.");
-            var process = new SafeKernelHandle(info.Process);
-            var thread = new SafeKernelHandle(info.Thread);
+            UIntPtr attributeSize = UIntPtr.Zero;
+            Native.InitializeProcThreadAttributeList(IntPtr.Zero, 1, 0, ref attributeSize);
+            if (attributeSize == UIntPtr.Zero) throw new JobAssignmentException(Marshal.GetLastWin32Error());
+            startup.AttributeList = Marshal.AllocHGlobal(new IntPtr((long)attributeSize.ToUInt64()));
+            IntPtr jobList = IntPtr.Zero;
+            bool initialized = false;
+            bool jobReference = false;
             try
             {
-                if (!Native.AssignProcessToJobObject(handle, process))
+                if (!Native.InitializeProcThreadAttributeList(startup.AttributeList, 1, 0, ref attributeSize))
                     throw new JobAssignmentException(Marshal.GetLastWin32Error());
-                if (Native.ResumeThread(thread) == UInt32.MaxValue)
+                initialized = true;
+                handle.DangerousAddRef(ref jobReference);
+                jobList = Marshal.AllocHGlobal(IntPtr.Size);
+                Marshal.WriteIntPtr(jobList, handle.DangerousGetHandle());
+                // Windows 10+: bind atomically during creation. Even a wrapper crash
+                // immediately after CreateProcess cannot orphan a suspended Node.
+                // PROC_THREAD_ATTRIBUTE_JOB_LIST = input attribute 13 (0x0002000D).
+                if (!Native.UpdateProcThreadAttribute(startup.AttributeList, 0, new UIntPtr(0x0002000D),
+                    jobList, new UIntPtr((uint)IntPtr.Size), IntPtr.Zero, IntPtr.Zero))
                     throw new JobAssignmentException(Marshal.GetLastWin32Error());
-                return new ChildProcess(process, info.ProcessId);
+                ProcessInformation info;
+                // CREATE_NO_WINDOW | CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT
+                if (!Native.CreateProcessW(nodePath, command, IntPtr.Zero, IntPtr.Zero, false,
+                    0x08080004, IntPtr.Zero, workingDirectory, ref startup, out info))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "Cannot start PhoneBridge Supervisor in its Windows job.");
+                var process = new SafeKernelHandle(info.Process);
+                var thread = new SafeKernelHandle(info.Thread);
+                try
+                {
+                    if (Native.ResumeThread(thread) == UInt32.MaxValue)
+                        throw new JobAssignmentException(Marshal.GetLastWin32Error());
+                    return new ChildProcess(process, info.ProcessId);
+                }
+                catch
+                {
+                    Native.TerminateProcess(process, 1);
+                    Native.WaitForSingleObject(process, 5000);
+                    process.Dispose();
+                    throw;
+                }
+                finally { thread.Dispose(); }
             }
-            catch
+            finally
             {
-                Native.TerminateProcess(process, 1);
-                Native.WaitForSingleObject(process, 5000);
-                process.Dispose();
-                throw;
+                if (initialized) Native.DeleteProcThreadAttributeList(startup.AttributeList);
+                Marshal.FreeHGlobal(startup.AttributeList);
+                if (jobList != IntPtr.Zero) Marshal.FreeHGlobal(jobList);
+                if (jobReference) handle.DangerousRelease();
             }
-            finally { thread.Dispose(); }
         }
 
         private static string Quote(string value)
@@ -141,6 +168,12 @@ namespace PhoneBridge.Desktop
         public IntPtr Reserved2, StandardInput, StandardOutput, StandardError;
     }
     [StructLayout(LayoutKind.Sequential)]
+    internal struct ExtendedStartupInformation
+    {
+        public StartupInformation StartupInfo;
+        public IntPtr AttributeList;
+    }
+    [StructLayout(LayoutKind.Sequential)]
     internal struct ProcessInformation
     {
         public IntPtr Process, Thread;
@@ -153,14 +186,20 @@ namespace PhoneBridge.Desktop
         [DllImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool SetInformationJobObject(SafeKernelHandle job, int informationClass, IntPtr information, uint size);
-        [DllImport("kernel32.dll", SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        internal static extern bool AssignProcessToJobObject(SafeKernelHandle job, SafeKernelHandle process);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         internal static extern bool CreateProcessW(string application, StringBuilder command, IntPtr processAttributes,
             IntPtr threadAttributes, [MarshalAs(UnmanagedType.Bool)] bool inheritHandles, uint flags, IntPtr environment,
-            string workingDirectory, ref StartupInformation startup, out ProcessInformation process);
+            string workingDirectory, ref ExtendedStartupInformation startup, out ProcessInformation process);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool InitializeProcThreadAttributeList(IntPtr list, uint count, uint flags, ref UIntPtr size);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool UpdateProcThreadAttribute(IntPtr list, uint flags, UIntPtr attribute,
+            IntPtr value, UIntPtr size, IntPtr previousValue, IntPtr returnSize);
+        [DllImport("kernel32.dll")]
+        internal static extern void DeleteProcThreadAttributeList(IntPtr list);
         [DllImport("kernel32.dll", SetLastError = true)]
         internal static extern uint ResumeThread(SafeKernelHandle thread);
         [DllImport("kernel32.dll", SetLastError = true)]
