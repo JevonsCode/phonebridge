@@ -4,7 +4,7 @@
 
 **个人自用优先 · MIT 开源 · Android 11+ · Flutter + Kotlin · MCP**
 
-[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [下载 Android 预览版](https://github.com/JevonsCode/phonebridge/releases) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
+[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.2.3/phonebridge-0.2.3-arm64.apk) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
 
 这是一个早期开发者预览版。它提供手机执行工具，不内置大模型，也不承诺“完全控制手机”。无障碍权限需要机主在系统设置中亲自开启。微信功能基于可见界面，不读取私有聊天数据库。真机兼容性与验证范围见 [验证记录](docs/verification.md)。
 
@@ -28,7 +28,7 @@ PhoneBridge MCP → 本机 Hub ← 经过配对的 Android 手机
 
 ## 快速开始：配对一次，自动连接
 
-需要 Node.js 22+、Android 11+ 手机；从 GitHub Releases 下载预览 ZIP，解压并安装其中的 ARM64 APK，或自行构建。预览 APK 使用 **debug 签名**，适合测试，不作为正式发行签名。部分安卓系统安装外部 APK 后需要用户在应用信息页自行允许“受限设置”，再打开无障碍服务。
+需要 Node.js 22+、Android 11+ 手机；直接下载并安装 ARM64 APK，或自行构建。GitHub Releases 同时保留 ZIP 作为可选下载。预览 APK 使用 **debug 签名**，适合测试，不作为正式发行签名。部分安卓系统安装外部 APK 后需要用户在应用信息页自行允许“受限设置”，再打开无障碍服务。
 
 ```powershell
 git clone https://github.com/JevonsCode/phonebridge.git
