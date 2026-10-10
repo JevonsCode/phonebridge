@@ -2,7 +2,7 @@
 
 让现有 AI 助手通过你授权的安卓应用，看界面、点击、滑动和输入。
 
-[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [English website](https://xn--8ovp9s.xn--m8txu.com/phonebridge/en/) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.2.5/phonebridge-0.2.5-arm64.apk) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
+[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [English website](https://xn--8ovp9s.xn--m8txu.com/phonebridge/en/) · [下载 Windows 客户端](https://github.com/JevonsCode/phonebridge/releases/download/v0.6.0/phonebridge-0.6.0-windows-setup.exe) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.6.0/phonebridge-0.6.0-arm64.apk) · [用 Obtainium 跟踪更新](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.phonebridge.phonebridge%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FJevonsCode%2Fphonebridge%22%2C%22author%22%3A%22JevonsCode%22%2C%22name%22%3A%22PhoneBridge%22%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Atrue%7D%22%7D) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
 
 这是一个早期开发者预览版。它提供手机执行工具，不内置大模型，也不承诺“完全控制手机”。无障碍权限需要机主在系统设置中亲自开启。微信功能基于可见界面，不读取私有聊天数据库。真机兼容性与验证范围见 [验证记录](docs/verification.md)。
 
@@ -23,12 +23,28 @@ PhoneBridge MCP → 本机 Hub ← 经过配对的 Android 手机
 - 点击、长按、滑动、输入中文，执行返回 / 主页 / 最近任务。
 - 打开机主明确允许的应用。
 - 默认只读；手机端单独开启操作；通知栏和 App 内均可停止。
+- 点击、长按和滑动会显示短暂的操作轨迹，可在设置关闭；轨迹不挡点击，也不进入截图。
+- 手机可记住多台电脑，点击电脑名称选择连接；每台电脑分别保存操作开关与允许应用，同一时间连接一台。
+- 电脑保存操作日志，AI 可用 `phone_operation_history` 读取时间、动作与结果；重启后仍保留。输入内容、界面文字、截图和密钥不写入日志。详见 [操作日志](docs/operation-logs.md)。
 
 不能绕过锁屏、指纹、应用沙箱或受保护截图。系统栏和边缘键盘会从截图与操作范围中裁掉；分屏、悬浮窗或无法裁掉的遮挡仍可能拒绝部分操作。AI 必须每次操作后重新观察结果，不能把“指令已接受”当成任务已完成。
 
 ## 快速开始：配对一次，自动连接
 
-需要 Node.js 22+、Android 11+ 手机；直接下载并安装 ARM64 APK，或自行构建。GitHub Releases 同时保留 ZIP 作为可选下载。预览 APK 使用 **debug 签名**，适合测试，不作为正式发行签名。部分安卓系统安装外部 APK 后需要用户在应用信息页自行允许“受限设置”，再打开无障碍服务。
+Windows 10/11 用户可以直接下载安装程序，不需要装 Node.js、输入命令或查电脑 IP。手机需要 Android 11+；当前 APK 支持 ARM64。
+
+1. 从 [GitHub Releases](https://github.com/JevonsCode/phonebridge/releases) 下载 Windows 安装程序和 Android APK，分别安装。
+2. 在电脑打开 PhoneBridge，本机面板会自动启动服务、选择网络并显示配对二维码。
+3. 手机与电脑连同一个 Wi-Fi，在 App 扫码一次，开启系统无障碍权限并选择允许使用的应用；需要点击和输入时开启「允许操作」。以后断网、重启或升级都会沿用这次配对。
+4. 在电脑面板展开「连接 AI」，复制 MCP 配置到你的 AI 客户端。配置会填好本机路径和地址，不包含配对密钥。
+
+Windows 客户端内置运行环境，登录后自动启动；也提供可选 ZIP 便携包。可以直接把这句话发给 AI：**按照 https://github.com/JevonsCode/phonebridge/blob/main/docs/agent-install.md 安装 PhoneBridge，连接我的安卓手机并配置 MCP。**
+
+预览 APK 使用 **debug 签名**。部分安卓系统安装外部 APK 后需要在应用信息页允许「受限设置」，再开启无障碍服务。
+
+### 从源码启动（开发者）
+
+源码方式需要 Node.js 22+：
 
 ```powershell
 git clone https://github.com/JevonsCode/phonebridge.git
@@ -59,7 +75,7 @@ App 默认跟随手机系统语言，也可在「设置 → 语言」选择中�
 
 更新信息来自官网的 [`update.json`](https://xn--8ovp9s.xn--m8txu.com/phonebridge/update.json)，APK 来自本仓库的 GitHub Releases。下载完成后会核对文件大小、SHA-256、应用包名、版本和签名。预览版仅提供 ARM64 APK；同一签名才能覆盖升级，不要卸载旧版来绕过签名不一致。
 
-### Windows 10 / 11：登录后自动启动
+### 源码方式：Windows 登录后自动启动
 
 首次配对后，在仓库目录运行一次下面的安装命令。电脑登录后自动启动 PhoneBridge，服务异常退出会自动恢复；手机沿用已保存的电脑和授权，无需重新扫码。地址和端口填写首次配对使用的值。
 
