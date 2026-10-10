@@ -38,7 +38,7 @@ class MainActivity : FlutterActivity() {
                         "openProjectLink" -> {
                             val url = when (call.argument<String>("destination")) {
                                 "github" -> "https://github.com/JevonsCode/phonebridge"
-                                "website" -> "https://phonebridge.jevons-code.chatgpt.site"
+                                "website" -> "https://xn--8ovp9s.xn--m8txu.com/phonebridge/"
                                 else -> throw IllegalArgumentException("Unknown project link.")
                             }
                             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addCategory(Intent.CATEGORY_BROWSABLE))
