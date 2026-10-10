@@ -1,3 +1,4 @@
+import 'app_language.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -36,7 +37,14 @@ class _AppUpdateCardState extends State<AppUpdateCard>
   String get _currentVersion => _status['currentVersion'] as String? ?? '';
   String get _latestVersion => _status['versionName'] as String? ?? '';
   String? get _errorMessage =>
-      _error ?? (_status['errorMessage'] as String?)?.trim();
+      _error ??
+      ((_status['errorMessage'] as String?)?.trim().isNotEmpty == true
+          ? userError(
+              _status['errorCode'] as String?,
+              _status['errorMessage'] as String?,
+              '更新失败，请重试',
+            )
+          : null);
 
   @override
   void initState() {
@@ -56,7 +64,7 @@ class _AppUpdateCardState extends State<AppUpdateCard>
         _revision++;
         setState(() {
           _error = error is PlatformException
-              ? error.message ?? '无法接收更新状态，请重试'
+              ? userError(error.code, error.message, '无法接收更新状态，请重试')
               : '无法接收更新状态，请重试';
         });
         if (!_firstEvent.isCompleted) _firstEvent.complete();
@@ -139,7 +147,7 @@ class _AppUpdateCardState extends State<AppUpdateCard>
       if (revision == _revision) _accept(status);
     } on PlatformException catch (e) {
       if (mounted && revision == _revision) {
-        setState(() => _error = e.message ?? '无法读取更新状态，请重试');
+        setState(() => _error = userError(e.code, e.message, '无法读取更新状态，请重试'));
       }
     } on MissingPluginException {
       if (mounted) setState(() => _error = '应用更新仅在 Android 上可用');
@@ -162,7 +170,7 @@ class _AppUpdateCardState extends State<AppUpdateCard>
       if (revision == _revision) _accept(status);
     } on PlatformException catch (e) {
       if (mounted && revision == _revision) {
-        setState(() => _error = e.message ?? '更新操作失败，请重试');
+        setState(() => _error = userError(e.code, e.message, '更新操作失败，请重试'));
       }
     } on MissingPluginException {
       if (mounted) setState(() => _error = '应用更新仅在 Android 上可用');
@@ -228,14 +236,17 @@ class _AppUpdateCardState extends State<AppUpdateCard>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '应用更新',
+                          tr(context, '应用更新'),
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                         const SizedBox(height: 3),
                         Text(
-                          _currentVersion.isEmpty
-                              ? '正在读取安装版本…'
-                              : '当前版本 $_currentVersion',
+                          tr(
+                            context,
+                            _currentVersion.isEmpty
+                                ? '正在读取安装版本…'
+                                : '${tr(context, '当前版本')} $_currentVersion',
+                          ),
                           style: const TextStyle(fontSize: 12, color: muted),
                         ),
                       ],
@@ -246,16 +257,13 @@ class _AppUpdateCardState extends State<AppUpdateCard>
               if (hasRelease) ...[
                 const SizedBox(height: 18),
                 Text(
-                  '最新版本 $_latestVersion',
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                  ),
+                  tr(context, '${tr(context, '最新版本')} $_latestVersion'),
+                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w500),
                 ),
               ],
               const SizedBox(height: 8),
               Text(
-                _description,
+                tr(context, _description),
                 key: const Key('update-description'),
                 style: TextStyle(
                   fontSize: 12,
@@ -275,9 +283,12 @@ class _AppUpdateCardState extends State<AppUpdateCard>
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  total > 0
-                      ? '${_bytes(downloaded)} / ${_bytes(total)}'
-                      : '已下载 ${_bytes(downloaded)}',
+                  tr(
+                    context,
+                    total > 0
+                        ? '${_bytes(downloaded)} / ${_bytes(total)}'
+                        : '${tr(context, '已下载')} ${_bytes(downloaded)}',
+                  ),
                   style: const TextStyle(fontSize: 12, color: muted),
                 ),
               ],
@@ -289,14 +300,19 @@ class _AppUpdateCardState extends State<AppUpdateCard>
                   OutlinedButton(
                     key: const Key('check-update'),
                     onPressed: _busy ? null : () => _action('checkUpdate'),
-                    child: Text(isError && !hasRelease ? '重试检查' : '检查更新'),
+                    child: Text(
+                      tr(context, isError && !hasRelease ? '重试检查' : '检查更新'),
+                    ),
                   ),
                   if (canInstall)
                     FilledButton(
                       key: const Key('install-update'),
                       onPressed: _busy ? null : () => _action('installUpdate'),
                       child: Text(
-                        _phase == 'permissionRequired' ? '允许并安装' : '安装更新',
+                        tr(
+                          context,
+                          _phase == 'permissionRequired' ? '允许并安装' : '安装更新',
+                        ),
                       ),
                     )
                   else if (hasRelease && _phase != 'installerOpened')
@@ -304,13 +320,16 @@ class _AppUpdateCardState extends State<AppUpdateCard>
                       key: const Key('download-update'),
                       onPressed: _busy ? null : () => _action('downloadUpdate'),
                       child: Text(
-                        _downloading
-                            ? '正在下载…'
-                            : isError
-                            ? '重试下载'
-                            : _status['updateAvailable'] == true
-                            ? '下载更新'
-                            : '下载 APK',
+                        tr(
+                          context,
+                          _downloading
+                              ? '正在下载…'
+                              : isError
+                              ? '重试下载'
+                              : _status['updateAvailable'] == true
+                              ? '下载更新'
+                              : '下载 APK',
+                        ),
                       ),
                     ),
                 ],

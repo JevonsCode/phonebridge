@@ -1,3 +1,4 @@
+import 'app_language.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -109,14 +110,17 @@ class _PairingScannerPageState extends State<PairingScannerPage>
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: const Text('扫描电脑端配对码')),
+    appBar: AppBar(title: Text(tr(context, '扫描电脑端配对码'))),
     body: SafeArea(
       child: Column(
         children: [
-          const Padding(
-            padding: EdgeInsets.all(20),
+          Padding(
+            padding: const EdgeInsets.all(20),
             child: Text(
-              '对准电脑上 PhoneBridge 显示的二维码。扫码只填写连接信息，之后仍需你确认并连接。\n相机画面不会上传或保存。',
+              tr(
+                context,
+                '对准电脑上 PhoneBridge 显示的二维码。扫码只填写连接信息，之后仍需你确认并连接。\n相机画面不会上传或保存。',
+              ),
               style: TextStyle(height: 1.6),
             ),
           ),
@@ -143,14 +147,14 @@ class _PairingScannerPageState extends State<PairingScannerPage>
             Padding(
               padding: const EdgeInsets.all(20),
               child: Text(
-                _scanError!,
+                tr(context, _scanError!),
                 key: const Key('scan-error'),
                 style: TextStyle(color: Theme.of(context).colorScheme.error),
               ),
             ),
-          const Padding(
+          Padding(
             padding: EdgeInsets.all(16),
-            child: Text('请勿扫描陌生人提供的配对码。返回后核对电脑地址。'),
+            child: Text(tr(context, '请勿扫描陌生人提供的配对码。返回后核对电脑地址。')),
           ),
         ],
       ),
@@ -182,19 +186,22 @@ class PairingCameraError extends StatelessWidget {
             const Icon(Icons.no_photography_outlined, size: 44),
             const SizedBox(height: 16),
             Text(
-              permissionDenied ? '需要相机权限才能扫码' : '相机暂时不可用',
+              tr(context, permissionDenied ? '需要相机权限才能扫码' : '相机暂时不可用'),
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 12),
             Text(
-              permissionDenied
-                  ? '请在手机系统设置中允许 PhoneBridge 使用相机，再返回重试。也可以返回手动填写连接信息。'
-                  : '请关闭正在使用相机的其他应用后重试，或返回手动填写连接信息。',
+              tr(
+                context,
+                permissionDenied
+                    ? '请在手机系统设置中允许 PhoneBridge 使用相机，再返回重试。也可以返回手动填写连接信息。'
+                    : '请关闭正在使用相机的其他应用后重试，或返回手动填写连接信息。',
+              ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 16),
-            FilledButton(onPressed: onRetry, child: const Text('重试')),
-            TextButton(onPressed: onBack, child: const Text('返回手动填写')),
+            FilledButton(onPressed: onRetry, child: Text(tr(context, '重试'))),
+            TextButton(onPressed: onBack, child: Text(tr(context, '返回手动填写'))),
           ],
         ),
       ),

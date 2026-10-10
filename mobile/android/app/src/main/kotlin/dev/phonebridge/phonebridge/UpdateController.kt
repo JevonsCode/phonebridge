@@ -27,6 +27,7 @@ internal class UpdateController(private val host: UpdateHost, private val direct
     private var readyIdentity: UpdateManifest? = null
     private var downloaded = 0L
     private var errorMessage: String? = null
+    private var errorCode: String? = null
     private var operation = false
     @Volatile private var closed = false
     @Volatile private var generation = 0L
@@ -60,12 +61,12 @@ internal class UpdateController(private val host: UpdateHost, private val direct
             "updateAvailable" to (value != null && value.versionCode > installed.code),
             "downloadedBytes" to downloaded, "totalBytes" to (value?.size ?: 0L),
             "progress" to if (value != null && value.size > 0) (downloaded.toDouble() / value.size).coerceIn(0.0, 1.0) else 0.0,
-            "errorMessage" to errorMessage)
+            "errorMessage" to errorMessage, "errorCode" to errorCode)
     }
 
     fun check(complete: (Map<String, Any?>?, UpdateFailure?) -> Unit) {
         ensureAvailable()
-        operation = true; phase = "checking"; errorMessage = null
+        operation = true; phase = "checking"; errorMessage = null; errorCode = null
         checkCompletion = complete
         publish()
         val ticket = ++generation
@@ -106,7 +107,7 @@ internal class UpdateController(private val host: UpdateHost, private val direct
     fun download(): Map<String, Any?> {
         ensureAvailable()
         val snapshot = metadata ?: throw UpdateFailure("UPDATE_NOT_CHECKED", "请先检查版本")
-        operation = true; phase = "downloading"; downloaded = 0; errorMessage = null
+        operation = true; phase = "downloading"; downloaded = 0; errorMessage = null; errorCode = null
         pendingInstall = true
         publish()
         val ticket = ++generation
@@ -165,7 +166,7 @@ internal class UpdateController(private val host: UpdateHost, private val direct
         ensureAvailable()
         val snapshot = readyIdentity ?: throw UpdateFailure("UPDATE_NOT_READY", "请先下载 APK")
         if (metadata != snapshot || !readyFile.isFile) throw UpdateFailure("UPDATE_NOT_READY", "版本信息已变化，请重新下载 APK")
-        operation = true; errorMessage = null; pendingInstall = true
+        operation = true; errorMessage = null; errorCode = null; pendingInstall = true
         installCompletion = complete
         publish()
         val ticket = ++generation
@@ -241,6 +242,7 @@ internal class UpdateController(private val host: UpdateHost, private val direct
     private fun fail(error: Exception, code: String, message: String) {
         host.reportFailure(error)
         phase = "error"; errorMessage = if (error is UpdateFailure) error.message else message
+        errorCode = if (error is UpdateFailure) error.code else code
     }
 
     fun close() {

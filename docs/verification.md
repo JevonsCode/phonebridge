@@ -2,6 +2,15 @@
 
 This document records evidence, not planned capabilities. Update it when tests finish. No private phone data, screenshots, tokens or serial numbers belong here.
 
+## v0.2.5 Chinese and English (2026-10-11)
+
+- Flutter static analysis passed; all 56 Flutter tests passed, including language resolution, persisted selection, failed preference writes and retained connection state. Native Kotlin compilation and all 61 JVM tests passed.
+- Website language tests: 9 passed. Real browser checks covered an English browser's initial redirect, manual selection retained after reload, command copying, FAQ expansion, and Chinese/English layouts at 1440, 390 and 320 pixels with no horizontal overflow. Storage-denied behavior is covered by the script tests, not a physical browser policy change.
+- The final ARM64 APK was installed as an update on the existing Android 16 phone. PackageManager confirmed versionName 0.2.5 and versionCode 2009. Reading back the installed APK produced the exact final SHA256: `952EFEE54CAF20CF1BE96BE8BF887DCEE44135B29AD68A3A1F1A159D05AE27EA`. Original first-install time and saved desktop identity were retained.
+- Through PhoneBridge's real accessibility actions, the phone switched from Follow system (Chinese) to English, back to Chinese, and back to Follow system. Home and Settings screenshots showed translated labels; actions stayed enabled and the connection remained active. Read-back preferences confirmed the saved selection. No new pairing or connection authorization was needed. Android OS language changes while the App is in the background have not been physically tested; the Activity and AccessibilityService callbacks are source-reviewed.
+- Phone UI actions and screenshots used PhoneBridge over the local network. ADB was used to install the update and read diagnostic evidence; it was not used to tap the interface. The wireless transport is verified; food delivery, flight selection and cross-network remote operation remain suggested scenarios without end-to-end device evidence.
+- The distributed APK uses the official HTTPS manifest and retains the existing debug signing identity. It remains a developer preview; no additional phone models or long-duration background behavior are claimed.
+
 ## v0.2.4 in-app updates (2026-10-11)
 
 - Flutter static analysis passed; 48 Flutter tests passed, including update state/event handling, About re-entry and a narrow screen with enlarged text. Native JVM suite: 61 tests, zero failures/errors, including 22 updater cases.

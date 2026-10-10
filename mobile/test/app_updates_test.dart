@@ -1,3 +1,4 @@
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -21,6 +22,8 @@ void main() {
   var checkPhase = 'available';
 
   setUp(() {
+    TestWidgetsFlutterBinding.instance.platformDispatcher.localeTestValue =
+        const Locale('zh');
     calls.clear();
     check = null;
     install = null;
@@ -64,6 +67,10 @@ void main() {
           throw PlatformException(code: 'UNEXPECTED_METHOD');
         });
   });
+  tearDown(
+    () => TestWidgetsFlutterBinding.instance.platformDispatcher
+        .clearLocaleTestValue(),
+  );
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
@@ -95,6 +102,9 @@ void main() {
     });
     await tester.pumpWidget(
       MaterialApp(
+        locale: const Locale('zh'),
+        supportedLocales: const [Locale('zh'), Locale('en')],
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
         theme: phoneTheme(),
         home: const Scaffold(
           body: SingleChildScrollView(
@@ -309,6 +319,9 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('zh'),
+          supportedLocales: const [Locale('zh'), Locale('en')],
+          localizationsDelegates: GlobalMaterialLocalizations.delegates,
           theme: phoneTheme(),
           builder: (context, child) => MediaQuery(
             data: MediaQuery.of(

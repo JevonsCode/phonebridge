@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'pairing.dart';
 import 'pairing_scanner.dart';
 import 'app_updates.dart';
+import 'app_language.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 void main() {
   LicenseRegistry.addLicense(() async* {
@@ -19,11 +21,16 @@ void main() {
 class PhoneBridgeApp extends StatelessWidget {
   const PhoneBridgeApp({super.key});
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'PhoneBridge',
-    debugShowCheckedModeBanner: false,
-    theme: phoneTheme(),
-    home: const ConnectionPage(),
+  Widget build(BuildContext context) => AppLanguage(
+    builder: (context, locale) => MaterialApp(
+      title: 'PhoneBridge',
+      debugShowCheckedModeBanner: false,
+      theme: phoneTheme(),
+      locale: locale,
+      supportedLocales: [Locale('zh'), Locale('en')],
+      localizationsDelegates: GlobalMaterialLocalizations.delegates,
+      home: const ConnectionPage(),
+    ),
   );
 }
 
@@ -89,7 +96,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
         if (wasActive && !connected && !connecting) token.clear();
       }
     } on PlatformException catch (e) {
-      if (mounted) setState(() => error = e.message ?? '无法读取连接状态');
+      if (mounted) {
+        setState(() => error = userError(e.code, e.message, '无法读取连接状态'));
+      }
     } on MissingPluginException {
       if (mounted) setState(() => error = '控制服务仅在 Android 11 或更新版本上可用');
     } finally {
@@ -115,7 +124,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
       }
       await refresh();
     } on PlatformException catch (e) {
-      if (mounted) setState(() => error = e.message ?? '操作失败，请检查手机状态');
+      if (mounted) {
+        setState(() => error = userError(e.code, e.message, '操作失败，请检查手机状态'));
+      }
     } on MissingPluginException {
       if (mounted) setState(() => error = '请在安卓设备上打开 PhoneBridge');
     } finally {
@@ -160,7 +171,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         'DEVICE_LOCKED' => '请先解锁手机，再启动电脑服务',
         'NOTIFICATIONS_DISABLED' => '请允许 PhoneBridge 的连接通知后再试',
         'NO_SAVED_PAIRING' => '请先与电脑配对',
-        _ => e.message ?? '电脑服务启动失败，请检查电脑端后台服务',
+        _ => userError(e.code, e.message, '电脑服务启动失败，请检查电脑端后台服务'),
       };
       if (mounted) setState(() => error = message);
     } on MissingPluginException {
@@ -230,9 +241,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(title, style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  tr(context, title),
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 16),
-                Text(body, style: Theme.of(context).textTheme.bodyLarge),
+                Text(
+                  tr(context, body),
+                  style: Theme.of(context).textTheme.bodyLarge,
+                ),
               ],
             ),
           ),
@@ -243,7 +260,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Widget build(BuildContext context) {
     final nativeError = status['lastError'] as String?;
     final message =
-        error ?? (nativeError?.isNotEmpty == true ? nativeError : null);
+        error ??
+        (nativeError?.isNotEmpty == true
+            ? userError(null, nativeError, '操作失败，请检查手机状态')
+            : null);
     return PopScope(
       canPop: !showPairing,
       onPopInvokedWithResult: (didPop, result) {
@@ -254,22 +274,25 @@ class _ConnectionPageState extends State<ConnectionPage> {
           titleSpacing: 24,
           leading: showPairing
               ? IconButton(
-                  tooltip: '返回',
+                  tooltip: tr(context, '返回'),
                   icon: const Icon(Icons.arrow_back_rounded),
                   onPressed: () => setState(() => showPairing = false),
                 )
               : null,
           title: Text(
-            showPairing
-                ? '连接电脑'
-                : tab == 0
-                ? 'PhoneBridge'
-                : '设置',
+            tr(
+              context,
+              showPairing
+                  ? '连接电脑'
+                  : tab == 0
+                  ? 'PhoneBridge'
+                  : '设置',
+            ),
           ),
           actions: !showPairing && tab == 0
               ? [
                   IconButton(
-                    tooltip: '帮助',
+                    tooltip: tr(context, '帮助'),
                     onPressed: () => showInfo(
                       '连接，一次就好',
                       '首次扫描电脑端的配对码。记住电脑后，更新 App 或网络恢复时会自动重连。\n\n保持手机解锁，电脑端服务运行即可。你可以随时暂停连接。',
@@ -300,7 +323,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                                 ? null
                                 : () => perform('disconnect'),
                             icon: const Icon(Icons.pause_rounded, size: 20),
-                            label: const Text('暂停连接'),
+                            label: Text(tr(context, '暂停连接')),
                           ),
                         ),
                       ),
@@ -309,18 +332,18 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         selectedIndex: tab,
                         onDestinationSelected: (value) =>
                             setState(() => tab = value),
-                        destinations: const [
+                        destinations: [
                           NavigationDestination(
                             key: Key('nav-connection'),
                             icon: Icon(Icons.devices_outlined),
                             selectedIcon: Icon(Icons.devices_rounded),
-                            label: '连接',
+                            label: tr(context, '连接'),
                           ),
                           NavigationDestination(
                             key: Key('nav-settings'),
                             icon: Icon(Icons.settings_outlined),
                             selectedIcon: Icon(Icons.settings_rounded),
-                            label: '设置',
+                            label: tr(context, '设置'),
                           ),
                         ],
                       ),
@@ -358,7 +381,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                               const SizedBox(width: 10),
                               Expanded(
                                 child: Text(
-                                  message,
+                                  tr(context, message),
                                   key: const Key('error'),
                                   style: const TextStyle(
                                     color: Color(0xFF9C4033),
@@ -410,13 +433,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
       Center(child: ConnectionIllustration(connected: connected)),
       const SizedBox(height: 22),
       Text(
-        title,
+        tr(context, title),
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.displaySmall,
       ),
       const SizedBox(height: 10),
       Text(
-        subtitle,
+        tr(context, subtitle),
         textAlign: TextAlign.center,
         style: const TextStyle(fontSize: 14, color: muted),
       ),
@@ -430,10 +453,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
               subtitle: computerAddress,
               onTap: () => setState(() => tab = 1),
               trailing: Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 5,
-                ),
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
                   color: connected
                       ? const Color(0xFFE9F4ED)
@@ -441,7 +461,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   borderRadius: BorderRadius.circular(20),
                 ),
                 child: Text(
-                  connected ? '已连接' : '已记住',
+                  tr(context, connected ? '已连接' : '已记住'),
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w500,
@@ -459,7 +479,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           key: const Key('start-pairing'),
           onPressed: busy ? null : openPairing,
           icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
-          label: const Text('连接电脑'),
+          label: Text(tr(context, '连接电脑')),
         ),
         const SizedBox(height: 20),
       ],
@@ -472,16 +492,19 @@ class _ConnectionPageState extends State<ConnectionPage> {
             onChanged: connected && !busy
                 ? (v) => perform('setActionsEnabled', {'enabled': v})
                 : null,
-            title: const Text(
-              '允许操作',
+            title: Text(
+              tr(context, '允许操作'),
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
             ),
             subtitle: Text(
-              !connected && granted
-                  ? '操作授权已保留，重连后恢复'
-                  : granted
-                  ? 'AI 可以点击、滑动和输入'
-                  : '关闭时，AI 只能查看界面',
+              tr(
+                context,
+                !connected && granted
+                    ? '操作授权已保留，重连后恢复'
+                    : granted
+                    ? 'AI 可以点击、滑动和输入'
+                    : '关闭时，AI 只能查看界面',
+              ),
               style: const TextStyle(fontSize: 12, color: muted, height: 1.6),
             ),
           ),
@@ -495,7 +518,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
               ? null
               : () => perform('resumeSavedConnection'),
           icon: const Icon(Icons.play_arrow_rounded, size: 20),
-          label: const Text('继续连接'),
+          label: Text(tr(context, '继续连接')),
         ),
       if (hasSavedPairing && !connected) ...[
         if (!active) const SizedBox(height: 12),
@@ -510,21 +533,24 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 : Icons.power_settings_new_rounded,
             size: 20,
           ),
-          label: Text(startingDesktop ? '正在启动电脑服务…' : '启动电脑服务'),
+          label: Text(tr(context, startingDesktop ? '正在启动电脑服务…' : '启动电脑服务')),
         ),
       ],
       if (!enabled) ...[
         const SizedBox(height: 16),
         TextButton(
           onPressed: busy ? null : () => perform('openAccessibilitySettings'),
-          child: const Text('开启无障碍服务以继续'),
+          child: Text(tr(context, '开启无障碍服务以继续')),
         ),
       ],
       const SizedBox(height: 16),
       Text(
-        active
-            ? (hasSavedPairing ? '配对与授权已保留 · 随时可以暂停' : '仅限本次连接 · 随时可以暂停')
-            : '只连接你信任的电脑',
+        tr(
+          context,
+          active
+              ? (hasSavedPairing ? '配对与授权已保留 · 随时可以暂停' : '仅限本次连接 · 随时可以暂停')
+              : '只连接你信任的电脑',
+        ),
         textAlign: TextAlign.center,
         style: const TextStyle(color: Color(0xFF777F8B), fontSize: 11),
       ),
@@ -551,6 +577,21 @@ class _ConnectionPageState extends State<ConnectionPage> {
           title: '已记住的电脑',
           subtitle: hasSavedPairing ? computerAddress : '尚未配对',
           onTap: hasSavedPairing ? () => showComputer() : openPairing,
+        ),
+      ],
+    ),
+    const SizedBox(height: 28),
+    SurfaceGroup(
+      children: [
+        SettingsRow(
+          icon: Icons.translate_rounded,
+          title: '语言',
+          subtitle: switch (AppLanguage.of(context)?.preference) {
+            'zh' => '中文',
+            'en' => 'English',
+            _ => '跟随系统',
+          },
+          onTap: showLanguage,
         ),
       ],
     ),
@@ -606,24 +647,65 @@ class _ConnectionPageState extends State<ConnectionPage> {
       ],
     ),
     const SizedBox(height: 28),
-    const Center(
+    Center(
       child: Text(
-        'PhoneBridge',
+        tr(context, 'PhoneBridge'),
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 12, height: 2, color: Color(0xFF89919C)),
       ),
     ),
   ];
 
+  Future<void> showLanguage() async {
+    final owner = AppLanguage.of(context);
+    if (owner == null) return;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            for (final choice in const {
+              'system': '跟随系统',
+              'zh': '中文',
+              'en': 'English',
+            }.entries)
+              ListTile(
+                key: Key('language-${choice.key}'),
+                title: Text(tr(sheetContext, choice.value)),
+                trailing: owner.preference == choice.key
+                    ? const Icon(Icons.check_rounded)
+                    : null,
+                onTap: owner.saving
+                    ? null
+                    : () async {
+                        if (owner.saving) return;
+                        try {
+                          await owner.select(choice.key);
+                          if (sheetContext.mounted) {
+                            Navigator.of(sheetContext).pop();
+                          }
+                        } on PlatformException {
+                          if (mounted) setState(() => error = '无法保存语言设置，请重试');
+                          if (sheetContext.mounted) {
+                            Navigator.of(sheetContext).pop();
+                          }
+                        }
+                      },
+              ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget sectionLabel(String text) => Padding(
     padding: const EdgeInsets.only(left: 4, bottom: 12),
     child: Text(
-      text,
-      style: const TextStyle(
-        fontSize: 12,
-        fontWeight: FontWeight.w500,
-        color: muted,
-      ),
+      tr(context, text),
+      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: muted),
     ),
   );
 
@@ -642,20 +724,20 @@ class _ConnectionPageState extends State<ConnectionPage> {
             const Icon(Icons.laptop_mac_outlined, size: 36, color: blue),
             const SizedBox(height: 16),
             Text(
-              '我的电脑',
+              tr(context, '我的电脑'),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 8),
             Text(
-              status['savedEndpoint'] as String? ?? '',
+              tr(context, status['savedEndpoint'] as String? ?? ''),
               key: const Key('saved-endpoint'),
               textAlign: TextAlign.center,
               style: const TextStyle(fontSize: 13, color: muted),
             ),
             const SizedBox(height: 24),
-            const Text(
-              '连接信息和你的授权已加密保存在手机中。更新 App 或网络恢复后，无需重新扫码。',
+            Text(
+              tr(context, '连接信息和你的授权已加密保存在手机中。更新 App 或网络恢复后，无需重新扫码。'),
               style: TextStyle(height: 1.7),
             ),
             const SizedBox(height: 24),
@@ -671,7 +753,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 foregroundColor: const Color(0xFFB13B31),
               ),
               icon: const Icon(Icons.link_off_rounded, size: 20),
-              label: const Text('忘记这台电脑'),
+              label: Text(tr(context, '忘记这台电脑')),
             ),
           ],
         ),
@@ -686,9 +768,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
       const Center(child: ConnectionIllustration(connected: false)),
       const SizedBox(height: 28),
     ],
-    Text('只需配对一次', style: Theme.of(context).textTheme.headlineMedium),
+    Text(
+      tr(context, '只需配对一次'),
+      style: Theme.of(context).textTheme.headlineMedium,
+    ),
     const SizedBox(height: 10),
-    const Text('扫描电脑端的二维码。之后的连接，交给 PhoneBridge。'),
+    Text(tr(context, '扫描电脑端的二维码。之后的连接，交给 PhoneBridge。')),
     const SizedBox(height: 24),
     if (!enabled) ...[
       SurfaceGroup(
@@ -707,13 +792,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
       key: const Key('scan-pairing'),
       onPressed: busy || connected || connecting ? null : scanPairing,
       icon: const Icon(Icons.qr_code_scanner_rounded),
-      label: const Text('扫描电脑配对码'),
+      label: Text(tr(context, '扫描电脑配对码')),
     ),
     const SizedBox(height: 8),
     TextButton(
       key: const Key('manual-pairing'),
       onPressed: () => setState(() => manual = !manual),
-      child: Text(manual ? '收起手动设置' : '手动输入连接信息'),
+      child: Text(tr(context, manual ? '收起手动设置' : '手动输入连接信息')),
     ),
     if (pairingPrefilled) ...[
       const SizedBox(height: 12),
@@ -727,9 +812,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
           ),
         ],
       ),
-      const Padding(
+      Padding(
         padding: EdgeInsets.only(top: 12),
-        child: Text('核对电脑地址后，确认以下连接选项。', key: Key('pairing-prefilled')),
+        child: Text(
+          tr(context, '核对电脑地址后，确认以下连接选项。'),
+          key: Key('pairing-prefilled'),
+        ),
       ),
     ],
     if (manual) ...[
@@ -738,7 +826,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         controller: endpoint,
         enabled: !connected && !connecting,
         autocorrect: false,
-        decoration: const InputDecoration(labelText: '设备连接地址'),
+        decoration: InputDecoration(labelText: tr(context, '设备连接地址')),
         keyboardType: TextInputType.url,
       ),
       const SizedBox(height: 16),
@@ -748,7 +836,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         obscureText: true,
         enableSuggestions: false,
         autocorrect: false,
-        decoration: const InputDecoration(labelText: '配对密钥'),
+        decoration: InputDecoration(labelText: tr(context, '配对密钥')),
       ),
       const SizedBox(height: 16),
       TextField(
@@ -757,9 +845,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
         minLines: 2,
         maxLines: 5,
         autocorrect: false,
-        decoration: const InputDecoration(
-          labelText: '允许访问的应用包名',
-          helperText: '每行一个；默认此应用和微信',
+        decoration: InputDecoration(
+          labelText: tr(context, '允许访问的应用包名'),
+          helperText: tr(context, '每行一个；默认此应用和微信'),
         ),
       ),
     ],
@@ -773,16 +861,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
             onChanged: connected || connecting
                 ? null
                 : (v) => setState(() => insecureLocal = v ?? false),
-            title: const Text('使用可信本地网络', style: TextStyle(fontSize: 14)),
-            subtitle: const Text(
-              '允许本地明文连接；同一网络内的其他人可能看到传输内容。',
+            title: Text(
+              tr(context, '使用可信本地网络'),
+              style: TextStyle(fontSize: 14),
+            ),
+            subtitle: Text(
+              tr(context, '允许本地明文连接；同一网络内的其他人可能看到传输内容。'),
               style: TextStyle(fontSize: 12),
             ),
             controlAffinity: ListTileControlAffinity.leading,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 6,
-            ),
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           ),
           const Divider(indent: 20, endIndent: 20),
           CheckboxListTile(
@@ -791,16 +879,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
             onChanged: connected || connecting
                 ? null
                 : (v) => setState(() => consent = v ?? false),
-            title: const Text('允许共享应用界面', style: TextStyle(fontSize: 14)),
-            subtitle: const Text(
-              '内容发送给配对电脑；AI 客户端可能转发给模型服务商。',
+            title: Text(
+              tr(context, '允许共享应用界面'),
+              style: TextStyle(fontSize: 14),
+            ),
+            subtitle: Text(
+              tr(context, '内容发送给配对电脑；AI 客户端可能转发给模型服务商。'),
               style: TextStyle(fontSize: 12),
             ),
             controlAffinity: ListTileControlAffinity.leading,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 6,
-            ),
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           ),
           const Divider(indent: 20, endIndent: 20),
           CheckboxListTile(
@@ -809,16 +897,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
             onChanged: connected || connecting
                 ? null
                 : (v) => setState(() => remember = v ?? false),
-            title: const Text('记住电脑与授权', style: TextStyle(fontSize: 14)),
-            subtitle: const Text(
-              '更新或网络恢复后，自动连接。',
+            title: Text(tr(context, '记住电脑与授权'), style: TextStyle(fontSize: 14)),
+            subtitle: Text(
+              tr(context, '更新或网络恢复后，自动连接。'),
               style: TextStyle(fontSize: 12),
             ),
             controlAffinity: ListTileControlAffinity.leading,
-            contentPadding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 6,
-            ),
+            contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
           ),
         ],
       ),
@@ -829,11 +914,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
             ? null
             : connect,
         icon: const Icon(Icons.link_rounded),
-        label: Text(connecting ? '正在连接…' : '确认连接'),
+        label: Text(tr(context, connecting ? '正在连接…' : '确认连接')),
       ),
       const SizedBox(height: 12),
-      const Text(
-        '首次连接为只读，操作开关由你开启。',
+      Text(
+        tr(context, '首次连接为只读，操作开关由你开启。'),
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 12, color: muted),
       ),

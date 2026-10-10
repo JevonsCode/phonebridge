@@ -23,3 +23,7 @@ Meaningful tests cover system language fallback, manual selection and persistenc
 Build v0.2.5 with the existing signature and official manifest URL. Upgrade the physical Android 16 phone through the existing App updater if practical, otherwise use an owner-authorized ADB update; no ADB UI gestures. Verify installed version/hash, original pairing and action consent, both languages, and official About checks. Publish only after these checks, using GitHub Releases and GitHub Pages. The current preview remains debug signed; do not claim other devices or recipient actions were tested.
 
 Delete the README tagline `个人自用优先 · MIT 开源 · Android 11+ · Flutter + Kotlin · MCP` as requested. Keep factual installation and technical details where they help users.
+
+## Owner follow-up: everyday scenarios and wireless use
+
+Add bilingual examples for comparing food-delivery choices/offers, browsing flight options including price and conditions, and working through multi-screen phone flows. Identify these as scenarios to try, not claims of already verified delivery/flight end-to-end outcomes or a guaranteed global cheapest fare. Explain that the current App already works without a USB cable on the local network. Cross-network access requires a reachable desktop service; it has not been physically verified. This follow-up authorizes website copy, not new remote networking configuration.

@@ -1,3 +1,4 @@
+import 'app_language.dart';
 import 'package:flutter/material.dart';
 
 const ink = Color(0xFF202124);
@@ -158,11 +159,14 @@ class SettingsRow extends StatelessWidget {
     minLeadingWidth: 24,
     horizontalTitleGap: 16,
     leading: Icon(icon, size: 23, color: muted),
-    title: Text(title, style: Theme.of(context).textTheme.titleMedium),
+    title: Text(
+      tr(context, title),
+      style: Theme.of(context).textTheme.titleMedium,
+    ),
     subtitle: subtitle == null
         ? null
         : Text(
-            subtitle!,
+            tr(context, subtitle!),
             style: const TextStyle(fontSize: 12, color: muted, height: 1.6),
           ),
     trailing:
@@ -183,7 +187,7 @@ class ConnectionIllustration extends StatelessWidget {
   final bool connected;
   @override
   Widget build(BuildContext context) => Semantics(
-    label: connected ? '手机与电脑已连接' : '手机等待连接电脑',
+    label: tr(context, connected ? '手机与电脑已连接' : '手机等待连接电脑'),
     child: ExcludeSemantics(
       child: SizedBox(
         height: 128,

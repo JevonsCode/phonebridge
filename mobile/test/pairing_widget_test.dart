@@ -1,3 +1,4 @@
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,6 +24,8 @@ void main() {
   );
 
   setUp(() {
+    TestWidgetsFlutterBinding.instance.platformDispatcher.localeTestValue =
+        const Locale('zh');
     calls.clear();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
@@ -39,12 +42,19 @@ void main() {
           return null;
         });
   });
+  tearDown(
+    () => TestWidgetsFlutterBinding.instance.platformDispatcher
+        .clearLocaleTestValue(),
+  );
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null);
   });
 
   Widget app({bool cancel = false}) => MaterialApp(
+    locale: const Locale('zh'),
+    supportedLocales: const [Locale('zh'), Locale('en')],
+    localizationsDelegates: GlobalMaterialLocalizations.delegates,
     home: ConnectionPage(
       pairingScannerBuilder: (context) => Scaffold(
         body: Center(
@@ -142,6 +152,9 @@ void main() {
       var retries = 0, backs = 0;
       await tester.pumpWidget(
         MaterialApp(
+          locale: const Locale('zh'),
+          supportedLocales: const [Locale('zh'), Locale('en')],
+          localizationsDelegates: GlobalMaterialLocalizations.delegates,
           home: Scaffold(
             body: PairingCameraError(
               permissionDenied: true,

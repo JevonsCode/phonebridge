@@ -2,9 +2,7 @@
 
 让现有 AI 助手通过你授权的安卓应用，看界面、点击、滑动和输入。
 
-**个人自用优先 · MIT 开源 · Android 11+ · Flutter + Kotlin · MCP**
-
-[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.2.4/phonebridge-0.2.4-arm64.apk) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
+[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [English website](https://xn--8ovp9s.xn--m8txu.com/phonebridge/en/) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.2.5/phonebridge-0.2.5-arm64.apk) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
 
 这是一个早期开发者预览版。它提供手机执行工具，不内置大模型，也不承诺“完全控制手机”。无障碍权限需要机主在系统设置中亲自开启。微信功能基于可见界面，不读取私有聊天数据库。真机兼容性与验证范围见 [验证记录](docs/verification.md)。
 
@@ -17,6 +15,8 @@ PhoneBridge MCP → 本机 Hub ← 经过配对的 Android 手机
 ```
 
 ## 能做什么
+
+除了开发和测试，也可以让 AI 帮你处理手机里的日常流程：比较外卖菜单、配送费和优惠；查看机票价格、出发时间、行李与退改条件；在多个页面之间查找信息、填写内容。它们是可以尝试的场景，实际能否完成取决于应用界面、权限和 AI 的判断；外卖下单、付款等步骤应按你的明确指示执行。外卖与机票流程尚未做真机验证，也不保证找到所有渠道的最低价。
 
 - 读取允许应用当前界面的控件、文字、坐标；密码控件文字会隐藏。
 - 截取允许应用的窗口，返回缩放与裁剪坐标映射。
@@ -53,6 +53,8 @@ npm start -- --allow-lan --pairing-qr --remember-pairing
 
 ### 在 App 内升级
 
+App 默认跟随手机系统语言，也可在「设置 → 语言」选择中文或 English；语言选择会保存，切换不会重新配对或中断连接。官网首次按浏览器语言选择中英文，顶部也可手动切换。
+
 打开「设置 → 关于」，App 会自动检查版本，也可以点击「检查更新」。有新版时点「下载更新」，APK 会在 App 内下载并打开安卓安装界面。首次安装时按系统提示允许 PhoneBridge 安装应用，再确认安装即可；覆盖升级会保留已有配对与授权，无需重新扫码。取消安装后可以在同一处点击「安装更新」重试。
 
 更新信息来自官网的 [`update.json`](https://xn--8ovp9s.xn--m8txu.com/phonebridge/update.json)，APK 来自本仓库的 GitHub Releases。下载完成后会核对文件大小、SHA-256、应用包名、版本和签名。预览版仅提供 ARM64 APK；同一签名才能覆盖升级，不要卸载旧版来绕过签名不一致。
@@ -85,6 +87,8 @@ adb reverse tcp:8765 tcp:8765
 不想保存配对时，可取消手机的“记住”选项，并不使用电脑端 `--remember-pairing`；这时通过环境变量向 Hub/MCP 提供同一临时密钥。
 
 ## 不用 USB：局域网 / WSS
+
+配对完成后不需要插线。当前真机已通过局域网无线连接完成控制；USB 只是可选的安装或网络隧道方式。跨网络也可以使用能让手机访问电脑的私有网络或可信 WSS 服务，但目前没有跨网络真机验证。电脑需要开机并运行服务，手机需要解锁。
 
 让电脑监听指定私有地址，手机填电脑实际私有 IP：
 

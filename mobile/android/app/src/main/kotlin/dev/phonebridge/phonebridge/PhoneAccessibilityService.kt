@@ -7,6 +7,7 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.app.KeyguardManager
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.Rect
@@ -46,6 +47,15 @@ class PhoneAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         uiEpoch++
         if (event == null || ObservationPolicy.invalidatesNodeIds(event.eventType)) invalidateNodes()
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // This service may keep the session alive after the owner Activity is
+        // destroyed. Locale changes must still refresh its native notification.
+        if (AppLanguage.preference(this) == "system") {
+            BridgeSession.refreshNotificationLanguage()
+        }
     }
 
     override fun onInterrupt() {

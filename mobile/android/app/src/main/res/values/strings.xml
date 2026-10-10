@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <string name="session_channel">PhoneBridge connection</string>
+    <string name="session_reconnecting">Reconnecting</string>
+    <string name="session_connecting">Connecting</string>
+    <string name="session_actions_enabled">Actions enabled</string>
+    <string name="session_read_only">Read only</string>
+    <string name="session_description">Trusted computer access. Pause stops access and automatic reconnection.</string>
+    <string name="session_stop">Pause</string>
     <string name="accessibility_description">PhoneBridge lets your paired computer read the visible screen and, only after you enable actions locally, operate allowed apps. Screen text and screenshots leave this phone for your paired computer. Password fields are excluded from text observations, but screenshots may contain sensitive information. Stop the session at any time in PhoneBridge or its notification.</string>
 </resources>

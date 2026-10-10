@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="session_channel">PhoneBridge 连接</string>
+    <string name="session_reconnecting">正在重连</string>
+    <string name="session_connecting">正在连接</string>
+    <string name="session_actions_enabled">已允许操作</string>
+    <string name="session_read_only">只读</string>
+    <string name="session_description">可信电脑正在访问。暂停会停止访问和自动重连。</string>
+    <string name="session_stop">暂停</string>
+    <string name="accessibility_description">PhoneBridge 允许配对电脑读取可见界面，只有你在手机上开启操作后，才能控制允许的应用。界面文字和截图会发送到配对电脑。文字读取排除密码字段，但截图可能包含敏感信息。你可以随时在 PhoneBridge 或连接通知中暂停。</string>
+</resources>

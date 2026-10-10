@@ -148,7 +148,7 @@ object BridgeSession {
         validatePairing(record)
         native.requireUnlocked()
         val manager = native.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, "PhoneBridge session", NotificationManager.IMPORTANCE_LOW))
+        manager.createNotificationChannel(NotificationChannel(CHANNEL, AppLanguage.resources(native).getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW))
         requireNotifications(native)
         closeTransport()
         retryAttempt = 0
@@ -461,6 +461,8 @@ object BridgeSession {
         }
     }
 
+    fun refreshNotificationLanguage() { showNotification() }
+
     private fun showNotification() {
         val context = appContext ?: return
         if (!connected && !connecting && retryTask == null) return
@@ -469,17 +471,20 @@ object BridgeSession {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val open = PendingIntent.getActivity(context, 2, Intent(context, MainActivity::class.java),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val state = if (retryTask != null) "Reconnecting" else if (connecting) "Connecting"
-            else if (actionsEnabled) "Actions enabled" else "Read only"
+        val strings = AppLanguage.resources(context)
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(CHANNEL, strings.getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW))
+        val state = strings.getString(if (retryTask != null) R.string.session_reconnecting else if (connecting) R.string.session_connecting
+            else if (actionsEnabled) R.string.session_actions_enabled else R.string.session_read_only)
         val notification = Notification.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentTitle("PhoneBridge • " + state)
-            .setContentText("Trusted computer access. Stop pauses access and automatic reconnection.")
+            .setContentText(strings.getString(R.string.session_description))
             .setContentIntent(open)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
-            .addAction(Notification.Action.Builder(null, "Stop", stop).build())
+            .addAction(Notification.Action.Builder(null, strings.getString(R.string.session_stop), stop).build())
             .build()
         context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
     }

@@ -182,7 +182,8 @@ class AppUpdaterTest {
 
     @Test fun codeControlsAvailabilityAndInitialVersionIsNative() = Session().use { session ->
         assertEquals(setOf("phase", "currentVersion", "currentVersionCode", "versionName", "versionCode",
-            "updateAvailable", "downloadedBytes", "totalBytes", "progress", "errorMessage"), session.controller.status().keys)
+            "updateAvailable", "downloadedBytes", "totalBytes", "progress", "errorMessage", "errorCode"), session.controller.status().keys)
+        assertNull(session.controller.status()["errorCode"])
         assertEquals("0.2.3", session.controller.status()["currentVersion"])
         assertEquals(2007L, session.controller.status()["currentVersionCode"])
         session.check()
@@ -204,7 +205,16 @@ class AppUpdaterTest {
         gate.countDown()
         session.host.until { session.controller.status()["phase"] == "error" }
         assertNotNull(session.controller.status()["errorMessage"])
+        assertEquals("UPDATE_CHECK_FAILED", session.controller.status()["errorCode"])
         assertEquals(false, session.controller.status()["updateAvailable"])
+        session.fixture.respond = { Response(manifest(session.fixture.apkUrl).toByteArray()) }
+        session.controller.check { _, _ -> }
+        // Starting a fresh operation clears the old failure before its worker completes.
+        assertEquals("checking", session.controller.status()["phase"])
+        assertNull(session.controller.status()["errorCode"])
+        assertNull(session.controller.status()["errorMessage"])
+        session.host.until { session.controller.status()["phase"] == "available" }
+        assertNull(session.controller.status()["errorCode"])
     }
 
     @Test fun downloadAutoInstallsOnceOnlyAfterResumeAndCancellationNeedsExplicitRetry() = Session().use { session ->
@@ -303,7 +313,9 @@ class AppUpdaterTest {
         session.host.until { callbacks == 1 }
         assertEquals("error", terminal!!["phase"])
         assertEquals("APK 签名不符，无法安装", terminal!!["errorMessage"])
+        assertEquals("APK_SIGNATURE_MISMATCH", terminal!!["errorCode"])
         assertEquals("error", observed.last()["phase"])
+        assertEquals("APK_SIGNATURE_MISMATCH", observed.last()["errorCode"])
         assertEquals(0, session.host.installs)
     }
 
@@ -320,6 +332,7 @@ class AppUpdaterTest {
         session.host.until { callbacks == 1 }
         assertEquals("error", terminal!!["phase"])
         assertNotNull(terminal!!["errorMessage"])
+        assertEquals("UPDATE_INSTALL_FAILED", terminal!!["errorCode"])
         assertEquals("error", observed.last()["phase"])
         val attempts = session.host.installAttempts
         session.controller.onPause(); session.controller.onResume()

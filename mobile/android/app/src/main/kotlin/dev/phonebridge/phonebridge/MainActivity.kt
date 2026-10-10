@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -43,6 +44,12 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
+                        "getLanguagePreference" -> result.success(AppLanguage.preference(this))
+                        "setLanguagePreference" -> {
+                            AppLanguage.select(this, call.argument<String>("language") ?: "system")
+                            BridgeSession.refreshNotificationLanguage()
+                            result.success(null)
+                        }
                         "status" -> result.success(BridgeSession.status())
                         "getUpdateStatus" -> result.success(updater!!.status())
                         "checkUpdate" -> updater!!.check { status, failure ->
@@ -123,6 +130,15 @@ class MainActivity : FlutterActivity() {
                 diagnostic.put(name, status[name])
             }
             Log.d("PhoneBridgeConnection", "ownerResume $diagnostic")
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // Manifest handles locale changes without recreating this owner. Keep a
+        // stable session's native notification in sync with Flutter's system locale.
+        if (AppLanguage.preference(this) == "system") {
+            BridgeSession.refreshNotificationLanguage()
         }
     }
 

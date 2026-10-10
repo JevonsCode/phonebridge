@@ -17,6 +17,8 @@ void main() {
   Completer<void>? desktopStart;
   PlatformException? desktopFailure;
   setUp(() {
+    TestWidgetsFlutterBinding.instance.platformDispatcher.localeTestValue =
+        const Locale('zh');
     calls.clear();
     connected = false;
     saved = false;
@@ -84,6 +86,10 @@ void main() {
           return null;
         });
   });
+  tearDown(
+    () => TestWidgetsFlutterBinding.instance.platformDispatcher
+        .clearLocaleTestValue(),
+  );
   tearDown(
     () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, null),
