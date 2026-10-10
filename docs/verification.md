@@ -2,6 +2,17 @@
 
 This document records evidence, not planned capabilities. Update it when tests finish. No private phone data, screenshots, tokens or serial numbers belong here.
 
+## v0.2.3 service recovery (2026-10-11)
+
+- TypeScript production build passed; 29 Node tests: 28 passed, one POSIX permissions case skipped on Windows. Real sockets cover management start, concurrent requests, HTTP/WebSocket forwarding, worker crash recovery without RPC replay, forced-parent cleanup, socket reuse and failed worker launches.
+- Flutter analysis passed, 27 widget tests passed. Native JVM suite: 39 tests, zero failures/errors, including actual HTTP recovery requests and response validation.
+- ARM64 debug APK installed as an update on the existing Android 16 phone (versionName 0.2.3, split versionCode 2007). Saved pairing and action consent survived; no new scan. App screenshot confirmed connected home and enabled actions.
+- Real phone button test: desktop management endpoint remained running while Hub was deliberately stopped. Owner tapped "启动电脑服务"; the Hub started and the phone connected using its existing identity. App screenshot succeeded afterward.
+- Windows current-user limited logon task installed and running. Deliberately killing the Hub recovered automatically. Killing the Supervisor recovered through the same running launcher, produced a new Supervisor/Hub process, and the real phone reconnected; pairing file hash remained unchanged. Full Windows reboot/login and long-duration background operation are not claimed.
+- Website entry in App points directly to the canonical GitHub Pages website.
+- Windows launcher containment checks passed under Windows PowerShell 5.1 and PowerShell 7. Real scheduled-task stop left zero Supervisor/Hub processes; starting the task restored the phone connection.
+- SHA256 of the installed phone APK was read back and matched the release APK: `C46292BDE7FE6979570DEED0961C1570E7AEC4785986AB94F5C4A4E793BBD4CF`.
+
 ## Automated evidence
 
 | Layer | Check | Result |
