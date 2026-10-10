@@ -103,9 +103,24 @@ try {
         $env:PHONEBRIDGE_PORT = [string]$config.port
         Push-Location -LiteralPath $config.projectRoot
         try {
-            # Remain the task's foreground process so Task Scheduler observes exit/failure.
-            & $config.nodePath $entryPoint --allow-lan --remember-pairing
-            $supervisorExitCode = $LASTEXITCODE
+            # Keep ownership across crashes; Task Scheduler remains a fallback for wrapper failures.
+            # A deliberate task stop kills this wrapper, including any pending retry.
+            $retryDelaySeconds = 2
+            while ($true) {
+                $runDuration = [Diagnostics.Stopwatch]::StartNew()
+                try {
+                    & $config.nodePath $entryPoint --allow-lan --remember-pairing
+                    $supervisorExitCode = $LASTEXITCODE
+                } catch {
+                    # A failed process launch is recoverable too; never log pairing data.
+                    $supervisorExitCode = -1
+                } finally { $runDuration.Stop() }
+                if ($supervisorExitCode -eq 0) { break }
+                if ($runDuration.Elapsed.TotalSeconds -ge 30) { $retryDelaySeconds = 2 }
+                Write-Warning "PhoneBridge Supervisor exited ($supervisorExitCode); retrying in $retryDelaySeconds seconds."
+                Start-Sleep -Seconds $retryDelaySeconds
+                $retryDelaySeconds = [Math]::Min(30, $retryDelaySeconds * 2)
+            }
         } finally { Pop-Location }
     } finally {
         [Environment]::SetEnvironmentVariable('PHONEBRIDGE_HOST', $previousHost, 'Process')
