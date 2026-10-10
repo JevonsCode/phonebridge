@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,6 +13,8 @@ void main() {
   var saved = false;
   var autoReconnect = false;
   var rememberedActions = false, connecting = false;
+  Completer<void>? desktopStart;
+  PlatformException? desktopFailure;
   setUp(() {
     calls.clear();
     connected = false;
@@ -19,6 +22,8 @@ void main() {
     autoReconnect = false;
     rememberedActions = false;
     connecting = false;
+    desktopStart = null;
+    desktopFailure = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
@@ -40,6 +45,10 @@ void main() {
             autoReconnect = false;
           }
           if (call.method == 'forgetSavedConnection') saved = false;
+          if (call.method == 'startDesktopService') {
+            if (desktopStart != null) await desktopStart!.future;
+            if (desktopFailure != null) throw desktopFailure!;
+          }
           return null;
         });
   });
@@ -52,6 +61,88 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('manual-pairing')));
     await tester.pumpAndSettle();
+  }
+
+  testWidgets('desktop start only appears for paired disconnected phones', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    expect(find.byKey(const Key('start-desktop-service')), findsNothing);
+    saved = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.byKey(const Key('start-desktop-service')), findsOneWidget);
+    autoReconnect = true;
+    connecting = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.byKey(const Key('start-desktop-service')), findsOneWidget);
+    connected = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.byKey(const Key('start-desktop-service')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'desktop start sends no credentials, disables duplicates and keeps Stop usable',
+    (tester) async {
+      saved = true;
+      autoReconnect = true;
+      desktopStart = Completer<void>();
+      await tester.pumpWidget(const PhoneBridgeApp());
+      await tester.pump();
+      final start = find.byKey(const Key('start-desktop-service'));
+      await tester.ensureVisible(start);
+      await tester.tap(start);
+      await tester.pump();
+      final startCall = calls.singleWhere(
+        (c) => c.method == 'startDesktopService',
+      );
+      expect(startCall.arguments, isNull);
+      expect(tester.widget<OutlinedButton>(start).onPressed, isNull);
+      expect(find.text('正在启动电脑服务…'), findsOneWidget);
+      expect(
+        tester.widget<OutlinedButton>(find.byKey(const Key('stop'))).onPressed,
+        isNotNull,
+      );
+      await tester.tap(find.byKey(const Key('stop')));
+      await tester.pump();
+      expect(calls.any((c) => c.method == 'disconnect'), true);
+      desktopStart!.complete();
+      await tester.pump();
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final failure in {
+    'DESKTOP_UNREACHABLE': '无法联系电脑，请确认电脑已开机并连接同一网络',
+    'DESKTOP_UPDATE_REQUIRED': '电脑端尚不支持一键启动，请更新并安装电脑端后台服务',
+    'DESKTOP_AUTH_FAILED': '电脑拒绝了配对身份，请检查电脑端配对设置',
+    'DESKTOP_START_FAILED': '电脑服务启动失败，请检查电脑端后台服务',
+  }.entries) {
+    testWidgets(
+      'desktop start explains ${failure.key} without resuming from Flutter',
+      (tester) async {
+        saved = true;
+        desktopFailure = PlatformException(
+          code: failure.key,
+          message: failure.value,
+        );
+        await tester.pumpWidget(const PhoneBridgeApp());
+        await tester.pump();
+        final start = find.byKey(const Key('start-desktop-service'));
+        await tester.ensureVisible(start);
+        await tester.tap(start);
+        await tester.pump();
+        await tester.pump();
+        expect(find.text(failure.value), findsOneWidget);
+        expect(tester.widget<OutlinedButton>(start).onPressed, isNotNull);
+        expect(calls.any((c) => c.method == 'resumeSavedConnection'), false);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
   }
 
   testWidgets('home has no playground and About opens public project links', (

@@ -7,8 +7,10 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -168,6 +170,30 @@ object BridgeSession {
         openTransport(resumed)
     }
 
+    /** Capture native trust; normal network retries do not invalidate the owner's request. */
+    fun prepareDesktopRecovery(): TrustedPairing {
+        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "请先开启 PhoneBridge 无障碍服务")
+        initialize(native)
+        val record = saved ?: throw BridgeFailure("NO_SAVED_PAIRING", "请先与电脑配对")
+        validatePairing(record)
+        native.requireUnlocked()
+        requireNotifications(native)
+        if (connected) throw BridgeFailure("BUSY", "手机已连接电脑")
+        return record
+    }
+
+    fun resumeAfterDesktopRecovery(record: TrustedPairing, ownerService: PhoneAccessibilityService?) {
+        // Pause, forget, changed consent/pairing, or a replaced accessibility service invalidates it.
+        if (saved !== record || service !== ownerService || ownerService == null) {
+            throw BridgeFailure("RECOVERY_CANCELLED", "连接状态已改变，启动请求已取消，请重新确认后操作")
+        }
+        ownerService.requireUnlocked()
+        requireNotifications(ownerService)
+        // An automatic reconnect may have succeeded while the HTTP request was pending.
+        if (connected) return
+        resumeSavedConnection()
+    }
+
     fun forgetSavedConnection() {
         closeTransport()
         try {
@@ -313,6 +339,9 @@ object BridgeSession {
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 main.post {
                     if (generation != current) return@post
+                    if ((appContext?.applicationInfo?.flags ?: 0) and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+                        Log.d("PhoneBridgeConnection", "webSocketFailure type=${t.javaClass.simpleName} http=${response?.code ?: "none"}")
+                    }
                     if (ReconnectPolicy.isPermanentHttpRejection(response?.code) || t is javax.net.ssl.SSLException) {
                         pause("Pairing or certificate was rejected. Check your computer, then resume locally.",
                             ReconnectPolicy.EndReason.AUTHENTICATION)

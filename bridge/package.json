@@ -12,6 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "tsx --test test/*.test.ts",
     "start": "node dist/cli.js",
+    "supervisor": "node dist/supervisor-cli.js",
     "mcp": "node dist/mcp.js"
   },
   "dependencies": {

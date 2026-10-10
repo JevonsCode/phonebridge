@@ -44,6 +44,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Map<String, dynamic> status = {};
   bool consent = false, insecureLocal = false, busy = false, polling = false;
   bool remember = true;
+  bool startingDesktop = false;
   String? error;
   bool pairingPrefilled = false;
   int tab = 0;
@@ -140,6 +141,32 @@ class _ConnectionPageState extends State<ConnectionPage> {
           .toSet()
           .toList(),
     });
+  }
+
+  Future<void> startDesktopService() async {
+    if (startingDesktop || busy || !hasSavedPairing || connected) return;
+    setState(() {
+      startingDesktop = true;
+      error = null;
+    });
+    try {
+      // Credentials stay in Android's encrypted pairing store.
+      await channel.invokeMethod<void>('startDesktopService');
+      await refresh();
+    } on PlatformException catch (e) {
+      final message = switch (e.code) {
+        'ACCESSIBILITY_DISABLED' => '请先开启 PhoneBridge 无障碍服务',
+        'DEVICE_LOCKED' => '请先解锁手机，再启动电脑服务',
+        'NOTIFICATIONS_DISABLED' => '请允许 PhoneBridge 的连接通知后再试',
+        'NO_SAVED_PAIRING' => '请先与电脑配对',
+        _ => e.message ?? '电脑服务启动失败，请检查电脑端后台服务',
+      };
+      if (mounted) setState(() => error = message);
+    } on MissingPluginException {
+      if (mounted) setState(() => error = '请更新安卓端 PhoneBridge 后再试');
+    } finally {
+      if (mounted) setState(() => startingDesktop = false);
+    }
   }
 
   Future<void> scanPairing() async {
@@ -463,12 +490,28 @@ class _ConnectionPageState extends State<ConnectionPage> {
       if (!active && hasSavedPairing)
         FilledButton.icon(
           key: const Key('resume-saved'),
-          onPressed: busy || !enabled
+          onPressed: busy || startingDesktop || !enabled
               ? null
               : () => perform('resumeSavedConnection'),
           icon: const Icon(Icons.play_arrow_rounded, size: 20),
           label: const Text('继续连接'),
         ),
+      if (hasSavedPairing && !connected) ...[
+        if (!active) const SizedBox(height: 12),
+        OutlinedButton.icon(
+          key: const Key('start-desktop-service'),
+          onPressed: busy || startingDesktop || !enabled
+              ? null
+              : startDesktopService,
+          icon: Icon(
+            startingDesktop
+                ? Icons.hourglass_top_rounded
+                : Icons.power_settings_new_rounded,
+            size: 20,
+          ),
+          label: Text(startingDesktop ? '正在启动电脑服务…' : '启动电脑服务'),
+        ),
+      ],
       if (!enabled) ...[
         const SizedBox(height: 16),
         TextButton(
@@ -554,7 +597,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           onTap: () => showLicensePage(
             context: context,
             applicationName: 'PhoneBridge',
-            applicationVersion: '0.2.2',
+            applicationVersion: '0.2.3',
             applicationLegalese: 'MIT License',
           ),
         ),
@@ -563,7 +606,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     const SizedBox(height: 28),
     const Center(
       child: Text(
-        'PhoneBridge 0.2.2',
+        'PhoneBridge 0.2.3',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 12, height: 2, color: Color(0xFF89919C)),
       ),

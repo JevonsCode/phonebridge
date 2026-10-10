@@ -14,7 +14,7 @@ Files: create `bridge/src/supervisor.ts`, `bridge/src/hub-worker.ts`, `bridge/sr
 
 - [ ] Add integration cases for authentication/Origin/method/body rejection, concurrent idempotent start, status and real WebSocket proxying, child crash recovery and supervisor shutdown. Build worker with `npm run build` before running tests.
 - [ ] Implement public listener with same host/port/TLS validation as Hub. POST `/service/start` accepts an empty body and an exact saved Bearer token, refuses Origin and arbitrary parameters; answer success only after child IPC ready.
-- [ ] Launch only `hub-worker.js` using Node fork and IPC. Worker starts `PhoneHub` on 127.0.0.1:0 and reports ready; parent validates returned loopback URL, bounds startup to 10 seconds and coalesces concurrent starts.
+- [ ] Launch only `hub-worker.js` using Node fork and IPC. Worker starts `PhoneHub` on 127.0.0.1:0 and reports ready; parent validates returned loopback URL, bounds startup to 10 seconds and coalesces concurrent starts. Worker closes/exits on IPC disconnect even if the parent is forcibly terminated. Integration-test forced parent termination, worker exit, and replacement Supervisor startup.
 - [ ] Proxy existing HTTP and `/device` WebSocket traffic; do not retry or replay RPC. Retain live TCP streams for cleanup. Crash restarts use bounded delay; stopping parent cancels startup/retry and kills/waits for its child.
 - [ ] CLI loads original saved DPAPI credential and keeps existing pairing QR support; no secrets in normal output. Run `npm run build` and `npm test` (all old tests must pass).
 

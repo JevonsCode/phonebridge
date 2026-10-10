@@ -2,18 +2,25 @@ package dev.phonebridge.phonebridge
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import okhttp3.Call
+import org.json.JSONObject
 
 class MainActivity : FlutterActivity() {
     private var controlChannel: MethodChannel? = null
     private var notificationPermissionResult: MethodChannel.Result? = null
     private val notificationPermissionRequest = 101
+    private var recovery: DesktopServiceRecovery? = null
+    private var recoveryCall: Call? = null
+    private var recoveryResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -62,6 +69,7 @@ class MainActivity : FlutterActivity() {
                             BridgeSession.resumeSavedConnection()
                             result.success(BridgeSession.status())
                         }
+                        "startDesktopService" -> startDesktopService(result)
                         "forgetSavedConnection" -> {
                             BridgeSession.forgetSavedConnection()
                             result.success(BridgeSession.status())
@@ -81,6 +89,15 @@ class MainActivity : FlutterActivity() {
     override fun onResume() {
         super.onResume()
         BridgeSession.onOwnerActivityResumed(this)
+        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+            val status = BridgeSession.status()
+            val diagnostic = JSONObject()
+            listOf("savedEndpoint", "autoReconnectEnabled", "accessibilityEnabled",
+                "connecting", "connected", "lastError").forEach { name ->
+                diagnostic.put(name, status[name])
+            }
+            Log.d("PhoneBridgeConnection", "ownerResume $diagnostic")
+        }
     }
 
     private fun requestNotificationPermission(result: MethodChannel.Result) {
@@ -122,8 +139,57 @@ class MainActivity : FlutterActivity() {
         result.error("ACTIVITY_CLOSED", "The permission request was interrupted. Open PhoneBridge and try again.", null)
     }
 
+    private fun startDesktopService(result: MethodChannel.Result) {
+        if (recoveryResult != null) {
+            result.error("BUSY", "正在启动电脑服务，请稍候", null)
+            return
+        }
+        val record = BridgeSession.prepareDesktopRecovery()
+        val ownerService = BridgeSession.service
+        val transport = DesktopServiceRecovery()
+        recovery = transport
+        recoveryResult = result
+        try {
+            recoveryCall = transport.start(record) { failure ->
+                BridgeSession.main.post {
+                    if (recoveryResult !== result) return@post
+                    recoveryResult = null
+                    recoveryCall = null
+                    recovery = null
+                    transport.close()
+                    try {
+                        if (isFinishing || isDestroyed) throw BridgeFailure("ACTIVITY_CLOSED", "界面已关闭，请重新打开 PhoneBridge")
+                        if (failure != null) throw failure
+                        BridgeSession.resumeAfterDesktopRecovery(record, ownerService)
+                        result.success(BridgeSession.status())
+                    } catch (error: BridgeFailure) {
+                        result.error(error.code, error.message, null)
+                    } catch (_: Exception) {
+                        result.error("DESKTOP_START_FAILED", "无法恢复连接，请检查手机权限与电脑服务", null)
+                    }
+                }
+            }
+        } catch (error: Exception) {
+            recoveryResult = null
+            recovery = null
+            transport.close()
+            throw error
+        }
+    }
+
+    private fun cancelDesktopRecovery() {
+        val result = recoveryResult
+        recoveryResult = null
+        recoveryCall?.cancel()
+        recoveryCall = null
+        recovery?.close()
+        recovery = null
+        result?.error("ACTIVITY_CLOSED", "启动请求已取消，请重新打开 PhoneBridge 后操作", null)
+    }
+
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         cancelPendingPermission()
+        cancelDesktopRecovery()
         controlChannel?.setMethodCallHandler(null)
         controlChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
@@ -131,6 +197,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onDestroy() {
         cancelPendingPermission()
+        cancelDesktopRecovery()
         super.onDestroy()
     }
 }
