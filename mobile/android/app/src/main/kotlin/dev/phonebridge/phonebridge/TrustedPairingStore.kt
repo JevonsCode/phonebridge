@@ -4,8 +4,6 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.AtomicFile
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.File
 import java.security.KeyStore
 import javax.crypto.KeyGenerator
@@ -23,10 +21,12 @@ data class TrustedPairing(
 }
 
 /** Private no-backup ciphertext; the AES key never leaves AndroidKeyStore. */
-class TrustedPairingStore(context: Context) {
+class TrustedPairingStore(context: Context) : TrustedComputerPersistence {
+    private val repository = TrustedComputerRepository(this)
     private val file = AtomicFile(File(context.noBackupFilesDir, "trusted-pairing.enc"))
     // Non-secret durable stop marker makes Stop fail closed even while Keystore is unavailable.
     private val paused = AtomicFile(File(context.noBackupFilesDir, "trusted-pairing.paused"))
+    private val actionsPaused = AtomicFile(File(context.noBackupFilesDir, "trusted-pairing.permissions-paused"))
     private val keyStore by lazy { KeyStore.getInstance("AndroidKeyStore").apply { load(null) } }
     private val alias = "dev.phonebridge.trusted-pairing.v1"
 
@@ -43,43 +43,61 @@ class TrustedPairingStore(context: Context) {
         }.generateKey()
     }
 
-    fun load(): TrustedPairing? {
-        if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return null
-        file.openRead().close() // Recover an interrupted AtomicFile update before inspecting length.
-        check(file.baseFile.length() in 29..32800)
+    fun load(): TrustedPairing? = list().active?.pairing
+
+    fun list(): TrustedComputers = repository.list()
+
+    // Preserve legacy service callers, updating only this identity and making it active.
+    fun save(record: TrustedPairing) { repository.mutate { it.remember(record) } }
+    fun select(id: String): TrustedPairing = repository.mutate { it.select(id) }.active!!.pairing
+    fun rename(id: String, name: String) { repository.mutate { it.rename(id, name) } }
+    fun deactivate() { repository.mutate { it.copy(activeId = null) } }
+
+    override fun read(): TrustedComputers {
+        if (!file.baseFile.exists() && !File(file.baseFile.path + ".bak").exists()) return TrustedComputers()
+        file.openRead().close()
+        check(file.baseFile.length() in 29..PairingCrypto.MAX_RECORD_BYTES.toLong())
         val plain = PairingCrypto.decrypt(file.readFully(), key(false))
-        try {
-            val json = JSONObject(String(plain, Charsets.UTF_8))
-            check(json.getInt("version") == 1)
-            val packages = json.getJSONArray("packages")
-            return TrustedPairing(json.getString("endpoint"), json.getString("token"),
-                json.getBoolean("allowInsecureLocal"),
-                (0 until packages.length()).map { packages.getString(it) },
-                json.getBoolean("actionsEnabled"),
-                json.getBoolean("resumeAllowed") && !paused.baseFile.exists() &&
-                    !File(paused.baseFile.path + ".bak").exists())
-        } finally { plain.fill(0) }
+        try { return TrustedComputers.decode(String(plain, Charsets.UTF_8)) }
+        finally { plain.fill(0) }
     }
 
-    fun save(record: TrustedPairing) {
-        if (!record.resumeAllowed) pauseAutomaticResume()
-        val plain = JSONObject().put("version", 1).put("endpoint", record.endpoint).put("token", record.token)
-            .put("allowInsecureLocal", record.allowInsecureLocal).put("packages", JSONArray(record.packages))
-            .put("actionsEnabled", record.actionsEnabled).put("resumeAllowed", record.resumeAllowed)
-            .toString().toByteArray(Charsets.UTF_8)
+    override fun write(computers: TrustedComputers) {
+        val encoded = computers.encode()
+        // Check the reader contract before replacing the last usable ciphertext.
+        check(TrustedComputers.decode(encoded) == computers)
+        val plain = encoded.toByteArray(Charsets.UTF_8)
         val encrypted = try { PairingCrypto.encrypt(plain, key(true)) } finally { plain.fill(0) }
         val output = file.startWrite()
         try {
             output.write(encrypted)
             file.finishWrite(output)
-            if (record.resumeAllowed) {
-                paused.delete()
-                check(!paused.baseFile.exists())
-            }
         } catch (error: Exception) {
             file.failWrite(output)
             throw error
         }
+    }
+
+    override fun isPaused() = paused.baseFile.exists() || File(paused.baseFile.path + ".bak").exists()
+    override fun actionsPaused() = actionsPaused.baseFile.exists() || File(actionsPaused.baseFile.path + ".bak").exists()
+    override fun markActionsPaused() {
+        val output = actionsPaused.startWrite()
+        try {
+            output.write(1)
+            actionsPaused.finishWrite(output)
+        } catch (error: Exception) {
+            actionsPaused.failWrite(output)
+            throw error
+        }
+    }
+    override fun clearActionsPaused() {
+        actionsPaused.delete()
+        check(!actionsPaused())
+    }
+    override fun markPaused() = pauseAutomaticResume()
+    override fun clearPaused() {
+        paused.delete()
+        check(!isPaused())
     }
 
     fun pauseAutomaticResume() {
@@ -93,12 +111,6 @@ class TrustedPairingStore(context: Context) {
         }
     }
 
-    fun clear() {
-        pauseAutomaticResume()
-        // Deleting the key first also makes residual ciphertext unusable.
-        if (keyStore.containsAlias(alias)) keyStore.deleteEntry(alias)
-        file.delete()
-        check(!file.baseFile.exists()) { "Saved pairing could not be removed." }
-        paused.delete()
-    }
+    /** Remove only selected trust. Other computers still require the same Keystore key. */
+    fun clear() { repository.mutate { it.forgetActive() } }
 }

@@ -44,6 +44,14 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
+                        "getShowOperationTrails" -> result.success(OperationTrailPreference.enabled(this))
+                        "setShowOperationTrails" -> {
+                            val enabled = call.argument<Boolean>("enabled")
+                                ?: throw IllegalArgumentException("enabled must be a boolean.")
+                            if (!enabled) BridgeSession.service?.clearOperationTrail()
+                            OperationTrailPreference.save(this, enabled)
+                            result.success(null)
+                        }
                         "getLanguagePreference" -> result.success(AppLanguage.preference(this))
                         "setLanguagePreference" -> {
                             AppLanguage.select(this, call.argument<String>("language") ?: "system")
@@ -51,6 +59,16 @@ class MainActivity : FlutterActivity() {
                             result.success(null)
                         }
                         "status" -> result.success(BridgeSession.status())
+                        "listComputers" -> result.success(BridgeSession.computerList())
+                        "selectComputer" -> {
+                            cancelDesktopRecovery()
+                            BridgeSession.selectComputer(call.argument<String>("id") ?: "")
+                            result.success(BridgeSession.status())
+                        }
+                        "renameComputer" -> {
+                            BridgeSession.renameComputer(call.argument<String>("id") ?: "", call.argument<String>("name") ?: "")
+                            result.success(BridgeSession.status())
+                        }
                         "getUpdateStatus" -> result.success(updater!!.status())
                         "checkUpdate" -> updater!!.check { status, failure ->
                             if (failure == null) result.success(status)
@@ -78,6 +96,7 @@ class MainActivity : FlutterActivity() {
                             requestNotificationPermission(result)
                         }
                         "connect" -> {
+                            cancelDesktopRecovery()
                             BridgeSession.connect(
                                 call.argument<String>("endpoint") ?: "",
                                 call.argument<String>("token") ?: "",
@@ -92,6 +111,7 @@ class MainActivity : FlutterActivity() {
                             result.success(BridgeSession.status())
                         }
                         "disconnect" -> {
+                            cancelDesktopRecovery()
                             BridgeSession.disconnect()
                             result.success(BridgeSession.status())
                         }
@@ -101,6 +121,7 @@ class MainActivity : FlutterActivity() {
                         }
                         "startDesktopService" -> startDesktopService(result)
                         "forgetSavedConnection" -> {
+                            cancelDesktopRecovery()
                             BridgeSession.forgetSavedConnection()
                             result.success(BridgeSession.status())
                         }

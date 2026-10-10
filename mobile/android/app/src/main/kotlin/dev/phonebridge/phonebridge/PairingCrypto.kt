@@ -6,10 +6,13 @@ import javax.crypto.spec.GCMParameterSpec
 
 /** Versioned authenticated encryption; never permits unauthenticated/legacy plaintext. */
 object PairingCrypto {
+    // A collection can hold 16 individually bounded computer records.
+    const val MAX_PLAIN_BYTES = 512 * 1024
+    const val MAX_RECORD_BYTES = MAX_PLAIN_BYTES + 29
     private val aad = "PhoneBridge trusted pairing v1".toByteArray(Charsets.UTF_8)
 
     fun encrypt(plain: ByteArray, key: SecretKey): ByteArray {
-        require(plain.size <= 32768)
+        require(plain.size <= MAX_PLAIN_BYTES)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key)
         cipher.updateAAD(aad)
@@ -18,7 +21,7 @@ object PairingCrypto {
     }
 
     fun decrypt(record: ByteArray, key: SecretKey): ByteArray {
-        require(record.size in 29..32800 && record[0] == 1.toByte())
+        require(record.size in 29..MAX_RECORD_BYTES && record[0] == 1.toByte())
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, record.copyOfRange(1, 13)))
         cipher.updateAAD(aad)

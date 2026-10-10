@@ -1,0 +1,234 @@
+name: Distribute verified release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing published release tag, for example v0.6.0'
+        required: true
+        type: string
+      expected_sha256:
+        description: 'Trusted APK SHA-256 (required if GitHub has no digest and the exact release is not in update.json)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+# Share the Pages lock with pages.yml, and serialize release manifest commits.
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  validate-windows:
+    runs-on: windows-latest
+    outputs:
+      release-artifact-id: ${{ steps.snapshot.outputs.artifact-id }}
+    permissions:
+      contents: read
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate desktop source and packaging
+        shell: pwsh
+        run: ./scripts/test-desktop-client.ps1
+      - name: Validate requested tag and official repository
+        shell: pwsh
+        run: |
+          node --input-type=module -e "import { parseVersion, REPOSITORY } from './scripts/release-distribution.mjs'; if (process.env.GITHUB_REPOSITORY !== REPOSITORY || !process.env.RELEASE_TAG?.startsWith('v')) throw new Error('Expected official repository and release tag'); parseVersion(process.env.RELEASE_TAG.slice(1));"
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid release request' }
+      - name: Read and validate optional Windows release assets
+        shell: pwsh
+        run: |
+          gh api "/repos/$env:GITHUB_REPOSITORY/releases/tags/$env:RELEASE_TAG" > "$env:RUNNER_TEMP/release.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot read published release' }
+          node --input-type=module -e "import { readFileSync, writeFileSync } from 'node:fs'; import { selectDesktopAssets } from './scripts/release-distribution.mjs'; const assets = selectDesktopAssets(JSON.parse(readFileSync(process.env.RUNNER_TEMP + '/release.json', 'utf8')), process.env.RELEASE_TAG); writeFileSync(process.env.RUNNER_TEMP + '/windows-assets.json', JSON.stringify(assets));"
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid desktop release metadata' }
+      - name: Verify downloaded Windows assets and dry-run diagnostics
+        shell: pwsh
+        run: |
+          $assets = @(Get-Content -LiteralPath "$env:RUNNER_TEMP/windows-assets.json" -Raw | ConvertFrom-Json)
+          $downloadRoot = Join-Path $env:RUNNER_TEMP 'phonebridge-windows'
+          New-Item -ItemType Directory -Path $downloadRoot | Out-Null
+          foreach ($asset in $assets) {
+            gh release download $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY --pattern $asset.name --dir $downloadRoot
+            if ($LASTEXITCODE -ne 0) { throw 'Desktop asset download failed' }
+            $assetPath = Join-Path $downloadRoot $asset.name
+            if ((Get-Item -LiteralPath $assetPath).Length -ne $asset.size) { throw 'Desktop asset size mismatch' }
+            if ((Get-FileHash -LiteralPath $assetPath -Algorithm SHA256).Hash.ToLowerInvariant() -ne $asset.sha256) { throw 'Desktop asset SHA-256 mismatch' }
+            if ($asset.kind -eq 'installer') {
+              $env:DESKTOP_IDENTITY_REPORT = Join-Path $downloadRoot 'installer-diagnostic.json'
+              $diagnostic = Start-Process -FilePath $assetPath -ArgumentList @('--diagnose', '--report-path', ('"{0}"' -f $env:DESKTOP_IDENTITY_REPORT)) -Wait -PassThru -WindowStyle Hidden
+              if ($diagnostic.ExitCode -ne 0) { throw 'Installer diagnostic failed' }
+              node --input-type=module -e "import { readFileSync } from 'node:fs'; import { validateDesktopIdentity } from './scripts/release-distribution.mjs'; validateDesktopIdentity(JSON.parse(readFileSync(process.env.DESKTOP_IDENTITY_REPORT, 'utf8').replace(/^\uFEFF/, '')), process.env.RELEASE_TAG, { diagnostic: true });"
+              if ($LASTEXITCODE -ne 0) { throw 'Installer release identity mismatch' }
+              $selfTest = Start-Process -FilePath $assetPath -ArgumentList '--self-test' -Wait -PassThru -WindowStyle Hidden
+              if ($selfTest.ExitCode -ne 0) { throw 'Installer embedded package self-test failed' }
+            } else {
+              $archive = [System.IO.Compression.ZipFile]::OpenRead($assetPath)
+              try {
+                if ($archive.Entries.Count -gt 4096) { throw 'Too many ZIP entries' }
+                $total = [long]0
+                foreach ($entry in $archive.Entries) {
+                  $entryName = $entry.FullName.Replace([char]92, [char]47)
+                  if ($entryName.StartsWith('/') -or $entryName -match '^[a-zA-Z]:' -or @($entryName.Split('/') | Where-Object { $_ -eq '..' }).Count -gt 0) { throw 'Unsafe ZIP entry path' }
+                  if ((($entry.ExternalAttributes -shr 16) -band 0xF000) -eq 0xA000) { throw 'ZIP symlink entry is forbidden' }
+                  $total += $entry.Length
+                  if ($total -gt 536870912) { throw 'Expanded ZIP exceeds validation limit' }
+                }
+              } finally { $archive.Dispose() }
+              $extractRoot = Join-Path $downloadRoot 'portable'
+              Expand-Archive -LiteralPath $assetPath -DestinationPath $extractRoot
+              $env:DESKTOP_IDENTITY_REPORT = Join-Path $extractRoot 'package-manifest.json'
+              node --input-type=module -e "import { readFileSync } from 'node:fs'; import { validateDesktopIdentity } from './scripts/release-distribution.mjs'; validateDesktopIdentity(JSON.parse(readFileSync(process.env.DESKTOP_IDENTITY_REPORT, 'utf8').replace(/^\uFEFF/, '')), process.env.RELEASE_TAG);"
+              if ($LASTEXITCODE -ne 0) { throw 'Portable package release identity mismatch' }
+              $clients = @(Get-ChildItem -LiteralPath $extractRoot -Filter PhoneBridge.exe -Recurse -File)
+              if ($clients.Count -ne 1) { throw 'Expected one portable PhoneBridge.exe' }
+              $env:DESKTOP_IDENTITY_REPORT = Join-Path $downloadRoot 'portable-diagnostic.json'
+              $diagnostic = Start-Process -FilePath $clients[0].FullName -ArgumentList @('--diagnose', '--report-path', ('"{0}"' -f $env:DESKTOP_IDENTITY_REPORT)) -Wait -PassThru -WindowStyle Hidden
+              if ($diagnostic.ExitCode -ne 0) { throw 'Portable client diagnostic failed' }
+              node --input-type=module -e "import { readFileSync } from 'node:fs'; import { validateDesktopIdentity } from './scripts/release-distribution.mjs'; validateDesktopIdentity(JSON.parse(readFileSync(process.env.DESKTOP_IDENTITY_REPORT, 'utf8').replace(/^\uFEFF/, '')), process.env.RELEASE_TAG, { diagnostic: true });"
+              if ($LASTEXITCODE -ne 0) { throw 'Portable diagnostic release identity mismatch' }
+            }
+          }
+          "Windows source/package checks passed; optional released assets verified: $($assets.Count). No store submission was performed." >> $env:GITHUB_STEP_SUMMARY
+      # Immutable artifact from this run carries the exact metadata validated above,
+      # including Windows asset absence; publication never refetches a new snapshot.
+      - name: Persist verified release metadata snapshot
+        id: snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-release-snapshot-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release.json
+          if-no-files-found: error
+          retention-days: 7
+  distribute:
+    needs: validate-windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+      EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # Run trusted main-branch automation; never execute release-tag source.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test release validation and synchronization
+        run: node --test scripts/test/release-distribution.test.mjs
+      - name: Validate requested tag and repository
+        run: |
+          node --input-type=module <<'NODE'
+          import { parseVersion, REPOSITORY } from './scripts/release-distribution.mjs';
+          if (process.env.GITHUB_REPOSITORY !== REPOSITORY) throw new Error('Only the official repository may distribute releases');
+          if (!process.env.RELEASE_TAG?.startsWith('v')) throw new Error('Expected a v-prefixed release tag');
+          parseVersion(process.env.RELEASE_TAG.slice(1));
+          NODE
+      - name: Reuse the exact Windows-validated release metadata snapshot
+        uses: actions/download-artifact@v4
+        with:
+          artifact-ids: ${{ needs.validate-windows.outputs.release-artifact-id }}
+          merge-multiple: true
+          path: ${{ runner.temp }}
+      - name: Validate exact ARM64 asset metadata
+        id: asset
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          import { selectReleaseAsset } from './scripts/release-distribution.mjs';
+          const asset = selectReleaseAsset(JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/release.json`, 'utf8')), process.env.RELEASE_TAG);
+          appendFileSync(process.env.GITHUB_OUTPUT, `name=${asset.name}\n`);
+          NODE
+      - name: Download the existing signed release APK
+        env:
+          ASSET_NAME: ${{ steps.asset.outputs.name }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/phonebridge-apk"
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME" --dir "$RUNNER_TEMP/phonebridge-apk"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android verification tools
+        run: sdkmanager 'build-tools;35.0.0'
+      - name: Refresh main before updating public files
+        run: git pull --ff-only origin main
+      - name: Verify APK and synchronize public distribution files
+        id: generate
+        env:
+          ASSET_NAME: ${{ steps.asset.outputs.name }}
+        run: |
+          node scripts/release-distribution.mjs \
+            --root "$GITHUB_WORKSPACE" \
+            --release-json "$RUNNER_TEMP/release.json" \
+            --tag "$RELEASE_TAG" \
+            --apk "$RUNNER_TEMP/phonebridge-apk/$ASSET_NAME" \
+            --aapt "$ANDROID_HOME/build-tools/35.0.0/aapt" \
+            --apksigner "$ANDROID_HOME/build-tools/35.0.0/apksigner" \
+            --output "$RUNNER_TEMP/phonebridge-submission" \
+            --expected-sha256 "$EXPECTED_SHA256"
+          node --input-type=module <<'NODE'
+          import { readFileSync, appendFileSync } from 'node:fs';
+          const result = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/phonebridge-submission/result.json`, 'utf8'));
+          appendFileSync(process.env.GITHUB_OUTPUT, `stale=${result.stale}\nchanged=${result.changed}\n`);
+          NODE
+      - name: Upload Uptodown manual/editorial submission kit
+        uses: actions/upload-artifact@v4
+        with:
+          name: uptodown-submission-${{ env.RELEASE_TAG }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/phonebridge-submission/uptodown-submission.json
+            ${{ runner.temp }}/phonebridge-submission/uptodown-submission.md
+            ${{ runner.temp }}/phonebridge-submission/result.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Commit only generated public text files
+        if: steps.generate.outputs.changed == 'true'
+        run: |
+          git add -- website/dist/update.json website/dist/index.html website/dist/en/index.html README.md
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { PUBLIC_FILES } from './scripts/release-distribution.mjs';
+          const files = execFileSync('git', ['diff', '--cached', '--name-only', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
+          if (!files.length || files.some(file => !PUBLIC_FILES.includes(file))) throw new Error('Staged changes exceed the public text allowlist');
+          NODE
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "chore: distribute ${RELEASE_TAG}"
+          git push origin HEAD:main
+      # GITHUB_TOKEN bot pushes do not invoke pages.yml: deploy explicitly here.
+      - uses: actions/configure-pages@v5
+        if: steps.generate.outputs.stale == 'false'
+      - uses: actions/upload-pages-artifact@v4
+        if: steps.generate.outputs.stale == 'false'
+        with:
+          path: website/dist
+      - name: Deploy the synchronized website
+        id: deployment
+        if: steps.generate.outputs.stale == 'false'
+        uses: actions/deploy-pages@v4
+      - name: Write distribution summary
+        if: always() && steps.generate.outcome == 'success'
+        env:
+          DEPLOYMENT_OUTCOME: ${{ steps.deployment.outcome }}
+        run: |
+          cat "$RUNNER_TEMP/phonebridge-submission/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          printf '\nPages deployment step: %s.\n' "$DEPLOYMENT_OUTCOME" >> "$GITHUB_STEP_SUMMARY"

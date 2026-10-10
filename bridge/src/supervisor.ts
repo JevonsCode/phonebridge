@@ -10,6 +10,7 @@ type Options = {
   token: string; host?: string; port?: number; allowLan?: boolean;
   tls?: { cert: Buffer; key: Buffer }; autoStart?: boolean;
   restartDelayMs?: number; startupTimeoutMs?: number;
+  logFile?: string;
 };
 
 /** The original public endpoint survives a Hub crash. No RPC is ever replayed. */
@@ -88,7 +89,10 @@ export class DesktopSupervisor {
       } catch { this.respond(res, 503, { error: { code: 'START_FAILED' } }); }
       return;
     }
-    if (!((req.method === 'GET' && req.url === '/status') || (req.method === 'POST' && req.url === '/rpc'))) {
+    let endpoint: URL;
+    try { endpoint = new URL(req.url ?? '/', 'http://localhost'); }
+    catch { req.resume(); this.respond(res, 400, { error: { code: 'INVALID_URL' } }); return; }
+    if (!((req.method === 'GET' && (req.url === '/status' || endpoint.pathname === '/operations')) || (req.method === 'POST' && req.url === '/rpc'))) {
       req.resume(); this.respond(res, 404, { error: { code: 'NOT_FOUND' } }); return;
     }
     const target = this.hubUrl;
@@ -140,7 +144,7 @@ export class DesktopSupervisor {
     if (this.starting) return this.starting;
     clearTimeout(this.retry); this.retry = undefined;
     const child = fork(fileURLToPath(new URL('./hub-worker.js', import.meta.url)), [], {
-      env: { ...process.env, PHONEBRIDGE_TOKEN: this.options.token },
+      env: { ...process.env, PHONEBRIDGE_TOKEN: this.options.token, ...(this.options.logFile ? { PHONEBRIDGE_LOG_FILE: this.options.logFile } : {}) },
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true,
       // Do not inherit tsx loaders or debugging flags into the fixed production worker.
       execArgv: [],

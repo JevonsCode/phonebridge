@@ -3,6 +3,10 @@ package dev.phonebridge.phonebridge
 import android.view.accessibility.AccessibilityEvent
 
 object ObservationPolicy {
+    fun isExcludedSystemRefresh(eventType: Int, windowId: Int, verifiedOutsideCropSystemIds: Set<Int>): Boolean =
+        eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED && windowId >= 0 &&
+            windowId in verifiedOutsideCropSystemIds
+
     fun invalidatesNodeIds(eventType: Int): Boolean = when (eventType) {
         AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
         AccessibilityEvent.TYPE_WINDOWS_CHANGED,

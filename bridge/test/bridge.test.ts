@@ -15,12 +15,14 @@ import { PhoneHub } from '../src/hub.js';
 import { parseCommand } from '../src/protocol.js';
 import { encode } from 'jpeg-js';
 import { validateScreenshot } from '../src/screenshot.js';
+import { MemoryOperationJournal } from '../src/operation-journal.js';
 
 const validScreenshot = { mimeType: 'image/jpeg', data: encode({ data: Buffer.from([255, 0, 0, 255]), width: 1, height: 1 }, 65).data.toString('base64'), width: 1, height: 1, screenWidth: 100, screenHeight: 220, cropLeft: 0, cropTop: 20, cropWidth: 100, cropHeight: 200 };
 
 async function setup(t: TestContext, timeoutMs = 1000, host = '127.0.0.1') {
   const token = randomBytes(32).toString('base64url');
-  const hub = new PhoneHub({ token, port: 0, timeoutMs, host, allowLan: host !== '127.0.0.1' });
+  const journal = new MemoryOperationJournal();
+  const hub = new PhoneHub({ token, port: 0, timeoutMs, host, allowLan: host !== '127.0.0.1', journal });
   const url = await hub.start();
   t.after(() => hub.close());
   const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
@@ -35,7 +37,7 @@ async function setup(t: TestContext, timeoutMs = 1000, host = '127.0.0.1') {
     }
     throw new Error('Phone did not become ready');
   };
-  return { token, hub, url, headers, rpc, connect };
+  return { token, hub, url, headers, rpc, connect, journal };
 }
 
 test('health reveals no token or device information; commands require authentication', async t => {
@@ -172,8 +174,12 @@ test(`MCP stdio discovers tools and returns state/image/error through real hub (
   const transport = new StdioClientTransport({ command: process.execPath, args: ['--import', 'tsx', fileURLToPath(new URL('../src/mcp.ts', import.meta.url))], env: clientEnv, stderr: 'pipe' });
   const client = new Client({ name: 'test', version: '1' });
   await client.connect(transport); t.after(() => client.close());
-  const list = await client.listTools(); assert.equal(list.tools.length, 9);
+  const list = await client.listTools(); assert.equal(list.tools.length, 10);
   assert.equal(list.tools.find(x => x.name === 'phone_state')?.annotations?.readOnlyHint, true);
+  const historyTool = list.tools.find(x => x.name === 'phone_operation_history');
+  assert.equal(historyTool?.annotations?.readOnlyHint, true);
+  assert.equal(historyTool?.annotations?.destructiveHint, false);
+  assert.equal(historyTool?.annotations?.openWorldHint, false);
   const state = await client.callTool({ name: 'phone_state', arguments: {} });
   assert.match(JSON.stringify(state.content), /你好/);
   const screenshot = await client.callTool({ name: 'phone_screenshot', arguments: {} });
@@ -181,6 +187,16 @@ test(`MCP stdio discovers tools and returns state/image/error through real hub (
   assert.match(JSON.stringify(screenshot.content), /cropTop/);
   const denied = await client.callTool({ name: 'phone_tap', arguments: { x: 1, y: 2 } });
   assert.equal(denied.isError, true);
+  const history = await client.callTool({ name: 'phone_operation_history', arguments: { limit: 1, method: 'tap' } });
+  assert.equal(history.isError, undefined);
+  const data = JSON.parse((history.content as { text: string }[])[0]!.text);
+  assert.equal(data.operations.length, 1);
+  assert.equal(data.operations[0].method, 'tap');
+  assert.equal(data.operations[0].errorCode, 'READ_ONLY');
+  assert.equal(data.operations[0].outcome, 'device_reported_error');
+  assert.equal(JSON.stringify(data).includes('你好'), false);
+  const invalidHistory = await client.callTool({ name: 'phone_operation_history', arguments: { limit: 201 } });
+  assert.equal(invalidHistory.isError, true);
 });
 }
 

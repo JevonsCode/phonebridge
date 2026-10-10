@@ -33,6 +33,8 @@ android {
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Test APK only; no fixture entry point is included in the production application.
+        testInstrumentationRunner = "dev.phonebridge.phonebridge.SavedComputerFixtureInstrumentation"
         resValue("string", "update_manifest_url", "https://xn--8ovp9s.xn--m8txu.com/phonebridge/update.json")
     }
 

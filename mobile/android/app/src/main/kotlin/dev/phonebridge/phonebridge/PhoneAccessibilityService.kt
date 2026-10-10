@@ -35,6 +35,7 @@ class PhoneAccessibilityService : AccessibilityService() {
     private val nodes = mutableMapOf<String, AccessibilityNodeInfo>()
     private val imageWorker = Executors.newSingleThreadExecutor()
     private var uiEpoch = 0L
+    private val operationTrail by lazy { OperationTrail(this) }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -45,12 +46,21 @@ class PhoneAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (operationTrail.ownsEvent(event)) return
+        // A clock/status-bar refresh outside our verified screenshot crop does
+        // not change the application image. Unknown, focused, overlapping and
+        // structural events still invalidate the capture as before.
+        if (event?.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED) {
+            val excluded = try { windowScope().excludedSystemWindowIds } catch (_: Exception) { emptySet() }
+            if (ObservationPolicy.isExcludedSystemRefresh(event.eventType, event.windowId, excluded)) return
+        }
         uiEpoch++
         if (event == null || ObservationPolicy.invalidatesNodeIds(event.eventType)) invalidateNodes()
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
+        clearOperationTrail()
         // This service may keep the session alive after the owner Activity is
         // destroyed. Locale changes must still refresh its native notification.
         if (AppLanguage.preference(this) == "system") {
@@ -59,15 +69,18 @@ class PhoneAccessibilityService : AccessibilityService() {
     }
 
     override fun onInterrupt() {
+        clearOperationTrail()
         BridgeSession.serviceInterrupted()
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        clearOperationTrail()
         BridgeSession.detach(this)
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        clearOperationTrail()
         BridgeSession.detach(this)
         imageWorker.shutdown()
         super.onDestroy()
@@ -77,6 +90,8 @@ class PhoneAccessibilityService : AccessibilityService() {
         nodes.values.forEach { it.recycle() }
         nodes.clear()
     }
+
+    fun clearOperationTrail() = operationTrail.clear()
 
     fun requireUnlocked() {
         if (!isUnlocked()) throw BridgeFailure("DEVICE_LOCKED", "Unlock the phone before using PhoneBridge.")
@@ -118,6 +133,7 @@ class PhoneAccessibilityService : AccessibilityService() {
         val screenWidth: Int,
         val screenHeight: Int,
         val foreign: List<Rect>,
+        val excludedSystemWindowIds: Set<Int>,
     )
 
     /**
@@ -183,7 +199,14 @@ class PhoneAccessibilityService : AccessibilityService() {
                 val trimmed = WindowGeometry.trimEdgeOcclusion(geometry(bounds), geometry(area))
                 bounds.set(trimmed.left, trimmed.top, trimmed.right, trimmed.bottom)
             }
-            return WindowScope(activePackage, rootId, bounds, screen.width(), screen.height(), foreign)
+            val excludedSystemWindowIds = visible.filter { window ->
+                val area = Rect().also { window.getBoundsInScreen(it) }
+                window.id != rootId && window.displayId == Display.DEFAULT_DISPLAY &&
+                    window.type == AccessibilityWindowInfo.TYPE_SYSTEM &&
+                    !window.isFocused && !window.isActive && !area.isEmpty &&
+                    !Rect.intersects(area, bounds)
+            }.map { it.id }.toSet()
+            return WindowScope(activePackage, rootId, bounds, screen.width(), screen.height(), foreign, excludedSystemWindowIds)
         } finally {
             visible.forEach { it.recycle() }
         }
@@ -205,6 +228,15 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     fun execute(method: String, params: JSONObject, generation: Long,
                 complete: (JSONObject?, BridgeFailure?) -> Unit) {
+        operationTrail.beforeRpc {
+            try { executeReady(method, params, generation, complete) }
+            catch (error: BridgeFailure) { complete(null, error) }
+            catch (_: Exception) { complete(null, BridgeFailure("UNAVAILABLE", "Android could not complete the operation.")) }
+        }
+    }
+
+    private fun executeReady(method: String, params: JSONObject, generation: Long,
+                             complete: (JSONObject?, BridgeFailure?) -> Unit) {
         val mutation = method in setOf("tap", "long_press", "swipe", "set_text", "commit_text", "global_action", "launch_app")
         requireSession(generation, mutation)
         when (method) {
@@ -426,12 +458,14 @@ class PhoneAccessibilityService : AccessibilityService() {
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
                 if (generation == BridgeSession.generation) {
+                    clearOperationTrail()
                     invalidateNodes()
                     complete(null, BridgeFailure("GESTURE_CANCELLED", "Android cancelled the gesture; observe before retrying."))
                 }
             }
         }, BridgeSession.main)
         if (!accepted) throw BridgeFailure("ACTION_REJECTED", "Android rejected gesture dispatch.")
+        operationTrail.show(TrailMotion(method, x1, y1, x2, y2, duration))
     }
 
     private fun screenshot(generation: Long, complete: (JSONObject?, BridgeFailure?) -> Unit) {

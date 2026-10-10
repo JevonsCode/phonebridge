@@ -1,0 +1,15 @@
+PhoneBridge lets an AI assistant on your computer use your Android phone through an App you control.
+
+See the current screen, read accessible controls, tap, long-press, swipe and type. Pair with your computer once, keep the connection saved, and reconnect over your local network without leaving a USB cable plugged in. The phone has an Allow actions switch and a Pause connection button.
+
+Use it for phone testing or try everyday flows: browse food delivery options, compare flights, search and filter information, and work through several screens. These examples depend on the target App and assistant; food ordering and flight booking have not been verified end to end, and no lowest-price guarantee is offered.
+
+Android accessibility service: PhoneBridge needs this service to read the visible interface, capture screenshots and perform the actions requested by your assistant. The owner enables it in Android settings. Camera access is used only for scanning the computer's pairing code. Update APKs are downloaded only when you choose Download update; Android asks you to approve installation.
+
+The Windows client includes its runtime, finds your local network and starts the service. You do not need to install Node.js or look up an IP address. Copy the AI connection configuration from the computer panel. The phone can remember several computers and switch by name; one computer controls the phone at a time.
+
+Brief blue trails show AI taps, holds and swipes. They are enabled by default and can be turned off in Settings. Operation history is saved on your computer and can be read by your AI assistant; it excludes typed text, screen contents, images and pairing credentials.
+
+Requires Android 11 or later, an ARM64 device, a computer, and an AI client that supports MCP. The packaged desktop client supports Windows 10/11 x64; other computers can run the service from source. PhoneBridge includes no AI model, cloud relay, ads or analytics. The assistant you choose may send screen contents to its model provider. It cannot bypass the phone lock screen, fingerprints or protected screenshots.
+
+This is a developer preview. Source code, computer setup instructions and actual device test coverage are available at https://github.com/JevonsCode/phonebridge . Chinese and English are supported.

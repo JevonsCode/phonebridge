@@ -72,6 +72,12 @@ if ($LoadHelpers) { return }
 
 $ConfigurationPath = [IO.Path]::GetFullPath($ConfigurationPath)
 $config = Read-PhoneBridgeDesktopConfiguration $ConfigurationPath
+$shortcutHelper = Join-Path $config.projectRoot 'desktop\shortcut.ps1'
+if (-not $ValidateOnly -and -not $WhatIfPreference -and (Test-Path -LiteralPath $shortcutHelper -PathType Leaf)) {
+    # An unpackaged scheduled-task process repairs Start-menu visibility after an MSIX Agent install.
+    # Old developer checkouts have no helper; shortcut failures must not stop the paired service.
+    try { & $shortcutHelper -PackageRoot $config.projectRoot -StartupRepair } catch { Write-Warning 'PhoneBridge could not repair its current-user shortcut.' }
+}
 $entryPoint = Join-Path $config.projectRoot 'bridge\dist\supervisor-cli.js'
 $jobHelper = Join-Path $PSScriptRoot 'desktop-job.cs'
 foreach ($file in @($config.nodePath, $entryPoint, $jobHelper)) {

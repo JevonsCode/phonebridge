@@ -36,6 +36,8 @@ void main() {
       switch (call.method) {
         case 'getLanguagePreference':
           return preference;
+        case 'getShowOperationTrails':
+          return true;
         case 'setLanguagePreference':
           if (languageWriteFailure != null) throw languageWriteFailure!;
           preference = (call.arguments as Map)['language'] as String;
@@ -156,6 +158,7 @@ void main() {
           (call) => !{
             'status',
             'getLanguagePreference',
+            'getShowOperationTrails',
             'setLanguagePreference',
             'getUpdateStatus',
             'checkUpdate',

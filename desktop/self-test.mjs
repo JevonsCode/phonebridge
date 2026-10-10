@@ -1,0 +1,57 @@
+import assert from 'node:assert/strict';
+import { createServer, request } from 'node:http';
+import { selectNetworks, privateIPv4 } from './network.mjs';
+import { validateConfig, authenticatedStatus, createDashboard, replaceNetwork, createMcpConfiguration } from './server.mjs';
+import { serializeNetworkChange } from './network-transaction.mjs';
+export async function runSelfTest() {
+  for (const bad of ['0.0.0.0','127.0.0.1','169.254.1.1','8.8.8.8','224.0.0.1','192.168.256.1','10.0.0.999','010.0.0.1','10.00.0.1','192.168.001.1','::1','hostname']) assert.equal(privateIPv4(bad), false);
+  assert.equal(privateIPv4('172.31.2.1'), true);
+  const selected = selectNetworks([{ name:'Tailscale', address:'10.1.1.1',defaultRoute:true }, {name:'Ethernet',address:'192.168.1.20',physical:true,defaultRoute:true}, {name:'Wi-Fi',address:'192.168.2.20',physical:true}, {name:'bad',address:'8.8.8.8',physical:true}]);
+  assert.equal(selected[0].name, 'Ethernet'); assert.equal(selected.length, 3);
+  const config = { schema:'phonebridge-desktop-v1',ownerSid:'S-1-5-21-123',hostAddress:'192.168.1.20',port:8767,projectRoot:'C:\\PhoneBridge',nodePath:'C:\\PhoneBridge\\runtime\\node.exe',launcherPath:'C:\\PhoneBridge\\scripts\\windows\\run-desktop.ps1',powershellPath:'C:\\Windows\\powershell.exe' };
+  assert.equal(validateConfig(config, config.ownerSid), config);
+  assert.throws(() => validateConfig(config, 'foreign')); assert.throws(() => validateConfig({...config,hostAddress:'0.0.0.0'},config.ownerSid));
+  assert.throws(() => validateConfig({...config,port:'8767'},config.ownerSid)); assert.throws(() => validateConfig({...config,nodePath:'relative.exe'},config.ownerSid));
+  let oldClosed=false,newClosed=false,activated=false;
+  const old={close:async()=>{oldClosed=true}},candidate={close:async()=>{newClosed=true}};
+  const originalAddress=config.hostAddress;
+  const savedCredential='C:\\Users\\Owner\\.phonebridge\\pairing.json';
+  const integration=createMcpConfiguration(config,savedCredential).mcpServers.phonebridge;
+  assert.equal(integration.command,config.nodePath);assert.equal(integration.args[0],'C:\\PhoneBridge\\bridge\\dist\\mcp.js');
+  assert.equal(integration.env.PHONEBRIDGE_URL,'http://192.168.1.20:8767');assert.equal(integration.env.PHONEBRIDGE_CREDENTIAL_FILE,savedCredential);
+  assert.equal('PHONEBRIDGE_TOKEN' in integration.env,false);assert.equal(JSON.stringify(integration).includes('Bearer'),false);
+  await assert.rejects(replaceNetwork(config,'192.168.2.20',{previous:old,createCandidate:async()=>{throw new Error('Port occupied')},persist:async()=>{throw new Error('Should not write')},activate:()=>{activated=true}}));
+  assert.equal(config.hostAddress,originalAddress);assert.equal(oldClosed,false);assert.equal(activated,false);
+  await assert.rejects(replaceNetwork(config,'192.168.2.20',{previous:old,createCandidate:async()=>candidate,persist:async()=>{throw new Error('Disk full')},activate:()=>{activated=true}}));
+  assert.equal(config.hostAddress,originalAddress);assert.equal(oldClosed,false);assert.equal(newClosed,true);assert.equal(activated,false);
+  let finish;
+  const serial=serializeNetworkChange(()=>new Promise(resolve=>{finish=resolve}));const pending=serial('first');
+  await assert.rejects(serial('second'),/already in progress/);finish();await pending;
+  const upstream = createServer((req,res) => { if (req.headers.authorization !== 'Bearer example-test-token') {res.writeHead(401);res.end('{}');return;}res.end(JSON.stringify({connected:true})); });
+  await new Promise(resolve => upstream.listen(0,'127.0.0.1',resolve));
+  const endpoint = {...config,hostAddress:'127.0.0.1',port:upstream.address().port};
+  assert.equal((await authenticatedStatus(endpoint,'example-test-token')).connected,true);
+  await assert.rejects(authenticatedStatus(endpoint,'other-test-token'));
+  await new Promise(resolve => upstream.close(resolve));
+  await assert.rejects(authenticatedStatus(endpoint,'example-test-token'));
+  let starts=0,lanApprovals=0;
+  const dashboard = await createDashboard({config,token:'unused-test-token',status:async()=>({connected:true}),startService:async()=>{starts++},allowLan:async()=>{lanApprovals++},changeNetwork:async()=>{},networks:()=>selected,qr:async()=> 'data:image/png;base64,TEST'});
+  try {
+    const u = new URL(dashboard.url);
+    assert.equal(u.hostname,'127.0.0.1'); assert.equal((await fetch(u)).status,200);
+    const rawStatus = headers => new Promise((resolve,reject) => { const req = request(u,{headers},res=>{res.resume();resolve(res.statusCode)});req.on('error',reject);req.end(); });
+    assert.equal(await rawStatus({Host:'attacker.example'}),403);
+    assert.equal((await fetch(u,{headers:{Origin:'https://attacker.example'}})).status,403);
+    assert.equal(await rawStatus({'Sec-Fetch-Site':'cross-site'}),403);
+    assert.equal((await fetch(u+'/start',{method:'POST'})).status,403);
+    assert.equal((await fetch(u+'/start',{method:'POST',headers:{Origin:u.origin,'X-PhoneBridge-CSRF':'wrong'}})).status,403);
+    assert.equal((await fetch(u+'/start',{method:'POST',headers:{Origin:u.origin,'X-PhoneBridge-CSRF':dashboard.secret}})).status,200);assert.equal(starts,1);
+    assert.equal((await fetch(u+'/allow-lan')).status,404);assert.equal(lanApprovals,0);
+    assert.equal((await fetch(u+'/allow-lan',{method:'POST'})).status,403);
+    assert.equal((await fetch(u+'/allow-lan',{method:'POST',headers:{Origin:'https://attacker.example','X-PhoneBridge-CSRF':dashboard.secret}})).status,403);assert.equal(lanApprovals,0);
+    assert.equal((await fetch(u+'/allow-lan',{method:'POST',headers:{Origin:u.origin,'X-PhoneBridge-CSRF':dashboard.secret}})).status,200);assert.equal(lanApprovals,1);
+    assert.equal((await fetch(u+'/status')).headers.get('cache-control'),'no-store');
+    assert.equal((await fetch(u+'/ping')).status,200);
+  } finally { await dashboard.close(); }
+  console.log('PhoneBridge desktop self-test passed: address selection, ownership, stale endpoint, network rollback, installed MCP configuration, authenticated reuse, loopback Host/Origin/CSRF checks. No user configuration changed.');
+}

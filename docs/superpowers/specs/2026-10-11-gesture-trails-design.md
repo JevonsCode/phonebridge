@@ -13,7 +13,7 @@ Use an AccessibilityService overlay so the indication works in allowed target Ap
 - Tap: a small blue dot with a short fading ring, about 450 ms.
 - Long press: show the point during the hold, then fade.
 - Swipe: move a small dot along the actual start/end coordinates and reveal a thin rounded path over the gesture duration; fade the remaining path in about 350 ms.
-- Include coordinate gestures and accessible node clicks. Show a trace only once the operation is accepted; a trace is a location cue, not proof of target-App success.
+- Include the existing coordinate tap, long-press and swipe gestures. The bridge has no node-click RPC; this feature does not add one. Show a trace only once the operation is accepted; a trace is a location cue, not proof of target-App success.
 - Display AI-issued actions only. No collection of the owner's manual touches or history.
 
 ## Native integration

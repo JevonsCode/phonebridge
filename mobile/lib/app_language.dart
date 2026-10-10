@@ -153,6 +153,10 @@ const _errors = <String, String>{
 };
 
 const _english = <String, String>{
+  '显示操作轨迹': 'Show operation trails',
+  '显示 AI 点击与滑动的位置': 'Show where AI taps and swipes',
+  '无法读取操作轨迹设置，请重试': 'Could not load operation trail setting. Try again.',
+  '无法保存操作轨迹设置，请重试': 'Could not save operation trail setting. Try again.',
   '请先解锁手机，再继续': 'Unlock your phone to continue',
   '无法连接更新服务器': 'Could not connect to the update server',
   '检查失败，请重试': 'Check failed. Retry.',
@@ -222,7 +226,14 @@ const _english = <String, String>{
   '无障碍服务': 'Accessibility service',
   '已开启': 'Enabled',
   '尚未开启': 'Not enabled',
-  '已记住的电脑': 'Saved computer',
+  '已记住的电脑': 'Saved computers',
+  '当前电脑': 'Current computer',
+  '配对另一台电脑': 'Pair another computer',
+  '电脑名称': 'Computer name',
+  '名称': 'Name',
+  '修改名称': 'Rename',
+  '取消': 'Cancel',
+  '保存': 'Save',
   '尚未配对': 'Not paired',
   '关于': 'About',
   '查看源码、下载与反馈': 'Source code, downloads and feedback',

@@ -6,6 +6,9 @@ import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DesktopSupervisor } from '../dist/supervisor.js';
 
 async function until(check: () => boolean | Promise<boolean>, message: string) {
@@ -14,9 +17,10 @@ async function until(check: () => boolean | Promise<boolean>, message: string) {
 }
 async function setup(t: TestContext, autoStart = false) {
   const token = randomBytes(32).toString('base64url');
-  const supervisor = new DesktopSupervisor({ token, port: 0, autoStart, restartDelayMs: 50 });
+  const dir = await mkdtemp(join(tmpdir(), 'phonebridge-supervisor-log-'));
+  const supervisor = new DesktopSupervisor({ token, port: 0, autoStart, restartDelayMs: 50, logFile: join(dir, 'operations.jsonl') });
   const url = await supervisor.start();
-  t.after(() => supervisor.close());
+  t.after(async () => { await supervisor.close(); await rm(dir, { recursive: true, force: true }); });
   const headers = { Authorization: `Bearer ${token}` };
   const start = () => fetch(`${url}/service/start`, { method: 'POST', headers });
   return { supervisor, url, headers, start };
@@ -71,10 +75,18 @@ test('WebSocket and RPC pass through the original port without replaying a faile
   await until(() => supervisor.serviceRunning && supervisor.managedProcessId !== oldPid, 'Hub was not restarted');
   assert.equal(received, 2, 'Failed action must not be replayed');
   assert.equal((await (await fetch(`${url}/status`, { headers })).json()).connected, false);
+  const history = await (await fetch(`${url}/operations`, { headers })).json();
+  const interrupted = history.operations.find((r: { method: string }) => r.method === 'global_action');
+  assert.equal(interrupted.status, 'started');
+  assert.equal(interrupted.outcome, 'unknown');
+  assert.equal((await fetch(`${url}/operations`)).status, 401);
+  assert.equal((await fetch(`${url}/operations?limit=0`, { headers })).status, 400);
 });
 
-test('supervisor shutdown removes its managed child and does not restart it', async () => {
-  const supervisor = new DesktopSupervisor({ token: 'x'.repeat(32), port: 0, restartDelayMs: 25 });
+test('supervisor shutdown removes its managed child and does not restart it', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'phonebridge-supervisor-stop-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const supervisor = new DesktopSupervisor({ token: 'x'.repeat(32), port: 0, restartDelayMs: 25, logFile: join(dir, 'operations.jsonl') });
   await supervisor.start();
   const pid = supervisor.managedProcessId!;
   await supervisor.close();
@@ -107,8 +119,11 @@ test('worker launch errors schedule recovery after the executable becomes availa
 });
 
 test('forced parent termination closes the orphan worker via IPC disconnect', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'phonebridge-supervisor-orphan-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const logFile = join(dir, 'operations.jsonl');
   const parent = fork(fileURLToPath(new URL('./fixtures/supervisor-parent.mjs', import.meta.url)), [], {
-    env: { ...process.env, PHONEBRIDGE_TOKEN: 'x'.repeat(32) }, execArgv: [],
+    env: { ...process.env, PHONEBRIDGE_TOKEN: 'x'.repeat(32), PHONEBRIDGE_LOG_FILE: logFile }, execArgv: [],
     stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true,
   });
   t.after(() => { if (parent.exitCode === null && parent.signalCode === null) parent.kill(); });
@@ -117,7 +132,7 @@ test('forced parent termination closes the orphan worker via IPC disconnect', as
   const exit = once(parent, 'exit');
   parent.kill('SIGKILL'); await exit;
   await until(() => { try { process.kill(pid, 0); return false; } catch { return true; } }, 'Orphan worker survived');
-  const replacement = new DesktopSupervisor({ token: 'x'.repeat(32), port: 0 });
+  const replacement = new DesktopSupervisor({ token: 'x'.repeat(32), port: 0, logFile });
   await replacement.start();
   assert.equal(replacement.serviceRunning, true);
   await replacement.close();

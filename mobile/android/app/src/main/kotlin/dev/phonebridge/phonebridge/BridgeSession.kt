@@ -25,8 +25,8 @@ object BridgeSession {
     val main = Handler(Looper.getMainLooper())
     var service: PhoneAccessibilityService? = null
         private set
-    var generation = 0L
-        private set
+    private val operationScope = SessionOperationScope()
+    val generation: Long get() = operationScope.generation
     var connected = false
         private set
     var actionsEnabled = false
@@ -38,7 +38,7 @@ object BridgeSession {
     private var client: OkHttpClient? = null
     private var packages = emptySet<String>()
     private var desiredActions = false
-    private var pending: String? = null
+    private val pending: String? get() = operationScope.pending
     private var timeout: Runnable? = null
     private var connectTimeout: Runnable? = null
     private var retryTask: Runnable? = null
@@ -47,6 +47,7 @@ object BridgeSession {
     private var store: TrustedPairingStore? = null
     private var saved: TrustedPairing? = null
     private var loaded = false
+    private var computers = TrustedComputers()
     private const val CHANNEL = "phonebridge_session"
     private const val NOTIFICATION_ID = 8721
     const val STOP_ACTION = "dev.phonebridge.phonebridge.STOP_SESSION"
@@ -56,7 +57,9 @@ object BridgeSession {
         if (loaded) return
         try {
             val storage = store ?: TrustedPairingStore(context.applicationContext).also { store = it }
-            saved = storage.load()?.also { validatePairing(it) }
+            computers = storage.list()
+            computers.entries.forEach { validatePairing(it.pairing) }
+            saved = computers.active?.pairing
             loaded = true
         } catch (_: Exception) {
             // Do not erase an unreadable record; the Keystore may temporarily be unavailable.
@@ -98,10 +101,48 @@ object BridgeSession {
         "endpoint" to endpoint,
         "hasSavedPairing" to (saved != null),
         "savedEndpoint" to (saved?.endpoint ?: ""),
+        "activeComputerId" to (computers.activeId ?: ""),
+        "computerName" to (computers.active?.name ?: ""),
+        "computers" to computerList(),
         "autoReconnectEnabled" to (saved?.resumeAllowed == true),
         "rememberedActions" to (saved?.actionsEnabled == true),
         "reconnecting" to (retryTask != null),
     )
+
+    fun computerList(): List<Map<String, Any>> = computers.entries.map { computer ->
+        mapOf("id" to computer.id, "name" to computer.name, "endpoint" to computer.pairing.endpoint,
+            "active" to (computer.id == computers.activeId),
+            "state" to (if (computer.id != computers.activeId) "saved" else if (connected) "connected"
+                else if (connecting || retryTask != null) "connecting" else "paused"),
+            "actionsEnabled" to computer.pairing.actionsEnabled,
+            "resumeAllowed" to computer.pairing.resumeAllowed)
+    }
+
+    fun renameComputer(id: String, name: String) {
+        require(computers.entries.any { it.id == id })
+        require(name.trim().isNotEmpty() && name.trim().length <= 80 && name.none { it.isISOControl() })
+        try {
+            store!!.rename(id, name)
+            computers = store!!.list()
+        } catch (_: Exception) { storageFailure() }
+    }
+
+    fun selectComputer(id: String) {
+        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Enable PhoneBridge in Accessibility settings.")
+        initialize(native)
+        val record = computers.entries.find { it.id == id }?.pairing
+            ?: throw BridgeFailure("NO_SAVED_PAIRING", "Pair with your computer first.")
+        validatePairing(record)
+        native.requireUnlocked()
+        requireNotifications(native)
+        closeTransport()
+        retryAttempt = 0
+        try {
+            saved = store!!.select(id)
+            computers = store!!.list()
+        } catch (_: Exception) { storageFailure() }
+        openTransport(saved!!)
+    }
 
     fun isAllowed(packageName: String) = packageName in packages
 
@@ -117,16 +158,25 @@ object BridgeSession {
     private fun persist(record: TrustedPairing) {
         try {
             (store ?: throw IllegalStateException()).save(record)
-            saved = record
+            computers = store!!.list()
+            saved = computers.active?.pairing
             loaded = true
         } catch (_: Exception) {
-            // Do not leave older action/resume permission on disk after a failed revocation.
-            try { store?.clear() } catch (_: Exception) { }
-            saved = null
-            loaded = false
-            closeTransport("Could not safely save pairing. Please pair again.")
-            throw BridgeFailure("PAIRING_STORAGE_FAILED", "Could not safely save pairing. Please pair again.")
+            storageFailure()
         }
+    }
+
+    private fun storageFailure(): Nothing {
+        // Preserve every trusted computer; a separate stop marker blocks boot/retry after failed writes.
+        try { store?.pauseAutomaticResume() } catch (_: Exception) { }
+        try { store?.markActionsPaused() } catch (_: Exception) { }
+        saved = saved?.copy(resumeAllowed = false, actionsEnabled = false)
+        computers = computers.copy(entries = computers.entries.map {
+            if (it.id == computers.activeId) it.copy(pairing = it.pairing.copy(resumeAllowed = false, actionsEnabled = false)) else it
+        })
+        loaded = false
+        closeTransport("Could not safely save pairing. Please pair again.")
+        throw BridgeFailure("PAIRING_STORAGE_FAILED", "Could not safely save pairing. Please pair again.")
     }
 
     fun requireNotifications(context: Context) {
@@ -152,7 +202,13 @@ object BridgeSession {
         requireNotifications(native)
         closeTransport()
         retryAttempt = 0
-        if (remember) persist(record) else forgetSavedConnection()
+        if (remember) persist(record) else {
+            try {
+                store!!.deactivate()
+                computers = store!!.list()
+                saved = null
+            } catch (_: Exception) { storageFailure() }
+        }
         openTransport(record)
     }
 
@@ -197,7 +253,9 @@ object BridgeSession {
     fun forgetSavedConnection() {
         closeTransport()
         try {
+            store?.pauseAutomaticResume()
             store?.clear()
+            computers = store?.list() ?: TrustedComputers()
             saved = null
             loaded = true
         } catch (_: Exception) {
@@ -361,7 +419,7 @@ object BridgeSession {
             requireNotifications(service!!)
         }
         // Revocation takes effect in memory before touching the encrypted record.
-        if (!enabled) { actionsEnabled = false; desiredActions = false }
+        if (!enabled) { actionsEnabled = false; desiredActions = false; service?.clearOperationTrail() }
         saved?.let { persist(it.copy(actionsEnabled = enabled)) }
         actionsEnabled = enabled
         desiredActions = enabled
@@ -375,12 +433,12 @@ object BridgeSession {
     }
 
     private fun closeTransport(error: String = "") {
-        generation++
+        service?.clearOperationTrail()
+        operationScope.invalidate()
         connected = false
         connecting = false
         actionsEnabled = false
         desiredActions = false
-        pending = null
         timeout?.let { main.removeCallbacks(it) }
         connectTimeout?.let { main.removeCallbacks(it) }
         retryTask?.let { main.removeCallbacks(it) }
@@ -421,7 +479,7 @@ object BridgeSession {
             send(id, null, BridgeFailure("INVALID_ARGUMENT", "params must be an object."))
             return
         }
-        pending = id
+        check(operationScope.begin(id))
         timeout = Runnable {
             if (generation == expectedGeneration && pending == id) {
                 send(id, null, BridgeFailure("TIMEOUT", "Operation timed out; outcome may be unknown. Do not retry automatically."))
@@ -433,10 +491,9 @@ object BridgeSession {
             }
         }.also { main.postDelayed(it, 12000) }
         val complete: (JSONObject?, BridgeFailure?) -> Unit = complete@{ result, error ->
-            if (generation != expectedGeneration || pending != id) return@complete
+            if (!operationScope.complete(id, expectedGeneration)) return@complete
             timeout?.let { main.removeCallbacks(it) }
             timeout = null
-            pending = null
             send(id, result, error)
         }
         try {
