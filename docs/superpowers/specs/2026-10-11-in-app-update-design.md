@@ -16,6 +16,10 @@ Android 同一 control MethodChannel 新增无参数 `checkUpdate`（异步检�
 
 FileProvider 仅暴露 updates cache 子目录，exported=false；通过只读 URI grant 打开系统安装器。声明 REQUEST_INSTALL_PACKAGES。第一次缺少允许来源安装时打开该应用的系统设置；返回授权后继续安装一次，未授权时留在可操作状态。系统安装确认由机主完成，不静默安装、不用无障碍代点确认。
 
+原生层拥有下载完成后的自动安装意图：downloadUpdate 用户点击时创建一次 pending intent；完成验证后仅在 activity resumed 时启动安装，否则等其恢复。启动系统安装器之前先消费 pending；权限设置返回时复核允许来源，并消费一次 pending 再启动安装器。拒绝权限保留 permissionRequired，但不再自动打开设置。安装器返回而当前版本未变化时为 ready，必须手动 installUpdate 再试；Flutter 不自动调用 installUpdate，只显示状态/明确重试按钮。用真实 pause/resume 或结果回调区分安装器返回，不能把 launch 同一帧的 resume 当取消。activity 重建不恢复自动安装意图，最多重新确认缓存为 ready；状态在 Flutter resume 时刷新。
+
+离开 About 保持下载，activity Destroy/engine cleanup 则取消请求、删除 partial、清空 pending，未完成 checkUpdate 结果只完成一次 ACTIVITY_CLOSED。checkUpdate 检查中/下载中拒绝重叠启动（BUSY），downloadUpdate 在检查中/下载中也拒绝；getUpdateStatus 总可读。下载使用开始时不可变 manifest snapshot，直到完成都不能被后来的检查替换。错误保留缓存已验证文件的独立身份，但不得安装任何 partial。关于组件 dispose 停止 polling/回调，不能影响手机连接。
+
 ## 验证
 
 JVM 真实 HTTP fixture 验证 manifest、版本 code、错误、下载流/哈希/长度/取消；widget 验证自动/手动检查、最新/新版/错误、进度、一次安装和重试。运行 analyze、Flutter tests、native tests、ARM64 build。发布前读 apk package/signature metadata。

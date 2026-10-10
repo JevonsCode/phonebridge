@@ -1,6 +1,6 @@
 # In-App Update Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task.
+> **For agentic workers:** Use the installed `C:/Users/jevons/.agents/skills/superpowers.backup-20260328-000102/subagent-driven-development/SKILL.md` workflow: fresh implementers and separate spec/quality reviews. That skill was read by the parent and is available in its native catalog.
 
 **Goal:** About 自动检测、App 内下载并调用 Android 安装，直接发布 APK，真机覆盖升级。
 
