@@ -12,6 +12,8 @@ GitHub Pages `/phonebridge/update.json` 提供 `schema:1,versionName,versionCode
 
 Android 同一 control MethodChannel 新增无参数 `checkUpdate`（异步检查后返回状态）、`getUpdateStatus`、`downloadUpdate`（开始后立即返回）、`installUpdate`。状态包含 `phase`（idle/checking/current/available/downloading/ready/permissionRequired/installerOpened/error）、`currentVersion,currentVersionCode,versionName,versionCode,updateAvailable,downloadedBytes,totalBytes,progress,errorMessage`。初次 getUpdateStatus 返回当前真实 package 版本；UI 不使用硬编码的安装版本。checkUpdate 失败保留可重试 UI，不能把网络错误显示为最新。
 
+实现评审补充：`dev.phonebridge/updates` EventChannel 在订阅时立即发送当前状态，并发送后续阶段与终态变化。重新进入 About 时保留已有 checking 并订阅结果，不重复调用 checkUpdate，也不增加下载之外的周期 polling。installUpdate 异步返回安装准备/启动的终态；校验失败或系统界面启动失败必须通过结果/事件显示错误，即使没有系统 pause/resume。取消 UI 订阅不取消原生操作，activity/engine cleanup 清理订阅及未完成回调。
+
 原生 updater 只使用固定官方 HTTPS manifest，不向互联网发送配对 token。解析有界 manifest；仅接受官方仓库 APK URL。APK 流式下载到私有 cache/updates 临时文件，验证长度、SHA256、同包名、manifest 版本 code、与当前签名一致，再原子替换可安装文件。部分文件不安装。网络、磁盘或关闭 activity 失败可重试并清理临时文件；不修改配对存储。避免并发检查/下载竞态和 stale callback。缓存完成文件可重新使用，但安装前再次确认文件与当前元数据匹配。
 
 FileProvider 仅暴露 updates cache 子目录，exported=false；通过只读 URI grant 打开系统安装器。声明 REQUEST_INSTALL_PACKAGES。第一次缺少允许来源安装时打开该应用的系统设置；返回授权后继续安装一次，未授权时留在可操作状态。系统安装确认由机主完成，不静默安装、不用无障碍代点确认。

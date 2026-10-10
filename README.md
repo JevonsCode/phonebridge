@@ -4,7 +4,7 @@
 
 **个人自用优先 · MIT 开源 · Android 11+ · Flutter + Kotlin · MCP**
 
-[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.2.3/phonebridge-0.2.3-arm64.apk) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
+[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.2.4/phonebridge-0.2.4-arm64.apk) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
 
 这是一个早期开发者预览版。它提供手机执行工具，不内置大模型，也不承诺“完全控制手机”。无障碍权限需要机主在系统设置中亲自开启。微信功能基于可见界面，不读取私有聊天数据库。真机兼容性与验证范围见 [验证记录](docs/verification.md)。
 
@@ -50,6 +50,12 @@ npm start -- --allow-lan --pairing-qr --remember-pairing
 电脑的 `--remember-pairing` 将身份保存在当前用户的 `~/.phonebridge/pairing.json`：Windows 使用当前用户 DPAPI 加密，macOS/Linux 使用仅当前用户可读的文件（0600）。MCP 默认读取同一份身份，因此无需在配置中复制密钥。可用 `PHONEBRIDGE_CREDENTIAL_FILE` 指定同一私有路径。不要把此文件放入仓库或共享目录。电脑地址、端口和身份需保持稳定；更换密钥或手机清除数据/卸载后需要重新配对。
 
 只在你信任的网络使用明文 WS；加密连接说明见下文。若电脑防火墙阻止连接，请按你的网络范围允许本机服务，不要关闭整个防火墙。
+
+### 在 App 内升级
+
+打开「设置 → 关于」，App 会自动检查版本，也可以点击「检查更新」。有新版时点「下载更新」，APK 会在 App 内下载并打开安卓安装界面。首次安装时按系统提示允许 PhoneBridge 安装应用，再确认安装即可；覆盖升级会保留已有配对与授权，无需重新扫码。取消安装后可以在同一处点击「安装更新」重试。
+
+更新信息来自官网的 [`update.json`](https://xn--8ovp9s.xn--m8txu.com/phonebridge/update.json)，APK 来自本仓库的 GitHub Releases。下载完成后会核对文件大小、SHA-256、应用包名、版本和签名。预览版仅提供 ARM64 APK；同一签名才能覆盖升级，不要卸载旧版来绕过签名不一致。
 
 ### Windows 10 / 11：登录后自动启动
 

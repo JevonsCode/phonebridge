@@ -11,6 +11,7 @@ import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.EventChannel
 import okhttp3.Call
 import org.json.JSONObject
 
@@ -21,16 +22,38 @@ class MainActivity : FlutterActivity() {
     private var recovery: DesktopServiceRecovery? = null
     private var recoveryCall: Call? = null
     private var recoveryResult: MethodChannel.Result? = null
+    private var updater: AppUpdater? = null
+    private var updateEvents: EventChannel? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         BridgeSession.initialize(this)
+        cleanUpUpdater()
+        updater = AppUpdater(this)
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.phonebridge/updates")
+            .also { updateEvents = it }
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink) {
+                    updater?.observe { events.success(it) }
+                }
+                override fun onCancel(arguments: Any?) { updater?.observe(null) }
+            })
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "dev.phonebridge/control")
             .also { controlChannel = it }
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
                         "status" -> result.success(BridgeSession.status())
+                        "getUpdateStatus" -> result.success(updater!!.status())
+                        "checkUpdate" -> updater!!.check { status, failure ->
+                            if (failure == null) result.success(status)
+                            else result.error(failure.code, failure.message, null)
+                        }
+                        "downloadUpdate" -> result.success(updater!!.download())
+                        "installUpdate" -> updater!!.install { status, failure ->
+                            if (failure == null) result.success(status)
+                            else result.error(failure.code, failure.message, null)
+                        }
                         "openAccessibilitySettings" -> {
                             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                             result.success(null)
@@ -76,6 +99,8 @@ class MainActivity : FlutterActivity() {
                         }
                         else -> result.notImplemented()
                     }
+                } catch (e: UpdateFailure) {
+                    result.error(e.code, e.message, null)
                 } catch (e: BridgeFailure) {
                     result.error(e.code, e.message, null)
                 } catch (e: IllegalArgumentException) {
@@ -88,6 +113,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
+        updater?.onResume()
         BridgeSession.onOwnerActivityResumed(this)
         if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
             val status = BridgeSession.status()
@@ -98,6 +124,11 @@ class MainActivity : FlutterActivity() {
             }
             Log.d("PhoneBridgeConnection", "ownerResume $diagnostic")
         }
+    }
+
+    override fun onPause() {
+        updater?.onPause()
+        super.onPause()
     }
 
     private fun requestNotificationPermission(result: MethodChannel.Result) {
@@ -187,9 +218,18 @@ class MainActivity : FlutterActivity() {
         result?.error("ACTIVITY_CLOSED", "启动请求已取消，请重新打开 PhoneBridge 后操作", null)
     }
 
+    private fun cleanUpUpdater() {
+        updater?.observe(null)
+        updateEvents?.setStreamHandler(null)
+        updateEvents = null
+        updater?.close()
+        updater = null
+    }
+
     override fun cleanUpFlutterEngine(flutterEngine: FlutterEngine) {
         cancelPendingPermission()
         cancelDesktopRecovery()
+        cleanUpUpdater()
         controlChannel?.setMethodCallHandler(null)
         controlChannel = null
         super.cleanUpFlutterEngine(flutterEngine)
@@ -198,6 +238,7 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         cancelPendingPermission()
         cancelDesktopRecovery()
+        cleanUpUpdater()
         super.onDestroy()
     }
 }

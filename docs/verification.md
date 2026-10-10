@@ -2,6 +2,16 @@
 
 This document records evidence, not planned capabilities. Update it when tests finish. No private phone data, screenshots, tokens or serial numbers belong here.
 
+## v0.2.4 in-app updates (2026-10-11)
+
+- Flutter static analysis passed; 48 Flutter tests passed, including update state/event handling, About re-entry and a narrow screen with enlarged text. Native JVM suite: 61 tests, zero failures/errors, including 22 updater cases.
+- Real HTTP sockets reproduce a stale pooled connection at response headers. The updater now reconnects for public GET requests; truncated APK bodies are rejected without replay, and incomplete files are removed.
+- On the existing Android 16 phone, a private bootstrap App downloaded the exact final ARM64 APK from a temporary LAN fixture. The App verified it, opened Android's install-source settings and then the system installer. The owner approved the system prompts and opened the updated App. No ADB gestures or ADB installation were used for this upgrade.
+- PackageManager confirmed versionName 0.2.4 and versionCode 2008. The installed APK was pulled back and its SHA256 matched the final APK: `7628AA943DCD4E9C7664EA67899AD1AA6426F1E35ABEF239A899919C443CBA08`. The original first-install timestamp was retained.
+- The real App reconnected automatically with the existing identity. Its screenshot confirmed enabled actions; the saved desktop pairing file hash was unchanged. No new scan or connection authorization was needed.
+- The distributed APK uses the official HTTPS update manifest. The LAN bootstrap is private test material and is not distributed. This device test proves the download, verification and installation flow using the LAN fixture; a full APK download from GitHub on the phone is not claimed.
+- The APK remains debug-signed developer-preview software. Additional ROMs and long-duration background downloading are not claimed.
+
 ## v0.2.3 service recovery (2026-10-11)
 
 - TypeScript production build passed; 29 Node tests: 28 passed, one POSIX permissions case skipped on Windows. Real sockets cover management start, concurrent requests, HTTP/WebSocket forwarding, worker crash recovery without RPC replay, forced-parent cleanup, socket reuse and failed worker launches.

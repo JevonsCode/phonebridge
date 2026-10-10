@@ -7,6 +7,7 @@ import 'support/playground.dart';
 
 void main() {
   const channel = MethodChannel('dev.phonebridge/control');
+  const updates = EventChannel('dev.phonebridge/updates');
   TestWidgetsFlutterBinding.ensureInitialized();
   final calls = <MethodCall>[];
   var connected = false;
@@ -25,6 +26,25 @@ void main() {
     desktopStart = null;
     desktopFailure = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(MethodChannel(updates.name), (call) async {
+          if (call.method == 'listen') {
+            TestWidgetsFlutterBinding.instance.channelBuffers.push(
+              updates.name,
+              const StandardMethodCodec().encodeSuccessEnvelope({
+                'phase': 'downloading',
+                'currentVersion': '0.2.3',
+                'versionName': '0.2.4',
+                'updateAvailable': true,
+                'downloadedBytes': 0,
+                'totalBytes': 100,
+                'progress': 0.0,
+              }),
+              (_) {},
+            );
+          }
+          return null;
+        });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
           if (call.method == 'status') {
@@ -38,6 +58,18 @@ void main() {
               'hasSavedPairing': saved,
               'savedEndpoint': saved ? 'ws://192.168.1.10:8765/device' : '',
               'autoReconnectEnabled': autoReconnect,
+            };
+          }
+          if (call.method == 'getUpdateStatus' ||
+              call.method == 'checkUpdate') {
+            return {
+              'phase': 'downloading',
+              'currentVersion': '0.2.3',
+              'versionName': '0.2.4',
+              'updateAvailable': true,
+              'downloadedBytes': 0,
+              'totalBytes': 100,
+              'progress': 0.0,
             };
           }
           if (call.method == 'disconnect') {
@@ -182,6 +214,31 @@ void main() {
     expect(toggle.value, true);
     expect(toggle.onChanged, isNull);
     expect(find.text('操作授权已保留，重连后恢复'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('native update download keeps phone Stop independently usable', (
+    tester,
+  ) async {
+    saved = true;
+    connected = true;
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pump();
+    await tester.ensureVisible(find.byKey(const Key('app-update-card')));
+    await tester.pump();
+    expect(find.text('正在下载，可继续使用手机控制'), findsOneWidget);
+    // Leaving About only disposes the observing card; native keeps downloading.
+    await tester.tap(find.byKey(const Key('nav-connection')));
+    await tester.pump();
+    final stop = find.byKey(const Key('stop'));
+    await tester.ensureVisible(stop);
+    expect(tester.widget<OutlinedButton>(stop).onPressed, isNotNull);
+    await tester.tap(stop);
+    await tester.pump();
+    expect(calls.where((c) => c.method == 'disconnect'), hasLength(1));
+    expect(calls.where((c) => c.method == 'installUpdate'), isEmpty);
     await tester.pumpWidget(const SizedBox());
   });
   testWidgets('pairing connection keeps stop above system navigation inset', (

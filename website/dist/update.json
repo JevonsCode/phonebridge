@@ -1,0 +1,9 @@
+{
+  "schema": 1,
+  "versionName": "0.2.4",
+  "versionCode": 2008,
+  "apkUrl": "https://github.com/JevonsCode/phonebridge/releases/download/v0.2.4/phonebridge-0.2.4-arm64.apk",
+  "sha256": "7628aa943dcd4e9c7664ea67899ad1aa6426f1e35abef239a899919c443cba08",
+  "size": 110722040,
+  "notes": "支持在关于中检查更新、下载 APK 并打开系统安装。"
+}

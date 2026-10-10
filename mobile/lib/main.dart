@@ -5,6 +5,7 @@ import 'design.dart';
 import 'package:flutter/foundation.dart';
 import 'pairing.dart';
 import 'pairing_scanner.dart';
+import 'app_updates.dart';
 
 void main() {
   LicenseRegistry.addLicense(() async* {
@@ -555,6 +556,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
     ),
     const SizedBox(height: 28),
     sectionLabel('关于'),
+    const AppUpdateCard(),
+    const SizedBox(height: 16),
     SurfaceGroup(
       children: [
         SettingsRow(
@@ -597,7 +600,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
           onTap: () => showLicensePage(
             context: context,
             applicationName: 'PhoneBridge',
-            applicationVersion: '0.2.3',
             applicationLegalese: 'MIT License',
           ),
         ),
@@ -606,7 +608,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     const SizedBox(height: 28),
     const Center(
       child: Text(
-        'PhoneBridge 0.2.3',
+        'PhoneBridge',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 12, height: 2, color: Color(0xFF89919C)),
       ),
