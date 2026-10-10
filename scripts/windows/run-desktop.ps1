@@ -73,7 +73,8 @@ if ($LoadHelpers) { return }
 $ConfigurationPath = [IO.Path]::GetFullPath($ConfigurationPath)
 $config = Read-PhoneBridgeDesktopConfiguration $ConfigurationPath
 $entryPoint = Join-Path $config.projectRoot 'bridge\dist\supervisor-cli.js'
-foreach ($file in @($config.nodePath, $entryPoint)) {
+$jobHelper = Join-Path $PSScriptRoot 'desktop-job.cs'
+foreach ($file in @($config.nodePath, $entryPoint, $jobHelper)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing desktop runtime file: $file. Build bridge and reinstall the desktop task." }
 }
 $nodeVersion = & $config.nodePath -p 'process.versions.node'
@@ -86,6 +87,7 @@ if (-not $PSCmdlet.ShouldProcess("$($config.hostAddress):$($config.port)", 'Run 
 
 $mutex = New-Object Threading.Mutex($false, "Local\PhoneBridgeDesktop-$(Get-PhoneBridgeUserSid)")
 $ownsMutex = $false
+$job = $null
 try {
     try { $ownsMutex = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $ownsMutex = $true }
     if (-not $ownsMutex) { throw 'PhoneBridge Desktop is already running for this user. Stop its scheduled task before launching another instance.' }
@@ -95,6 +97,9 @@ try {
     } catch {
         throw "Cannot listen on $($config.hostAddress):$($config.port). Confirm this IP belongs to this computer and stop the old Hub or other process using the port. $($_.Exception.Message)"
     } finally { $listener.Stop() }
+
+    if (-not ('PhoneBridge.Desktop.KillOnCloseJob' -as [type])) { Add-Type -Path $jobHelper }
+    $job = New-Object PhoneBridge.Desktop.KillOnCloseJob
 
     $previousHost = [Environment]::GetEnvironmentVariable('PHONEBRIDGE_HOST', 'Process')
     $previousPort = [Environment]::GetEnvironmentVariable('PHONEBRIDGE_PORT', 'Process')
@@ -108,13 +113,21 @@ try {
             $retryDelaySeconds = 2
             while ($true) {
                 $runDuration = [Diagnostics.Stopwatch]::StartNew()
+                $supervisor = $null
                 try {
-                    & $config.nodePath $entryPoint --allow-lan --remember-pairing
-                    $supervisorExitCode = $LASTEXITCODE
+                    $supervisor = $job.StartSupervisor($config.nodePath, $entryPoint, $config.projectRoot)
+                    $supervisorExitCode = $supervisor.WaitForExit()
+                } catch [PhoneBridge.Desktop.JobAssignmentException] {
+                    # The native helper already terminated its suspended child. Fail closed.
+                    throw
                 } catch {
+                    if ($null -ne $supervisor) { throw }
                     # A failed process launch is recoverable too; never log pairing data.
                     $supervisorExitCode = -1
-                } finally { $runDuration.Stop() }
+                } finally {
+                    if ($null -ne $supervisor) { $supervisor.Dispose() }
+                    $runDuration.Stop()
+                }
                 if ($supervisorExitCode -eq 0) { break }
                 if ($runDuration.Elapsed.TotalSeconds -ge 30) { $retryDelaySeconds = 2 }
                 Write-Warning "PhoneBridge Supervisor exited ($supervisorExitCode); retrying in $retryDelaySeconds seconds."
@@ -128,6 +141,7 @@ try {
     }
     exit $supervisorExitCode
 } finally {
+    if ($null -ne $job) { $job.Dispose() }
     if ($ownsMutex) { $mutex.ReleaseMutex() }
     $mutex.Dispose()
 }

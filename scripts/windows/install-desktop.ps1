@@ -19,8 +19,9 @@ $ProjectRoot = (Resolve-Path -LiteralPath $ProjectRoot).ProviderPath
 $ConfigurationPath = [IO.Path]::GetFullPath($ConfigurationPath)
 $launcher = Join-Path $ProjectRoot 'scripts\windows\run-desktop.ps1'
 $entryPoint = Join-Path $ProjectRoot 'bridge\dist\supervisor-cli.js'
+$jobHelper = Join-Path $ProjectRoot 'scripts\windows\desktop-job.cs'
 $powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-foreach ($file in @($launcher, $entryPoint, $powershell)) {
+foreach ($file in @($launcher, $entryPoint, $powershell, $jobHelper)) {
     if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "Missing desktop runtime file: $file. Run npm run build in bridge first." }
 }
 [void](Assert-PhoneBridgeAddress $HostAddress $Port)
