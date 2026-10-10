@@ -20,4 +20,6 @@ FileProvider 仅暴露 updates cache 子目录，exported=false；通过只读 U
 
 JVM 真实 HTTP fixture 验证 manifest、版本 code、错误、下载流/哈希/长度/取消；widget 验证自动/手动检查、最新/新版/错误、进度、一次安装和重试。运行 analyze、Flutter tests、native tests、ARM64 build。发布前读 apk package/signature metadata。
 
-真机 E2E：先安装具有 updater 的 0.2.3+7 bootstrap（仅本地测试，不发布），保留原配对；官方 manifest 指向最终 0.2.4 APK。通过 App 控制观察 About 检测新版本与实际下载；系统来源授权/安装确认需要用户操作。安装后核对 0.2.4/2008、已最新、原配对自动重连，并回读已安装 APK hash。只有此链路成功才声称 App 内升级已实测；无法完成时准确报告边界。
+真机 E2E：先安装具有 updater 的 0.2.3+7 bootstrap（仅本地测试，不发布），保留原配对。bootstrap 构建时才设置 `PHONEBRIDGE_TEST_UPDATE_MANIFEST` 指向同一 LAN 的临时 manifest/APK fixture，APK 为最终 0.2.4 文件。测试构建只允许此私有 HTTP origin；最终 APK 与 release 构建始终使用官方 HTTPS 来源（最终 debug 构建不设置测试环境变量）。Manifest 包/hash/code/签名验证完全相同，测试入口不由 MethodChannel/Intent/用户配置开放。
+
+通过 App 控制观察 About 检测新版本与实际下载；系统来源授权/安装确认需要用户操作。安装后核对 0.2.4/2008、原配对自动重连并回读已安装 APK hash。该链路通过后才公开发布最终 APK/官方 manifest，实读官方 manifest 并在最终 App 看到已最新。只有此链路成功才声称 App 内升级已实测；无法完成时准确报告边界。

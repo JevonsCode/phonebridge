@@ -25,7 +25,7 @@
 ### 3. 集成与发布
 
 - [ ] 实现 spec compliance 与代码质量评审，解决真实问题。
-- [ ] 有效 PHONEBRIDGE_NDK_PATH 构建 ARM64 0.2.4 final 和 build-name 0.2.3/build-number 7 bootstrap。分别保存/hash；bootstrap 不发布。
-- [ ] 新版 APK 先私有 draft release 上传并校验 digest，然后正式发布，写正确 size/hash/versionCode 的 update.json，官网/README 更新直链，Pages 部署成功后 HTTPS 实读确认。
-- [ ] 安装 bootstrap 后用 App 观察升级检查、下载；OS 安装权限/确认交给用户。核对安装后真实版本、APK hash、配对重连与最新状态。修复发现问题，更新真实验证记录。
+- [ ] 有效 PHONEBRIDGE_NDK_PATH 构建 ARM64 0.2.4 final（测试来源变量为空）和 build-name 0.2.3/build-number 7 bootstrap（仅此构建设置 PHONEBRIDGE_TEST_UPDATE_MANIFEST，同 LAN fixture）。分别保存/hash；bootstrap 不发布。编译期测试 origin 限定与正式来源分开；不提供 runtime URL override。
+- [ ] 安装 bootstrap 后在本地 LAN fixture 提供最终 APK/hash，用 App 观察升级检查、下载；OS 安装权限/确认交给用户。核对安装后真实版本、APK hash、配对重连。修复发现问题，更新真实验证记录。
+- [ ] 实测通过后发布 GitHub APK 并校验 digest，写正确 size/hash/versionCode 的 update.json，官网/README 更新直链，Pages 部署成功后 HTTPS 实读，并在最终 App 确认已最新。
 - [ ] 合并稳定 primary checkout；保留当前桌面登录服务和 pairing；发布源码/最终 APK。报告实际测试范围。
