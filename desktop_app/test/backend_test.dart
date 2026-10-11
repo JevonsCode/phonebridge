@@ -50,6 +50,25 @@ class FakeChild implements BackendProcess {
 }
 
 void main() {
+  test(
+    'installed version reads bundle metadata including Windows BOM',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'phonebridge-version-',
+      );
+      addTearDown(() => root.delete(recursive: true));
+      final manifest = File('${root.path}/package-manifest.json');
+      expect(await readInstalledVersion(root: root.path), isNull);
+      await manifest.writeAsString('\uFEFF{"version":"1.2.3-preview.4"}');
+      expect(await readInstalledVersion(root: root.path), '1.2.3-preview.4');
+      await manifest.writeAsString('{"version":"2.0.0"}');
+      expect(await readInstalledVersion(root: root.path), '2.0.0');
+      await manifest.writeAsString('{"version":null}');
+      expect(await readInstalledVersion(root: root.path), isNull);
+      await manifest.writeAsString('broken');
+      expect(await readInstalledVersion(root: root.path), isNull);
+    },
+  );
   test('request deadlines allow time for OS LAN approval', () {
     final api = DashboardApi(
       DashboardSession('http://127.0.0.1:8123/session/$secret'),
@@ -216,10 +235,16 @@ void main() {
 
   test('closing during process creation terminates the late child', () async {
     final launch = Completer<BackendProcess>();
+    final creating = Completer<void>();
     final child = FakeChild();
-    final controller = DesktopController(starter: () => launch.future);
+    final controller = DesktopController(
+      starter: () {
+        creating.complete();
+        return launch.future;
+      },
+    );
     final starting = controller.start();
-    await Future<void>.delayed(Duration.zero);
+    await creating.future;
     await controller.shutdown();
     launch.complete(child);
     await starting;

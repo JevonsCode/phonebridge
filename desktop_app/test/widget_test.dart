@@ -84,7 +84,7 @@ void main() {
           final icons = FontLoader('MaterialIcons')
             ..addFont(rootBundle.load('fonts/MaterialIcons-Regular.otf'));
           await icons.load();
-          final c = DesktopController();
+          final c = DesktopController(installedVersion: '1.2.3-preview.4');
           c.status = DesktopStatus(statusData());
           addTearDown(c.dispose);
           final boundary = GlobalKey();
@@ -147,11 +147,19 @@ void main() {
           expect(jsonDecode(copied!), statusData()['mcpConfiguration']);
           await tester.tap(find.text(zh ? '设置' : 'Settings').first);
           await tester.pumpAndSettle();
+          expect(
+            find.text(zh ? '版本 1.2.3-preview.4' : 'Version 1.2.3-preview.4'),
+            findsOneWidget,
+          );
           await tester.tap(find.byKey(const Key('language')));
           await tester.pumpAndSettle();
           await tester.tap(find.text(zh ? 'English' : '中文').last);
           await tester.pumpAndSettle();
           expect(find.text(zh ? 'Preferences' : '偏好设置'), findsOneWidget);
+          expect(
+            find.text(zh ? 'Version 1.2.3-preview.4' : '版本 1.2.3-preview.4'),
+            findsOneWidget,
+          );
           expect(tester.takeException(), isNull);
         },
       );

@@ -656,10 +656,12 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
             ),
             const SizedBox(height: 12),
             Text(
-              t(
-                '桌面客户端 · 本机安全配对 · 开源',
-                'Desktop companion · Local pairing · Open source',
-              ),
+              c.installedVersion == null
+                  ? t('开发版', 'Development build')
+                  : t(
+                      '版本 ${c.installedVersion}',
+                      'Version ${c.installedVersion}',
+                    ),
               style: const TextStyle(fontSize: 12, color: muted),
             ),
           ],

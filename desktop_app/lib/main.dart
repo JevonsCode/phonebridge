@@ -10,7 +10,9 @@ import 'backend.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await windowManager.ensureInitialized();
-  final controller = DesktopController();
+  final controller = DesktopController(
+    installedVersion: await readInstalledVersion(),
+  );
   LicenseRegistry.addLicense(() async* {
     yield LicenseEntryWithLineBreaks([
       'Noto Sans SC',

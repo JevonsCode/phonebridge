@@ -66,11 +66,31 @@ class NativeBackendProcess implements BackendProcess {
 
 typedef ProcessStarter = Future<BackendProcess> Function();
 
-Future<BackendProcess> startBundledBackend() async {
+String bundledRoot() {
   final executable = File(Platform.resolvedExecutable).parent;
-  final root = Platform.isMacOS
+  return Platform.isMacOS
       ? Directory('${executable.path}/../Resources').absolute.path
       : executable.path;
+}
+
+Future<String?> readInstalledVersion({String? root}) async {
+  try {
+    final text = await File(
+      '${root ?? bundledRoot()}/package-manifest.json',
+    ).readAsString();
+    final manifest = jsonDecode(text.replaceFirst(RegExp(r'^\uFEFF'), ''));
+    final version = manifest is Map ? manifest['version'] : null;
+    return version is String &&
+            RegExp(r'^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)*$').hasMatch(version)
+        ? version
+        : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+Future<BackendProcess> startBundledBackend() async {
+  final root = bundledRoot();
   final node = '$root/runtime/${Platform.isWindows ? 'node.exe' : 'node'}';
   final entry = '$root/desktop/${Platform.isMacOS ? 'macos/' : ''}server.mjs';
   if (!await File(node).exists() || !await File(entry).exists()) {
@@ -211,6 +231,7 @@ class DesktopStatus {
 class DesktopController extends ChangeNotifier {
   DesktopController({
     ProcessStarter? starter,
+    this.installedVersion,
     this.startupTimeout = const Duration(seconds: 35),
     this.pollInterval = const Duration(seconds: 2),
   }) : _starter = starter ?? startBundledBackend;
@@ -223,6 +244,7 @@ class DesktopController extends ChangeNotifier {
   bool _disposed = false, _polling = false, _owned = false;
   int _generation = 0;
   bool starting = false, mutating = false;
+  final String? installedVersion;
   DesktopStatus? status;
   BackendFailure? failure;
   bool get ready => _api != null;
