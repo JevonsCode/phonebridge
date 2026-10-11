@@ -386,3 +386,32 @@ test('immutable uploads are unique per retry while publication keeps the success
   assert.ok(!download.includes('github.run_attempt'));
   assert.ok(!download.includes('name: verified-release-snapshot'));
 });
+
+test('release events dispatch trusted main while validation and Pages require a main workflow dispatch', async () => {
+  const workflow = (await readFile(new URL('../../.github/workflows/release-distribution.yml', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  const dispatcher = workflow.match(/^  dispatch-from-release:\n([\s\S]*?)(?=^  validate-windows:)/m)?.[1];
+  const validation = workflow.match(/^  validate-windows:\n([\s\S]*?)(?=^  distribute:)/m)?.[1];
+  const publication = workflow.match(/^  distribute:\n([\s\S]*)/m)?.[1];
+  assert.ok(dispatcher && validation && publication);
+  assert.match(dispatcher, /if: github\.event_name == 'release' && github\.event\.action == 'published'/);
+  assert.match(dispatcher, /contents: read\s+actions: write/);
+  assert.match(dispatcher, /ref: main/);
+  assert.ok(!dispatcher.includes('environment:'));
+  assert.match(dispatcher, /gh workflow run release-distribution\.yml --repo "\$GITHUB_REPOSITORY" --ref main -f "tag=\$RELEASE_TAG"/);
+  for (const job of [validation, publication]) {
+    assert.match(job, /if: github\.event_name == 'workflow_dispatch' && github\.ref == 'refs\/heads\/main'/);
+    assert.ok(!job.includes('actions: write'));
+  }
+  assert.match(publication, /environment:\s+name: github-pages/);
+  const validator = dispatcher.match(/node --input-type=module <<'NODE'\n([\s\S]*?)\n\s+NODE/)?.[1];
+  assert.ok(validator);
+  const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
+  const run = changes => spawnSync(process.execPath, ['--input-type=module', '-e', validator], { cwd: repositoryRoot, encoding: 'utf8', env: { ...process.env, GITHUB_REPOSITORY: 'JevonsCode/phonebridge', RELEASE_TAG: 'v0.6.0', GITHUB_REF: 'refs/tags/v0.6.0', ...changes } });
+  assert.equal(run({}).status, 0);
+  for (const changes of [
+    { GITHUB_REPOSITORY: 'attacker/phonebridge' },
+    { GITHUB_REF: 'refs/heads/main' },
+    { GITHUB_REF: 'refs/tags/v0.6.1' },
+    ...['0.6.0', 'v../main', 'v0.6.0;echo unsafe', 'v0.6.0-beta', 'v0.6.0\n'].map(RELEASE_TAG => ({ RELEASE_TAG }))
+  ]) assert.equal(run(changes).status, 1, JSON.stringify(changes));
+});

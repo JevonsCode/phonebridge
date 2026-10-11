@@ -1,6 +1,14 @@
 # Release distribution
 
-Source validation remains in `ci.yml`. `release-distribution.yml` runs when a GitHub Release is published, or manually against an existing published tag such as `v0.6.0`. It uses the automation on `main`, downloads exactly `phonebridge-VERSION-arm64.apk` from the official release, and never builds, replaces, signs, or uploads an APK.
+Source validation remains in `ci.yml`. When a GitHub Release is published, `release-distribution.yml` checks out trusted `main`, validates the official repository and canonical tag/ref, then dispatches the same workflow on `main` with that tag. The release-event dispatcher has only repository-read and Actions-write permissions; it does not deploy. Windows validation and distribution run only for `workflow_dispatch` on `refs/heads/main`, so the Pages environment can retain its main-only protection. Checking out `main` alone does not change a release event's tag ref; that caused the initial `v0.6.0` deployment rejection before any distribution steps ran.
+
+For an existing published tag, manually run the workflow on `main`:
+
+```sh
+gh workflow run release-distribution.yml --repo JevonsCode/phonebridge --ref main -f tag=v0.6.0
+```
+
+The existing `v0.6.0` tag contains the earlier workflow and requires this manual main dispatch after the fix reaches `main`; future release tags containing the dispatcher use the automatic handoff. A successful dispatcher means the separate main run was queued, not that publication completed. Manual dispatches on other refs skip validation and deployment. The main run downloads exactly `phonebridge-VERSION-arm64.apk` from the official release and never builds, replaces, signs, or uploads an APK.
 
 Before writing public files, the Node script checks the published tag and exact GitHub asset URL, asset size, SHA-256, Android package `dev.phonebridge.phonebridge`, tag-matching versionName, increasing versionCode, ARM64-only native libraries, and the existing preview certificate:
 
@@ -45,4 +53,4 @@ Run the local fixture tests with Node.js 22 or later:
 node --test scripts/test/release-distribution.test.mjs
 ```
 
-After source CI and actual-phone upgrade validation, publish the already signed release or run **Distribute verified release** with its published tag. Inspect every workflow step, the submission kit, and the Pages deployment. Then read the live official `update.json`, check both website APK links and the README against the exact release asset, and verify the live APK's size/hash. A green fixture test or generated manifest proves local validation behavior; publication requires the GitHub run and live checks. Uptodown remains pending until its public listing/version is observed.
+After source CI and actual-phone upgrade validation, publish the already signed release or run **Distribute verified release** on **main** with its published tag. For automatic handoffs, inspect the separate main dispatch run as well as the release dispatcher. Inspect every workflow step, the submission kit, and the Pages deployment. Then read the live official `update.json`, check both website APK links and the README against the exact release asset, and verify the live APK's size/hash. A green fixture test or generated manifest proves local validation behavior; publication requires the GitHub run and live checks. Uptodown remains pending until its public listing/version is observed.

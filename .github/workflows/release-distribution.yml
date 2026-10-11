@@ -23,7 +23,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  dispatch-from-release:
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      # A release event has a tag ref; Pages protection permits only main.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate official release tag before dispatch
+        run: |
+          node --input-type=module <<'NODE'
+          import { parseVersion, REPOSITORY } from './scripts/release-distribution.mjs';
+          if (process.env.GITHUB_REPOSITORY !== REPOSITORY) throw new Error('Only the official repository may dispatch distribution');
+          if (!process.env.RELEASE_TAG?.startsWith('v')) throw new Error('Expected a v-prefixed release tag');
+          parseVersion(process.env.RELEASE_TAG.slice(1));
+          if (process.env.GITHUB_REF !== `refs/tags/${process.env.RELEASE_TAG}`) throw new Error('Release ref must match the published tag');
+          NODE
+      - name: Dispatch distribution on the protected main ref
+        run: |
+          gh workflow run release-distribution.yml --repo "$GITHUB_REPOSITORY" --ref main -f "tag=$RELEASE_TAG"
+          printf 'Distribution for %s was dispatched on main. The separate main workflow run verifies assets and deploys Pages.\n' "$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
   validate-windows:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     runs-on: windows-latest
     outputs:
       release-artifact-id: ${{ steps.snapshot.outputs.artifact-id }}
@@ -113,6 +145,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
   distribute:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: validate-windows
     runs-on: ubuntu-latest
     permissions:
