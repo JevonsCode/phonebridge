@@ -14,6 +14,14 @@ If Windows prompts about a network connection, the owner decides whether to allo
 
 The optional `phonebridge-0.6.0-windows-x64.zip` portable package contains `PhoneBridge.exe`. Extract the whole ZIP, then open that executable. Portable use does not register startup itself. Existing owned service configuration takes precedence over the extracted package, so unpacking a new version alone does not migrate an installed service.
 
+## macOS and visible desktop preview
+
+The current branch adds a visible native Windows window and self-contained macOS Apps for Apple Silicon and Intel, requiring macOS 13+. These are PR test packages; the public 0.6.0 Windows download above still uses its browser panel. Do not infer that the preview has been formally released.
+
+Follow [macOS test-package instructions](macos-testing.md) to download the matching CI artifact, verify its SHA256 and copy PhoneBridge.app to Applications before opening. The native window selects the network and shows status, a pairing QR and a Copy MCP button. No system Node.js installation is needed. The App registers only its owned current-user LaunchAgent, keeps pairing/history, and leaves the background service running when its window closes. The owner completes macOS approval and Android permission prompts.
+
+On a Mac, use the native App's `--diagnose`, `--self-test` and `--diagnose --report-path <absolute-path>` commands for sanitized checks. `--uninstall-service` removes only the exact owned login service and preserves identity and logs. Never remove quarantine, disable Gatekeeper or delete the pairing file as an installation workaround.
+
 ## Diagnostics for an Agent
 
 These installer commands validate the embedded package and path containment, then exit before installation, extraction, configuration writes or task registration:

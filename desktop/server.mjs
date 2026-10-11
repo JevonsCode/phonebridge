@@ -1,8 +1,8 @@
 import http from 'node:http';
 import { randomBytes, createHash } from 'node:crypto';
-import { readFile, writeFile, mkdir, unlink, lstat } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, unlink, lstat, link } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { localNetworks, privateIPv4, windowsIdentity } from './network.mjs';
@@ -50,7 +50,7 @@ function safeRequest(req, authority, secret, mutation) {
     (!req.headers.origin || req.headers.origin === `http://${authority}`) &&
     (!mutation || (req.headers.origin === `http://${authority}` && req.headers['x-phonebridge-csrf'] === secret));
 }
-export async function createDashboard({ config, token, status, startService, changeNetwork, networks, language = 'en', qr, testShutdown, mcpConfiguration, allowLan }) {
+export async function createDashboard({ config, token, status, startService, changeNetwork, networks, language = 'en', qr, testShutdown, mcpConfiguration, allowLan, startupError }) {
   const secret = randomBytes(24).toString('base64url');
   const base = `/session/${secret}`;
   let authority = '';
@@ -69,7 +69,7 @@ export async function createDashboard({ config, token, status, startService, cha
       if (req.method === 'GET' && req.url === `${base}/ping`) { send(200, { client: 'phonebridge-desktop', pid: process.pid }); return; }
       if (req.method === 'GET' && req.url === `${base}/status`) {
         let current; try { current = await status(); } catch { current = { connected: false, unavailable: true }; }
-        send(200, { connected: current.connected, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? 'PhoneBridge' }); return;
+        send(200, { connected: current.connected, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? hostname(), error: startupError?.() }); return;
       }
       if (req.method === 'POST' && req.url === `${base}/start`) { req.resume(); await startService(); send(200, { ok: true }); return; }
       if (allowLan && req.method === 'POST' && req.url === `${base}/allow-lan`) { req.resume(); await allowLan(); send(200, { ok: true }); return; }
@@ -87,13 +87,27 @@ export async function createDashboard({ config, token, status, startService, cha
   return { url: `http://${authority}${base}`, secret, close: () => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }) };
 }
 function openBrowser(url) { spawn(process.env.SystemRoot + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Start-Process '${url}'`], { windowsHide: true, stdio: 'ignore' }).unref(); }
+export function nativeReady(args, url, fields = {}) {
+  const ready = { ready: true, ...fields, dashboardLoopback: true };
+  if (args.includes('--native-window')) {
+    const parsed = new URL(url);
+    if (parsed.protocol !== 'http:' || parsed.hostname !== '127.0.0.1' || !parsed.port || parsed.username || parsed.password || parsed.search || parsed.hash || !/^\/session\/[A-Za-z0-9_-]{32}$/.test(parsed.pathname)) throw new Error('Invalid local dashboard session.');
+    ready.dashboardUrl = parsed.href;
+  }
+  return ready;
+}
+function announceReady(args, url, fields) {
+  if (!args.includes('--no-open') && !args.includes('--native-window')) openBrowser(url);
+  console.log(JSON.stringify(nativeReady(args, url, fields)));
+}
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--self-test')) { const { runSelfTest } = await import('./self-test.mjs'); await runSelfTest(); return; }
   const sid = windowsIdentity(); const path = resolve(configPath());
   if (args.includes('--diagnose')) {
     let existing = false; try { await readOwnedConfig(path, sid); existing = true; } catch (e) { if (e.code !== 'ENOENT') throw e; }
-    console.log(JSON.stringify({ product: 'PhoneBridge', version: '0.6.0', platform:'windows-x64', runtime: process.version, existingOwnedConfig: existing, privateNetworks: localNetworks().length, dryRun: true })); return;
+    const manifest=JSON.parse((await readFile(join(root,'package-manifest.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;})).replace(/^\uFEFF/,''));
+    console.log(JSON.stringify({ product: 'PhoneBridge', version: manifest.version??'0.6.0', platform:'windows-x64', runtime: process.version, existingOwnedConfig: existing, privateNetworks: localNetworks().length, dryRun: true })); return;
   }
   const statePath = join(dirname(path), `client-${createHash('sha256').update(path.toLowerCase()).digest('hex').slice(0, 12)}.json`);
   await mkdir(dirname(statePath), { recursive: true });
@@ -103,16 +117,31 @@ async function main() {
     if (existing.ownerSid !== sid || url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !/^\/session\/[A-Za-z0-9_-]{32}$/.test(url.pathname)) throw new Error('Untrusted client state');
     const probe = await fetch(`${url.href}/ping`, { signal: AbortSignal.timeout(1500), redirect: 'error' });
     const data = await probe.json();
-    if (probe.ok && data.client === 'phonebridge-desktop' && data.pid === existing.pid) { if (!args.includes('--no-open')) openBrowser(url.href); console.log(JSON.stringify({ready:true,reusedClient:true,dashboardLoopback:true})); return; }
+    if (probe.ok && data.client === 'phonebridge-desktop' && data.pid === existing.pid) { announceReady(args,url.href,{reusedClient:true}); return; }
   } catch (e) { if (e.message === 'Untrusted client state') throw e; }
   // An exclusive claim handles concurrent launch; dead claims are recovered without touching a live client.
   const claimPath = statePath + '.lock';
-  try { await writeFile(claimPath, String(process.pid), { flag: 'wx' }); }
+  try {
+    // Publish a fully written PID with an atomic, exclusive hard-link creation.
+    // A competing launcher can never observe an empty just-created claim.
+    const temporary=claimPath+'.'+randomBytes(8).toString('hex')+'.tmp';
+    try{await writeFile(temporary,String(process.pid),{flag:'wx'});await link(temporary,claimPath);}finally{await unlink(temporary).catch(()=>{});}
+  }
   catch (e) {
     if (e.code !== 'EEXIST') throw e;
-    const pid = Number(await readFile(claimPath, 'utf8'));
-    try { process.kill(pid, 0); } catch (err) { if (err.code === 'ESRCH') { await unlink(claimPath); return main(); } throw err; }
-    for (let attempt = 0; attempt < 50; attempt++) { await new Promise(r => setTimeout(r, 200)); try { const record = JSON.parse(await readFile(statePath, 'utf8')); const u = new URL(record.url); if (record.ownerSid === sid && u.protocol === 'http:' && u.hostname === '127.0.0.1' && /^\/session\/[A-Za-z0-9_-]{32}$/.test(u.pathname) && record.pid === pid) { const p = await fetch(`${u.href}/ping`, { signal: AbortSignal.timeout(1000),redirect:'error' }); const data = await p.json(); if (p.ok && data.client === 'phonebridge-desktop' && data.pid === pid) { if (!args.includes('--no-open')) openBrowser(u.href); console.log(JSON.stringify({ready:true,reusedClient:true,dashboardLoopback:true})); return; } } } catch {} }
+    let pid;try{pid=Number(await readFile(claimPath,'utf8'));}catch(error){if(error.code==='ENOENT')return main();throw error;}
+    if(!Number.isInteger(pid)||pid<=0)throw new Error('Invalid client startup record.');
+    try { process.kill(pid, 0); } catch (err) {
+      if (err.code === 'ESRCH') {
+        // A current-user OS mutex serializes the read/check/delete operation. A
+        // second recovery can never delete the fresh claim created by a winner.
+        const recovered=spawnSync(process.env.SystemRoot+'\\System32\\WindowsPowerShell\\v1.0\\powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',join(root,'desktop','recover-client-claim.ps1'),'-ClaimPath',claimPath,'-OwnerSid',sid],{windowsHide:true,encoding:'utf8',timeout:15000});
+        if(recovered.status!==0)throw new Error('Client startup recovery is busy or unavailable. Please retry.');
+        return main();
+      }
+      throw err;
+    }
+    for (let attempt = 0; attempt < 50; attempt++) { await new Promise(r => setTimeout(r, 200)); try { const record = JSON.parse(await readFile(statePath, 'utf8')); const u = new URL(record.url); if (record.ownerSid === sid && u.protocol === 'http:' && u.hostname === '127.0.0.1' && /^\/session\/[A-Za-z0-9_-]{32}$/.test(u.pathname) && record.pid === pid) { const p = await fetch(`${u.href}/ping`, { signal: AbortSignal.timeout(1000),redirect:'error' }); const data = await p.json(); if (p.ok && data.client === 'phonebridge-desktop' && data.pid === pid) { announceReady(args,u.href,{reusedClient:true}); return; } } } catch {} }
     throw new Error('PhoneBridge is already starting. Please try again.');
   }
   let supervisor, dashboard, stop;
@@ -143,7 +172,12 @@ async function main() {
       const s = new DesktopSupervisor({ token, host: config.hostAddress, port: config.port, allowLan: true });
       try { await s.start(); supervisor = s; } catch { throw new Error('This port is occupied or the saved network is unavailable. Existing service was preserved.'); }
     };
-    let startupError; try { await start(); } catch (e) { startupError = e; }
+    let startupError, startupPromise;
+    const startWithFeedback=()=>{
+      if(startupPromise)return startupPromise;
+      startupPromise=start().then(()=>{startupError=undefined;},e=>{startupError=e;throw e;}).finally(()=>{startupPromise=undefined;});
+      return startupPromise;
+    };
     let requestingLan=false;
     const allowLan=async()=>{
       if(requestingLan)throw new Error('Windows LAN permission is already awaiting approval.');
@@ -155,26 +189,28 @@ async function main() {
         });
       } finally { requestingLan=false; }
     };
-    dashboard = await createDashboard({ config, token, networks: localNetworks, status: () => authenticatedStatus(config, token), startService: start,
+    dashboard = await createDashboard({ config, token, networks: localNetworks, status: () => authenticatedStatus(config, token), startService: startWithFeedback, startupError:()=>startupError?.message,
       changeNetwork: serializeNetworkChange(async address => {
+        if(startupPromise)throw new Error('The desktop service is starting. Please wait before changing networks.');
         if (!privateIPv4(address) || !localNetworks().some(a => a.address === address)) throw new Error('Select an active private network.');
         if (!supervisor) { try { await authenticatedStatus(config, token); throw new Error('An existing desktop service is running. Stop it before changing its network.'); } catch (e) { if (e.message.startsWith('An existing')) throw e; } }
-        if (address === config.hostAddress) { await start(); return; }
+        if (address === config.hostAddress) { await startWithFeedback(); return; }
         if (supervisor) { const status = await authenticatedStatus(config, token); if (status.connected) throw new Error('Disconnect your phone before changing networks.'); }
         await replaceNetwork(config,address,{previous:supervisor,activate:candidate=>{supervisor=candidate},
           createCandidate: async next => { const { DesktopSupervisor }=await import('../bridge/dist/supervisor.js');const candidate=new DesktopSupervisor({token,host:next.hostAddress,port:next.port,allowLan:true});try{await candidate.start();if(!candidate.serviceRunning)throw new Error('New network service could not start.');return candidate;}catch(error){await candidate.close().catch(()=>{});throw error;} },
           persist:async next=>{await writeFile(path+'.backup-'+Date.now(),JSON.stringify(config),{flag:'wx'});const temporary=path+'.tmp-'+process.pid;try{await writeFile(temporary,JSON.stringify(next));const {rename}=await import('node:fs/promises');await rename(temporary,path);}finally{await unlink(temporary).catch(()=>{});}}
         });
+        startupError=undefined;
       }), language: process.env.LANG?.startsWith('zh') || spawnSync(config.powershellPath, ['-NoProfile', '-Command', '(Get-UICulture).Name'], { encoding: 'utf8', windowsHide: true,timeout:10000 }).stdout?.trim().startsWith('zh') ? 'zh' : 'en',
       qr: () => QRCode.toDataURL(pairingUri(`ws://${config.hostAddress}:${config.port}/device`, token), { width: 360, margin: 3 }),
       mcpConfiguration:()=>createMcpConfiguration(config,credentialPath()),allowLan,
       testShutdown: process.env.PHONEBRIDGE_DESKTOP_TEST === '1' ? () => void stop() : undefined });
     await writeFile(statePath, JSON.stringify({ ownerSid: sid, pid: process.pid, url: dashboard.url }));
-    if (!args.includes('--no-open')) openBrowser(dashboard.url);
-    // Do not print pairing tokens or the private dashboard URL.
-    console.log(JSON.stringify({ ready: true, reusedService: !supervisor && !startupError, dashboardLoopback: true }));
-    let stopping = false; stop = async () => { if (stopping) return; stopping = true; await dashboard?.close(); await supervisor?.close(); await unlink(statePath).catch(() => {}); await unlink(claimPath).catch(() => {}); };
+    // The private URL is emitted only to an explicitly requested native-child pipe.
+    announceReady(args,dashboard.url,{});
+    let stopping = false; stop = async () => { if (stopping) return; stopping = true; await dashboard?.close(); await startupPromise?.catch(()=>{}); await supervisor?.close(); await unlink(statePath).catch(() => {}); await unlink(claimPath).catch(() => {}); };
     process.on('SIGINT', () => void stop()); process.on('SIGTERM', () => void stop());
+    void startWithFeedback().catch(()=>{});
   } catch (e) { await dashboard?.close(); await supervisor?.close(); await unlink(claimPath).catch(() => {}); throw e; }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(e => { console.error(e instanceof Error ? e.message : 'Client failed'); process.exitCode = 1; });

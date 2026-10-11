@@ -36,6 +36,13 @@ Copy-Item -LiteralPath (Join-Path $project 'bridge\package.json'),(Join-Path $pr
 Push-Location -LiteralPath (Join-Path $stage 'bridge')
 try { & $node $npm ci --omit=dev --ignore-scripts; if ($LASTEXITCODE -ne 0) { throw 'Production dependencies failed.' } } finally { Pop-Location }
 Copy-Item -LiteralPath (Join-Path $project 'desktop') -Destination (Join-Path $stage 'desktop') -Recurse
+# Windows carries only its runtime sources; Mac code and protocol fixtures are development inputs.
+$stageRoot=[IO.Path]::GetFullPath($stage).TrimEnd([IO.Path]::DirectorySeparatorChar)
+foreach ($directory in @('macos','test')) {
+  $stageChild=[IO.Path]::GetFullPath((Join-Path $stageRoot "desktop\$directory"))
+  if (-not $stageChild.StartsWith($stageRoot + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetDirectoryName($stageChild) -ne (Join-Path $stageRoot 'desktop')) { throw 'Unsafe Windows payload exclusion path.' }
+  if (Test-Path -LiteralPath $stageChild) { Remove-Item -LiteralPath $stageChild -Recurse -Force }
+}
 [void](New-Item -ItemType Directory -Path (Join-Path $stage 'scripts'))
 Copy-Item -LiteralPath (Join-Path $project 'scripts\windows') -Destination (Join-Path $stage 'scripts\windows') -Recurse
 Copy-Item -LiteralPath (Join-Path $project 'LICENSE') -Destination $stage
@@ -43,7 +50,7 @@ $manifest=[ordered]@{product='PhoneBridge';version=$Version;platform='windows-x6
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'package-manifest.json') -Encoding UTF8
 $csc=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $csc)) { throw 'Windows .NET Framework C# compiler missing.' }
-& $csc /nologo /target:winexe /optimize+ /reference:System.Windows.Forms.dll "/out:$(Join-Path $stage 'PhoneBridge.exe')" (Join-Path $project 'desktop\Launcher.cs')
+& $csc /nologo /target:winexe /optimize+ /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll "/out:$(Join-Path $stage 'PhoneBridge.exe')" (Join-Path $project 'desktop\Launcher.cs') (Join-Path $project 'desktop\DesktopWindow.cs')
 if ($LASTEXITCODE -ne 0) { throw 'Launcher compilation failed.' }
 # No development source, test artifacts, private pairing, npm binary or TypeScript toolchain in the payload.
 Get-ChildItem -LiteralPath (Join-Path $stage 'desktop') -File | Where-Object Extension -eq '.cs' | Remove-Item

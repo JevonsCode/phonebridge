@@ -8,6 +8,8 @@ The owner asked to implement macOS support, submit a PR, and leave physical Mac 
 
 Use native AppKit on macOS and WinForms on Windows with the existing Node service and a local dashboard HTTP API. This produces an immediately visible window without another browser runtime. Alternatives were Electron (larger dependency/runtime) and a shell script (does not meet the simple installation requirement). Native widgets show loading and actionable startup errors; they do not disappear after launching a browser.
 
+Windows also retains the existing Allow LAN connection action with its owner-approved firewall flow. The browser troubleshooting button remains available. New, existing and concurrent native launches receive a validated ready URL; a reused dashboard child exiting is expected, and closing that window never terminates the existing dashboard or service.
+
 Both windows display phone/service state, QR pairing, selected network, Start service, a selectable MCP configuration and Copy MCP. Chinese/English follow the computer locale and can be switched. Existing browser dashboard access remains available for troubleshooting. The private dashboard URL is passed only through a child-process pipe, never normal logs, diagnostics or public artifacts. Native HTTP requests only use the validated loopback session, refuse redirects and supply the existing mutation Origin/CSRF headers.
 
 ## macOS lifecycle
@@ -20,7 +22,7 @@ The App must be copied from the DMG to Applications (or the user's Applications 
 
 ## Packaging and PR testing
 
-Produce architecture-specific DMGs and ZIPs for arm64 and x64, with bundled official pinned Node archives checked against Node's SHA256 file, compiled bridge and production dependencies. Compile AppKit with the native SDK, provide Info.plist/icon/license and ad-hoc signatures; do not claim Developer ID signing or notarization. Never remove quarantine or disable Gatekeeper. A Mac user may need Apple's normal approval flow for a preview, which remains their action.
+Produce architecture-specific DMGs and ZIPs for arm64 and x64, with bundled official pinned Node archives checked against Node's SHA256 file, compiled bridge and production dependencies. Require macOS 13 or later. Compile AppKit with the native SDK, provide Info.plist/icon/license and ad-hoc signatures; do not claim Developer ID signing or notarization. Never remove quarantine or disable Gatekeeper. A Mac user may need Apple's normal approval flow for a preview, which remains their action.
 
 GitHub Actions uses macos-15 and macos-15-intel runners to build and test the respective architecture. Upload PR test packages and SHA sidecars as artifacts; do not modify a public release, website, update manifest or published APK. Validate binaries, self-test/diagnostics, bundle layout and DMG attachment read-only. Native CI checks are separate from actual Wi-Fi phone pairing and physical Mac GUI testing.
 

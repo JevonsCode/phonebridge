@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>dev.phonebridge.desktop</string>
+    <key>CFBundleName</key><string>PhoneBridge</string>
+    <key>CFBundleDisplayName</key><string>PhoneBridge</string>
+    <key>CFBundleExecutable</key><string>PhoneBridge</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleIconFile</key><string>PhoneBridge.icns</string>
+    <key>CFBundleShortVersionString</key><string>0.6.1</string>
+    <key>CFBundleVersion</key><string>0.6.1</string>
+    <key>LSMinimumSystemVersion</key><string>13.0</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSLocalNetworkUsageDescription</key><string>PhoneBridge connects to your own Android phone on your private Wi-Fi or Ethernet network.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict><key>NSAllowsLocalNetworking</key><true/></dict>
+</dict>
+</plist>

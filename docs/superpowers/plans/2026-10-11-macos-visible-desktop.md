@@ -12,7 +12,7 @@
 
 Files: desktop/server.mjs, desktop/macos/{server,service,lifecycle}.mjs, desktop/test/macos.test.mjs.
 
-- [ ] Test native-only first-ready JSON includes a validated session URL, whereas ordinary output and diagnostics never expose it.
+- [ ] Test native-only first-ready JSON includes a validated session URL, for fresh, reused and concurrent launches, whereas ordinary output and diagnostics never expose it. Reused child exit is expected; never terminate the existing dashboard on window close.
 - [ ] Add --native-window handling to existing Windows server, retaining --no-open and legacy browser behavior.
 - [ ] Implement private UID-owned Mac config, LaunchAgent exact ownership/rollback, saved identity reuse and local network selection.
 - [ ] Implement Mac dashboard entry and isolated self-test (no production jobs or live service mutation).
@@ -23,7 +23,7 @@ Files: desktop/server.mjs, desktop/macos/{server,service,lifecycle}.mjs, desktop
 Files: desktop/Launcher.cs, desktop/DesktopWindow.cs, scripts/package-desktop.ps1 and focused window test helper.
 
 - [ ] Start a visible WinForms window immediately; communicate with Node using --native-window and private first-ready JSON.
-- [ ] Add asynchronous state/QR/network/start/MCP-copy widgets and Chinese/English. Enforce exact loopback session and existing CSRF contract, no redirects.
+- [ ] Add asynchronous state/QR/network/start/MCP-copy widgets and Chinese/English. Enforce exact loopback session and existing CSRF contract, no redirects. Preserve the Windows Allow LAN action and browser troubleshooting entry.
 - [ ] Retain diagnostic/self-test/report-path/no-open CLI behavior, bound waits and drain pipes. Closing dashboard does not stop an existing managed service.
 - [ ] Update compiler references/source inclusion. Compile a test bundle; test normal startup and error rendering, package regressions and managed identity preservation.
 
@@ -33,7 +33,7 @@ Files: desktop/macos/PhoneBridge.swift, desktop/macos/Info.plist, scripts/packag
 
 - [ ] Implement an immediately visible AppKit window and --diagnose/--self-test CLI forwarding to bundled Node.
 - [ ] Add native state/QR/network/start/copy/language widgets, safe native requests, child cleanup and visible errors.
-- [ ] Package arm64/x64 with checked official Node bytes, native compiled launcher, resource manifest, license/icon, DMG Applications shortcut and SHA sidecars. Ad-hoc sign only; no quarantine bypass.
+- [ ] Package arm64/x64 with checked official Node bytes, native compiled launcher targeting macOS 13+, resource manifest, license/icon, DMG Applications shortcut and SHA sidecars. Ad-hoc sign only; no quarantine bypass.
 - [ ] Matrix build on macos-15 / macos-15-intel; run native binary self-test, diagnostics and read-only DMG layout checks before artifact upload.
 
 ## Task 4: review, documentation and PR
