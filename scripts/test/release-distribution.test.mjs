@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -414,4 +414,36 @@ test('release events dispatch trusted main while validation and Pages require a 
     { GITHUB_REF: 'refs/tags/v0.6.1' },
     ...['0.6.0', 'v../main', 'v0.6.0;echo unsafe', 'v0.6.0-beta', 'v0.6.0\n'].map(RELEASE_TAG => ({ RELEASE_TAG }))
   ]) assert.equal(run(changes).status, 1, JSON.stringify(changes));
+});
+
+test('Android verification tools resolve sdkmanager without PATH and fail closed on missing or failed tools', async t => {
+  const workflow = (await readFile(new URL('../../.github/workflows/release-distribution.yml', import.meta.url), 'utf8')).replaceAll('\r\n', '\n');
+  const install = workflow.match(/      - name: Install Android verification tools\n        run: \|\n([\s\S]*?)(?=      - name:)/)?.[1]?.split('\n').map(line => line.slice(10)).join('\n');
+  assert.ok(install, 'Tool setup must explicitly resolve the SDK manager');
+  assert.match(install, /cmdline-tools\/latest\/bin\/sdkmanager/);
+  assert.match(install, /--sdk_root="\$sdk_root"/);
+  assert.ok(!/^sdkmanager /m.test(install));
+  const bash = process.platform === 'win32' ? path.join(process.env.ProgramFiles ?? 'C:/Program Files', 'Git/bin/bash.exe') : 'bash';
+  if (process.platform === 'win32') { try { await access(bash); } catch { t.skip('Git Bash is unavailable on this Windows host'); return; } }
+  const base = await mkdtemp(path.join(os.tmpdir(), 'phonebridge-sdk-resolution-test-'));
+  t.after(() => rm(base, { recursive: true, force: true }));
+  const sdk = path.join(base, 'SDK root with spaces');
+  const manager = path.join(sdk, 'cmdline-tools/latest/bin/sdkmanager');
+  const aapt = path.join(sdk, 'build-tools/35.0.0/aapt');
+  const apksigner = path.join(sdk, 'build-tools/35.0.0/apksigner');
+  const environment = path.join(base, 'github-env');
+  const argumentsFile = path.join(base, 'sdk-arguments');
+  const executable = async (file, text = '#!/bin/bash\nexit 0\n') => { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, text); await chmod(file, 0o755); };
+  await executable(manager, '#!/bin/bash\nprintf "%s\\n" "$@" > "$SDK_TEST_ARGUMENTS"\n');
+  await executable(aapt); await executable(apksigner);
+  const shellPath = value => value.replaceAll('\\', '/');
+  const run = changes => spawnSync(bash, ['-e', '-c', install], { encoding: 'utf8', env: { ...process.env, BASH_ENV: '', ANDROID_HOME: shellPath(sdk), ANDROID_SDK_ROOT: '', GITHUB_ENV: shellPath(environment), SDK_TEST_ARGUMENTS: shellPath(argumentsFile), ...changes } });
+  const explicit = run({}); assert.equal(explicit.status, 0, explicit.stderr);
+  assert.equal(await readFile(argumentsFile, 'utf8'), `--sdk_root=${shellPath(sdk)}\nbuild-tools;35.0.0\n`);
+  assert.equal(await readFile(environment, 'utf8'), `ANDROID_HOME=${shellPath(sdk)}\n`);
+  await writeFile(environment, '');
+  const fallback = run({ ANDROID_HOME: '', ANDROID_SDK_ROOT: shellPath(sdk) }); assert.equal(fallback.status, 0, fallback.stderr);
+  await rm(apksigner); assert.notEqual(run({}).status, 0);
+  await executable(apksigner); await executable(manager, '#!/bin/bash\nexit 23\n'); assert.equal(run({}).status, 23);
+  await rm(manager); assert.notEqual(run({}).status, 0);
 });

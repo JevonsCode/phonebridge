@@ -203,7 +203,18 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Install Android verification tools
-        run: sdkmanager 'build-tools;35.0.0'
+        run: |
+          # Hosted Ubuntu installs command-line tools here without adding them to PATH.
+          sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          sdkmanager="$sdk_root/cmdline-tools/latest/bin/sdkmanager"
+          if [[ ! -x "$sdkmanager" ]]; then
+            printf 'Android SDK manager is missing or not executable: %s\n' "$sdkmanager" >&2
+            exit 1
+          fi
+          "$sdkmanager" --sdk_root="$sdk_root" 'build-tools;35.0.0'
+          test -x "$sdk_root/build-tools/35.0.0/aapt"
+          test -x "$sdk_root/build-tools/35.0.0/apksigner"
+          printf 'ANDROID_HOME=%s\n' "$sdk_root" >> "$GITHUB_ENV"
       - name: Refresh main before updating public files
         run: git pull --ff-only origin main
       - name: Verify APK and synchronize public distribution files
