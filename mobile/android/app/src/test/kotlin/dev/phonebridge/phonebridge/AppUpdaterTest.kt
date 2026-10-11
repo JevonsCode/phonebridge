@@ -281,6 +281,18 @@ class AppUpdaterTest {
         assertEquals("ACTIVITY_CLOSED", assertThrows(UpdateFailure::class.java) { session.controller.download() }.code)
     }
 
+    @Test fun cancelledConnectionBeforeRequestDoesNotPoisonNextUpdateCheck() = Fixture().use { fixture ->
+        fixture.respond = { Response(manifest(fixture.apkUrl).toByteArray()) }
+        val endpoint = java.net.URI(fixture.manifestUrl)
+        // A cancelled OkHttp call can close a connected socket before sending headers.
+        Socket(endpoint.host, endpoint.port).use { it.shutdownOutput() }
+        val protocol = UpdateProtocol(fixture.manifestUrl)
+        try {
+            assertEquals(2008L, protocol.check().versionCode)
+            assertEquals(1, fixture.headers.size)
+        } finally { protocol.close() }
+    }
+
     @Test fun newObserverSeesExistingCheckCompletionWithoutAnotherRequest() = Session().use { session ->
         val gate = CountDownLatch(1)
         session.fixture.respond = { gate.await(5, TimeUnit.SECONDS); Response(manifest(session.fixture.apkUrl).toByteArray()) }
@@ -540,6 +552,7 @@ class AppUpdaterTest {
                     val reader = socket.getInputStream().bufferedReader()
                     val lines = mutableListOf<String>()
                     while (true) { val line = reader.readLine() ?: break; if (line.isEmpty()) break; lines.add(line) }
+                    if (lines.isEmpty()) return@use
                     headers.add(lines)
                     val response = respond(lines.first().split(' ')[1])
                     socket.getOutputStream().apply {
