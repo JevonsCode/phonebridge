@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "versionName": "0.2.5",
-  "versionCode": 2009,
-  "apkUrl": "https://github.com/JevonsCode/phonebridge/releases/download/v0.2.5/phonebridge-0.2.5-arm64.apk",
-  "sha256": "952efee54caf20cf1be96be8bf887dcee44135b29ad68a3a1f1a159d05ae27ea",
-  "size": 112407240,
-  "notes": "中文与英文界面，跟随系统语言，也可在设置中手动选择。Chinese and English, with system language detection and a manual choice."
+  "versionName": "0.6.0",
+  "versionCode": 2011,
+  "apkUrl": "https://github.com/JevonsCode/phonebridge/releases/download/v0.6.0/phonebridge-0.6.0-arm64.apk",
+  "sha256": "efd253b35689ccada1d4f3b142c7858d4ae54910c6ba76cc4bf152c8762a88c3",
+  "size": 112487628,
+  "notes": "PhoneBridge 0.6.0 makes setup easier and adds visible actions and saved history.\n\n- Windows installer includes its runtime, finds the local network, starts the service and displays pairing. Copy the ready-to-use MCP configuration from the computer panel. An optional LAN button requests Windows approval once for the private local network.\n- Remember several computers on the phone and switch by name. Each computer keeps its own action permissions; one connection is active at a time.\n- See AI taps, holds and swipes as brief blue trails. Enabled by default, with a saved Settings switch; excluded from screenshots.\n- Operation history is saved locally and readable by AI with `phone_operation_history`. It records timing, actions and reported outcomes, excluding typed text, screen contents, images and credentials.\n- Chinese/English App and website, direct APK/Windows downloads, Obtainium import, and verified release distribution workflow.\n\nWindows 双击安装即可使用，不用装 Node.js 或找 IP；电脑面板可直接复制 AI 的 MCP 配置。手机可记住多台电脑并按名称切换。操作轨迹默认开启，设置可关闭；电脑保存操作日志，AI 可读取，升级保留原配对与授权。\n\nVerified on the existing Android 16 phone and Windows computer. Two local desktop endpoints were tested; two physical computers and cross-network access were not tested. APK uses the existing preview debug signer; Windows executables are unsigned. Uptodown approval is separate from this release. See [verification](https://github.com/JevonsCode/phonebridge/blob/main/docs/verification.md) and [installation](https://github.com/JevonsCode/phonebridge/blob/main/docs/agent-install.md).\n"
 }
