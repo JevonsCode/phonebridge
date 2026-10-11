@@ -44,6 +44,8 @@ For an authorized unattended installation, the installer accepts `--silent --no-
 
 Development validation:
 
+The packaged lifecycle check uses loopback by default. A real LAN network-switch test opens a random port and can trigger a Windows firewall prompt for each new package path. Run that check only deliberately with `PHONEBRIDGE_TEST_LAN=1`; the Windows preview CI job sets it explicitly. Local test output states when this case is skipped. The normal PhoneBridge LAN rule covers its configured TCP port on Private/LocalSubnet networks and survives package-path changes; do not disable firewall notifications for testing.
+
 ```powershell
 ./scripts/test-desktop-client.ps1
 ./scripts/package-desktop.ps1 -Version 0.6.0 -OutputDirectory ./artifacts/windows-release

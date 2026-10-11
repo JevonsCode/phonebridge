@@ -35,7 +35,11 @@ try {
   first=racers[results.findIndex(r=>!r.reusedClient)];await exited(racers.find(child=>child!==first));
   const fresh=JSON.parse(await readFile(join(temp,stateFile),'utf8'));assert.notEqual(fresh.pid,state.pid);url=new URL(fresh.url);
   assert.equal(await readFile(path,'utf8'),configBefore);assert.equal(await readFile(env.PHONEBRIDGE_CREDENTIAL_FILE,'utf8'),pairingBefore);
-  const active=localNetworks()[0];
+  // Real LAN listeners on random ports trigger Windows firewall consent for each
+  // new package path. Keep ordinary local validation on loopback; CI or an
+  // explicitly requested LAN check can opt in without changing firewall policy.
+  const testLan=process.env.PHONEBRIDGE_TEST_LAN==='1';
+  const active=testLan?localNetworks()[0]:undefined;
   if(active){
     await fetch(url+'/shutdown',{method:'POST',headers:{Origin:url.origin,'X-PhoneBridge-CSRF':url.pathname.split('/').pop()}});await exited(first);first=undefined;
     const recoveryPath=join(temp,'network-recovery.json'),unavailable=localNetworks().some(n=>n.address==='192.168.254.254')?'10.253.254.254':'192.168.254.254';
@@ -45,6 +49,7 @@ try {
     const changed=await fetch(url+'/network',{method:'POST',headers:{Origin:url.origin,'X-PhoneBridge-CSRF':url.pathname.split('/').pop(),'Content-Type':'application/json'},body:JSON.stringify({address:active.address})});assert.equal(changed.status,200);
     const recovered=await(await fetch(url+'/status')).json();assert.equal(recovered.unavailable,false);assert.equal(recovered.error,undefined);assert.equal(recovered.address,active.address);assert.equal(await readFile(env.PHONEBRIDGE_CREDENTIAL_FILE,'utf8'),pairingBefore);
   }
+  console.log('LAN network recovery: '+(active?'passed':testLan?'skipped (no private adapter)':'skipped (opt in with PHONEBRIDGE_TEST_LAN=1)'));
   console.log('Isolated Windows client integration passed: preserved identity, live supervisor, fresh/reused/concurrent native ready, no URL in ordinary output, stale state recovery.');
 } finally {
   if(first&&url){try{await fetch(url+'/shutdown',{method:'POST',headers:{Origin:url.origin,'X-PhoneBridge-CSRF':url.pathname.split('/').pop()}});await exited(first);}catch{}}

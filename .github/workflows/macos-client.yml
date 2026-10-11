@@ -113,6 +113,7 @@ jobs:
     timeout-minutes: 30
     env:
       PHONEBRIDGE_SCREENSHOTS: '1'
+      PHONEBRIDGE_TEST_LAN: '1'
     defaults:
       run:
         shell: pwsh
