@@ -2,7 +2,7 @@ import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readFile, rm, readdir, stat, writeFile, link, symlink, chmod } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, readdir, stat, writeFile, link, symlink, chmod, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync, spawnSync } from 'node:child_process';
@@ -12,7 +12,9 @@ import { PhoneHub } from '../src/hub.js';
 import { FileOperationJournal, MemoryOperationJournal, operationLogPath, operationParams, type OperationJournal, type OperationRecord } from '../src/operation-journal.js';
 
 async function temporary(t: TestContext) {
-  const dir = await mkdtemp(join(tmpdir(), 'phonebridge-operation-log-'));
+  // macOS exposes TMPDIR through /var -> /private/var. Fixtures use its real
+  // location so the journal can retain its deliberate symlink refusal.
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'phonebridge-operation-log-')));
   t.after(() => rm(dir, { recursive: true, force: true }));
   return { dir, path: join(dir, 'operations.jsonl') };
 }

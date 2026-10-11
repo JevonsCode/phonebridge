@@ -6,7 +6,7 @@ import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DesktopSupervisor } from '../dist/supervisor.js';
@@ -17,7 +17,7 @@ async function until(check: () => boolean | Promise<boolean>, message: string) {
 }
 async function setup(t: TestContext, autoStart = false) {
   const token = randomBytes(32).toString('base64url');
-  const dir = await mkdtemp(join(tmpdir(), 'phonebridge-supervisor-log-'));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'phonebridge-supervisor-log-')));
   const supervisor = new DesktopSupervisor({ token, port: 0, autoStart, restartDelayMs: 50, logFile: join(dir, 'operations.jsonl') });
   const url = await supervisor.start();
   t.after(async () => { await supervisor.close(); await rm(dir, { recursive: true, force: true }); });
