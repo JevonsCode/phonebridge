@@ -11,6 +11,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'atomic-config.ps1')
 . (Join-Path $PSScriptRoot 'run-desktop.ps1') -LoadHelpers -ConfigurationPath $ConfigurationPath -ValidateOnly:$ValidateOnly
 $taskName = 'PhoneBridge Desktop'
 $taskPath = '\'
@@ -69,12 +70,11 @@ $temporaryConfig = "$ConfigurationPath.tmp-$([Guid]::NewGuid().ToString('N'))"
 try {
     $json = $config | ConvertTo-Json
     [IO.File]::WriteAllText($temporaryConfig, $json, (New-Object Text.UTF8Encoding($false)))
-    if ([IO.File]::Exists($ConfigurationPath)) { [IO.File]::Replace($temporaryConfig, $ConfigurationPath, $null) }
-    else { [IO.File]::Move($temporaryConfig, $ConfigurationPath) }
+    Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporaryConfig -ConfigurationPath $ConfigurationPath
     try {
         [void](Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -InputObject $task -Force -ErrorAction Stop)
     } catch {
-        if ($backup) { [IO.File]::Copy($backup, $temporaryConfig, $false); [IO.File]::Replace($temporaryConfig, $ConfigurationPath, $null) }
+        if ($backup) { [IO.File]::Copy($backup, $temporaryConfig, $false); Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporaryConfig -ConfigurationPath $ConfigurationPath }
         else { Remove-Item -LiteralPath $ConfigurationPath -Force }
         throw "Task registration failed; the previous desktop configuration was restored. This installer will not elevate privileges or create a system service. Check current-user Task Scheduler permission. $($_.Exception.Message)"
     }

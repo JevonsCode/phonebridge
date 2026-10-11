@@ -8,6 +8,7 @@ $configPath = if ($env:PHONEBRIDGE_DESKTOP_CONFIG) { [IO.Path]::GetFullPath($env
 . (Join-Path $PackageRoot 'scripts\windows\run-desktop.ps1') -LoadHelpers
 . (Join-Path $PSScriptRoot 'setup-transaction.ps1')
 . (Join-Path $PSScriptRoot 'install-mcp-launcher.ps1')
+. (Join-Path $PackageRoot 'scripts\windows\atomic-config.ps1')
 $previous = $null
 if (Test-Path -LiteralPath $configPath) { $previous = Read-PhoneBridgeDesktopConfiguration $configPath }
 $task = @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop | Where-Object TaskName -eq 'PhoneBridge Desktop')
@@ -35,7 +36,7 @@ Invoke-PhoneBridgeSetupTransaction -HadTask ($task.Count -gt 0) -Install {
 } -RestoreConfiguration {
     if ($previous) {
         $restore = "$configPath.restore-$([Guid]::NewGuid().ToString('N'))"
-        try { [IO.File]::Copy($backup, $restore, $false); if ([IO.File]::Exists($configPath)) { [IO.File]::Replace($restore, $configPath, $null) } else { [IO.File]::Move($restore, $configPath) } }
+        try { [IO.File]::Copy($backup, $restore, $false); Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $restore -ConfigurationPath $configPath }
         finally { if (Test-Path -LiteralPath $restore) { Remove-Item -LiteralPath $restore } }
     }
     elseif (Test-Path -LiteralPath $configPath) {

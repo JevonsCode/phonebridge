@@ -21,4 +21,3 @@ flutter:
     - family: NotoSansSC
       fonts:
         - asset: assets/fonts/NotoSansSC.ttf
-

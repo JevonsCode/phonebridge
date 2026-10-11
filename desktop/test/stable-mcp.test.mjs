@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, copyFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, copyFile, symlink, realpath } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, networkInterfaces } from 'node:os';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { windowsIdentity, privateIPv4 } from '../network.mjs';
 import { createMcpConfiguration } from '../server.mjs';
@@ -17,7 +17,7 @@ const uid = process.getuid?.();
 const powershell = join(process.env.SystemRoot ?? '', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const sessions = new WeakMap();
 async function fixture(t) {
-  const state = await mkdtemp(join(tmpdir(), 'phonebridge-mcp-'));
+  const state = await realpath(await mkdtemp(join(tmpdir(), 'phonebridge-mcp-')));
   sessions.set(t, []);
   t.after(async () => {
     for (const session of sessions.get(t)) { session.child.stdin.end(); try { await boundedExit(session); } finally { if (session.child.exitCode === null) session.child.kill(); } }
@@ -32,7 +32,14 @@ async function fixture(t) {
     else execFileSync(join(process.env.SystemRoot, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'), ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', '/out:' + launcher, join(root, 'desktop', 'McpLauncher.cs')], { windowsHide: true });
   } else launcher = await installMcpLauncher(state, uid);
   const config = { schema: windows ? 'phonebridge-desktop-v1' : 'phonebridge-macos-desktop-v1', ...(windows ? { ownerSid: windowsIdentity() } : { ownerUid: uid }), projectRoot: root, nodePath: process.execPath, hostAddress: '192.168.1.2', port: 8767, mcpLauncherPath: launcher };
-  const save = value => writeFile(configFile, JSON.stringify(value), { mode: 0o600 });
+  const save = async value => {
+    await writeFile(configFile, JSON.stringify(value), { mode: 0o600 });
+    if (windows && process.env.CI) {
+      const probe = `param($Path) $i=[Security.Principal.WindowsIdentity]::GetCurrent(); $owner=[IO.File]::GetAccessControl($Path).GetOwner([Security.Principal.SecurityIdentifier]).Value; @{fileOwnerMatchesUser=($owner -eq $i.User.Value);fileOwnerMatchesDefaultTokenOwner=($owner -eq $i.Owner.Value);defaultOwnerIsUser=($i.Owner.Value -eq $i.User.Value)} | ConvertTo-Json -Compress`;
+      const probeFile = join(state, 'owner-probe.ps1'); await writeFile(probeFile, probe);
+      t.diagnostic('Windows fixture ownership: ' + execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', probeFile, configFile], { encoding: 'utf8', windowsHide: true }).trim());
+    }
+  };
   return { state, launcher, configFile, config, save };
 }
 function session(t, launcher) {
@@ -41,11 +48,11 @@ function session(t, launcher) {
   const pending = new Map();
   const lines = createInterface({ input: child.stdout });
   lines.on('line', line => { let value; try { value = JSON.parse(line); } catch { assert.fail('Unexpected stdout: ' + line); } pending.get(value.id)?.(value); });
-  const exit = new Promise(resolve => child.once('exit', (code, signal) => resolve({ code, signal })));
+  const exit = new Promise(resolve => child.once('close', (code, signal) => resolve({ code, signal })));
   sessions.get(t).push({child,exit});
   return { child, stderr: () => stderr, exit, async request(value) {
     let timer;
-    try { return await Promise.race([new Promise(resolve => { pending.set(value.id, resolve); child.stdin.write(JSON.stringify(value) + '\n'); }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('MCP response timed out; ' + stderr)), 10000); })]); }
+    try { return await Promise.race([new Promise(resolve => { pending.set(value.id, resolve); child.stdin.write(JSON.stringify(value) + '\n'); }), exit.then(({code,signal}) => { throw new Error(`MCP exited before response (code=${code}, signal=${signal}); ${stderr}`); }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('MCP response timed out; ' + stderr)), 10000); })]); }
     finally { clearTimeout(timer); pending.delete(value.id); }
   } };
 }
@@ -56,6 +63,32 @@ async function fakePackage(state, name) {
   if (!windows) { await mkdir(join(folder, 'runtime')); await copyFile(process.execPath, join(folder, 'runtime', 'node')); await mkdir(join(folder, 'desktop', 'macos'), { recursive: true }); for (const name of ['mcp-bootstrap.mjs','network.mjs']) await copyFile(join(root,'desktop',name),join(folder,'desktop',name)); for(const name of ['lifecycle.mjs','mcp-launcher.mjs'])await copyFile(join(root,'desktop','macos',name),join(folder,'desktop','macos',name)); }
   return folder;
 }
+test('bootstrap runs through a symlinked installation path instead of silently exiting', async t => {
+  const f = await fixture(t), alias = join(f.state, 'desktop-alias');
+  await symlink(join(root, 'desktop'), alias, windows ? 'junction' : 'dir');
+  const result = spawnSync(process.execPath, [join(alias, 'mcp-bootstrap.mjs'), join(f.state, 'missing-config.json')], { encoding: 'utf8', timeout: 5000, windowsHide: true });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, '');
+  assert.match(result.stderr, /PhoneBridge MCP could not start/);
+});
+test('Windows accepts only its user or exact default token owner and validates an actual newly created file', { skip: !windows }, async t => {
+  const f = await fixture(t); await f.save(f.config);
+  const script = join(f.state, 'check-owner.ps1');
+  await writeFile(script, `param($AssemblyPath,$ConfigurationPath)
+$ErrorActionPreference='Stop'
+$type=[Reflection.Assembly]::LoadFile($AssemblyPath).GetType('McpLauncher')
+$flags=[Reflection.BindingFlags]::Static -bor [Reflection.BindingFlags]::NonPublic
+$matches=$type.GetMethod('OwnerMatches',$flags)
+if (-not $matches.Invoke($null,[object[]]@('user','user','default-group'))) { throw 'Current user owner rejected.' }
+if (-not $matches.Invoke($null,[object[]]@('default-group','user','default-group'))) { throw 'Current default token owner rejected.' }
+if ($matches.Invoke($null,[object[]]@('foreign-group','user','default-group'))) { throw 'Foreign group owner accepted.' }
+if ($matches.Invoke($null,[object[]]@('foreign-user','user','default-group'))) { throw 'Foreign user owner accepted.' }
+$ownedFile=$type.GetMethod('OwnedFile',$flags)
+[void]$ownedFile.Invoke($null,[object[]]@($ConfigurationPath,[Security.Principal.WindowsIdentity]::GetCurrent().User.Value))
+'Current-token ownership checks passed.'
+`);
+  assert.match(execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, f.launcher, f.configFile], { encoding: 'utf8', windowsHide: true }), /ownership checks passed/);
+});
 test('stable launch selects current A/B target, endpoint and credential on reconnect; live A survives; stdio exit code propagates', { skip: !windows && process.platform !== 'darwin', timeout: 30000 }, async t => {
   const f = await fixture(t), a = await fakePackage(f.state, 'A'), b = await fakePackage(f.state, 'B');
   const configA = { ...f.config, projectRoot: a, nodePath: windows ? process.execPath : join(a,'runtime','node') };

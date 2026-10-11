@@ -10,6 +10,31 @@ import { localNetworks, privateIPv4, windowsIdentity } from './network.mjs';
 import { serializeNetworkChange } from './network-transaction.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// Dashboard claims are separate from the hub/service identity. Legacy clients
+// keyed claims only by config path, so an upgrade could reuse old application
+// code indefinitely. Do not kill a legacy PID: it may also own a supervisor.
+export function dashboardIdentity({ projectRoot, nodePath, source, platform = process.platform }) {
+  const canonical = path => platform === 'win32' ? resolve(path).toLowerCase() : resolve(path);
+  return createHash('sha256').update(JSON.stringify(['phonebridge-dashboard-v2', canonical(projectRoot), canonical(nodePath)]))
+    .update('\0').update(source).digest('hex');
+}
+export function dashboardStatePath(configurationPath, clientIdentity) {
+  if (!/^[a-f0-9]{64}$/.test(clientIdentity)) throw new Error('Invalid dashboard identity');
+  const absolute = resolve(configurationPath);
+  const configKey = createHash('sha256').update(absolute.toLowerCase()).digest('hex').slice(0, 12);
+  return join(dirname(absolute), `client-${configKey}-${clientIdentity}.json`);
+}
+export async function reusableDashboardUrl(record, { ownerSid, clientIdentity, expectedPid, timeout = 1500, fetchImpl = fetch }) {
+  if (!record || record.ownerSid !== ownerSid) throw new Error('Untrusted client state');
+  if (record.clientIdentity !== clientIdentity || (expectedPid !== undefined && record.pid !== expectedPid)) return null;
+  const match = typeof record.url === 'string' && /^http:\/\/127\.0\.0\.1:([1-9][0-9]{0,4})\/session\/[A-Za-z0-9_-]{32}$/.exec(record.url);
+  if (!Number.isInteger(record.pid) || record.pid <= 0 || !match || match[0] !== record.url || Number(match[1]) > 65535) throw new Error('Untrusted client state');
+  try {
+    const response = await fetchImpl(`${record.url}/ping`, { signal: AbortSignal.timeout(timeout), redirect: 'error' });
+    const data = await response.json();
+    return response.ok && data.client === 'phonebridge-desktop' && data.pid === record.pid && data.clientIdentity === clientIdentity ? record.url : null;
+  } catch { return null; }
+}
 export const configPath = () => process.env.PHONEBRIDGE_DESKTOP_CONFIG ?? join(homedir(), '.phonebridge', 'desktop.json');
 export function validateConfig(config, sid) {
   if (!config || config.schema !== 'phonebridge-desktop-v1' || config.ownerSid !== sid) throw new Error('Desktop configuration belongs to another user or has an unsupported schema.');
@@ -61,7 +86,7 @@ function safeRequest(req, authority, secret, mutation) {
     (!req.headers.origin || req.headers.origin === `http://${authority}`) &&
     (!mutation || (req.headers.origin === `http://${authority}` && req.headers['x-phonebridge-csrf'] === secret));
 }
-export async function createDashboard({ config, token, status, startService, changeNetwork, networks, language = 'en', qr, testShutdown, mcpConfiguration, allowLan, startupError }) {
+export async function createDashboard({ config, token, status, startService, changeNetwork, networks, language = 'en', qr, testShutdown, mcpConfiguration, allowLan, startupError, clientIdentity }) {
   const secret = randomBytes(24).toString('base64url');
   const base = `/session/${secret}`;
   let authority = '';
@@ -77,7 +102,7 @@ export async function createDashboard({ config, token, status, startService, cha
         send(200, html, 'text/html; charset=utf-8'); return;
       }
       if (req.method === 'GET' && req.url === `${base}/app.js`) { send(200, await readFile(join(root, 'desktop', 'dashboard.js'), 'utf8'), 'text/javascript; charset=utf-8'); return; }
-      if (req.method === 'GET' && req.url === `${base}/ping`) { send(200, { client: 'phonebridge-desktop', pid: process.pid }); return; }
+      if (req.method === 'GET' && req.url === `${base}/ping`) { send(200, { client: 'phonebridge-desktop', pid: process.pid, clientIdentity }); return; }
       if (req.method === 'GET' && req.url === `${base}/status`) {
         let current; try { current = await status(); } catch { current = { connected: false, unavailable: true }; }
         send(200, { connected: current.connected, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? hostname(), error: startupError?.() }); return;
@@ -120,15 +145,13 @@ async function main() {
     const manifest=JSON.parse((await readFile(join(root,'package-manifest.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;})).replace(/^\uFEFF/,''));
     console.log(JSON.stringify({ product: 'PhoneBridge', version: manifest.version??'0.6.0', platform:'windows-x64', runtime: process.version, existingOwnedConfig: existing, privateNetworks: localNetworks().length, dryRun: true })); return;
   }
-  const statePath = join(dirname(path), `client-${createHash('sha256').update(path.toLowerCase()).digest('hex').slice(0, 12)}.json`);
+  const clientIdentity = dashboardIdentity({ projectRoot: root, nodePath: process.execPath, source: await readFile(fileURLToPath(import.meta.url)) });
+  const statePath = dashboardStatePath(path, clientIdentity);
   await mkdir(dirname(statePath), { recursive: true });
   try {
     const existing = JSON.parse(await readFile(statePath, 'utf8'));
-    const url = new URL(existing.url);
-    if (existing.ownerSid !== sid || url.protocol !== 'http:' || url.hostname !== '127.0.0.1' || !/^\/session\/[A-Za-z0-9_-]{32}$/.test(url.pathname)) throw new Error('Untrusted client state');
-    const probe = await fetch(`${url.href}/ping`, { signal: AbortSignal.timeout(1500), redirect: 'error' });
-    const data = await probe.json();
-    if (probe.ok && data.client === 'phonebridge-desktop' && data.pid === existing.pid) { announceReady(args,url.href,{reusedClient:true}); return; }
+    const url = await reusableDashboardUrl(existing, { ownerSid: sid, clientIdentity });
+    if (url) { announceReady(args,url,{reusedClient:true}); return; }
   } catch (e) { if (e.message === 'Untrusted client state') throw e; }
   // An exclusive claim handles concurrent launch; dead claims are recovered without touching a live client.
   const claimPath = statePath + '.lock';
@@ -152,7 +175,14 @@ async function main() {
       }
       throw err;
     }
-    for (let attempt = 0; attempt < 50; attempt++) { await new Promise(r => setTimeout(r, 200)); try { const record = JSON.parse(await readFile(statePath, 'utf8')); const u = new URL(record.url); if (record.ownerSid === sid && u.protocol === 'http:' && u.hostname === '127.0.0.1' && /^\/session\/[A-Za-z0-9_-]{32}$/.test(u.pathname) && record.pid === pid) { const p = await fetch(`${u.href}/ping`, { signal: AbortSignal.timeout(1000),redirect:'error' }); const data = await p.json(); if (p.ok && data.client === 'phonebridge-desktop' && data.pid === pid) { announceReady(args,u.href,{reusedClient:true}); return; } } } catch {} }
+    for (let attempt = 0; attempt < 50; attempt++) {
+      await new Promise(r => setTimeout(r, 200));
+      try {
+        const record = JSON.parse(await readFile(statePath, 'utf8'));
+        const url = await reusableDashboardUrl(record, { ownerSid: sid, clientIdentity, expectedPid: pid, timeout: 1000 });
+        if (url) { announceReady(args,url,{reusedClient:true}); return; }
+      } catch {}
+    }
     throw new Error('PhoneBridge is already starting. Please try again.');
   }
   let supervisor, dashboard, stop;
@@ -201,7 +231,7 @@ async function main() {
         });
       } finally { requestingLan=false; }
     };
-    dashboard = await createDashboard({ config, token, networks: localNetworks, status: () => authenticatedStatus(config, token), startService: startWithFeedback, startupError:()=>startupError?.message,
+    dashboard = await createDashboard({ config, token, clientIdentity, networks: localNetworks, status: () => authenticatedStatus(config, token), startService: startWithFeedback, startupError:()=>startupError?.message,
       changeNetwork: serializeNetworkChange(async address => {
         if(startupPromise)throw new Error('The desktop service is starting. Please wait before changing networks.');
         if (!privateIPv4(address) || !localNetworks().some(a => a.address === address)) throw new Error('Select an active private network.');
@@ -217,7 +247,7 @@ async function main() {
       qr: () => QRCode.toDataURL(pairingUri(`ws://${config.hostAddress}:${config.port}/device`, token), { width: 360, margin: 3 }),
       mcpConfiguration:()=>createMcpConfiguration(config,savedCredentialFile),allowLan,
       testShutdown: process.env.PHONEBRIDGE_DESKTOP_TEST === '1' ? () => void stop() : undefined });
-    await writeFile(statePath, JSON.stringify({ ownerSid: sid, pid: process.pid, url: dashboard.url }));
+    await writeFile(statePath, JSON.stringify({ ownerSid: sid, pid: process.pid, url: dashboard.url, clientIdentity }));
     // The private URL is emitted only to an explicitly requested native-child pipe.
     announceReady(args,dashboard.url,{});
     let stopping = false; stop = async () => { if (stopping) return; stopping = true; await dashboard?.close(); await startupPromise?.catch(()=>{}); await supervisor?.close(); await unlink(statePath).catch(() => {}); await unlink(claimPath).catch(() => {}); };

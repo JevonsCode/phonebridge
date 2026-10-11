@@ -30,4 +30,3 @@
 	<string>NSApplication</string>
 <key>NSLocalNetworkUsageDescription</key><string>PhoneBridge connects to your paired phone on your private network.</string></dict>
 </plist>
-

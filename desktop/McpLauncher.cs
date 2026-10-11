@@ -24,9 +24,13 @@ internal static class McpLauncher {
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
     static string Text(Dictionary<string,object> config, string key) { object value; if (!config.TryGetValue(key,out value) || !(value is string)) throw new Exception("Invalid desktop configuration."); return (string)value; }
     static string PathValue(string path) { if (!Path.IsPathRooted(path) || path.IndexOfAny(new[]{'"','\r','\n','\0'})>=0 || Path.GetFullPath(path)!=path) throw new Exception("Invalid desktop path."); return path; }
+    static bool OwnerMatches(string owner, string user, string tokenOwner) { return owner==user || owner==tokenOwner; }
     static void OwnedFile(string path, string sid) {
         var file = new FileInfo(path);
-        if (!file.Exists || (file.Attributes & FileAttributes.ReparsePoint)!=0 || file.Length>32768 || File.GetAccessControl(path).GetOwner(typeof(SecurityIdentifier)).Value!=sid) throw new Exception("Missing, invalid or foreign desktop configuration.");
+        // Elevated Windows tokens can create files owned by their default owner
+        // group. Match that exact token owner as well as the user; never accept
+        // arbitrary group membership. The JSON ownerSid must still match User.
+        if (!file.Exists || (file.Attributes & FileAttributes.ReparsePoint)!=0 || file.Length>32768 || !OwnerMatches(File.GetAccessControl(path).GetOwner(typeof(SecurityIdentifier)).Value,sid,WindowsIdentity.GetCurrent().Owner.Value)) throw new Exception("Missing, invalid or foreign desktop configuration.");
     }
     static bool PrivateAddress(string value) {
         string[] pieces=value.Split('.'); if(pieces.Length!=4)return false;
@@ -35,19 +39,26 @@ internal static class McpLauncher {
         return octets[0]==10 || (octets[0]==172 && octets[1]>=16 && octets[1]<=31) || (octets[0]==192 && octets[1]==168);
     }
     static int Main(string[] args) {
+        string stage="arguments";
         try {
             if(args.Length==1 && args[0]=="--launcher-version") { Console.WriteLine(Identity); return 0; }
             if(args.Length!=0)throw new Exception("The MCP bootstrap does not accept arguments.");
             string state=Directory.GetParent(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)).FullName;
             string configPath=Path.Combine(state,"desktop.json"),sid=WindowsIdentity.GetCurrent().User.Value;
-            OwnedFile(configPath,sid);
+            stage="configuration-file"; OwnedFile(configPath,sid);
+            stage="configuration-json";
             var config=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(configPath));
+            stage="configuration-user";
             if(Text(config,"schema")!="phonebridge-desktop-v1" || Text(config,"ownerSid")!=sid)throw new Exception("Unsupported desktop configuration or another owner.");
+            stage="configuration-paths";
             string root=PathValue(Text(config,"projectRoot")),node=PathValue(Text(config,"nodePath")),host=Text(config,"hostAddress");
+            stage="configuration-endpoint";
             object rawPort; if(!config.TryGetValue("port",out rawPort) || !(rawPort is int) || (int)rawPort<1 || (int)rawPort>65535 || !PrivateAddress(host))throw new Exception("Invalid desktop endpoint.");
             string entry=Path.Combine(root,"bridge","dist","mcp.js");
+            stage="runtime-files";
             if(!File.Exists(node) || !File.Exists(entry))throw new Exception("The installed MCP runtime is missing. Reinstall PhoneBridge.");
-            string credential=config.ContainsKey("credentialFile")?PathValue(Text(config,"credentialFile")):Path.Combine(state,"pairing.json");
+            stage="credential-path"; string credential=config.ContainsKey("credentialFile")?PathValue(Text(config,"credentialFile")):Path.Combine(state,"pairing.json");
+            stage="environment";
             var environment=new SortedDictionary<string,string>(StringComparer.OrdinalIgnoreCase);
             foreach(DictionaryEntry item in Environment.GetEnvironmentVariables()) environment[(string)item.Key]=(string)item.Value;
             environment.Remove("PHONEBRIDGE_TOKEN"); environment.Remove("NODE_OPTIONS"); environment.Remove("NODE_PATH");
@@ -58,10 +69,11 @@ internal static class McpLauncher {
             IntPtr env=Marshal.StringToHGlobalUni(block.ToString());
             var startup=new StartupInfo {cb=Marshal.SizeOf(typeof(StartupInfo)),flags=0x100,stdin=GetStdHandle(-10),stdout=GetStdHandle(-11),stderr=GetStdHandle(-12)};
             ProcessInformation child;
+            stage="runtime-start";
             try { if(!CreateProcess(node,new StringBuilder("\""+node+"\" \""+entry+"\""),IntPtr.Zero,IntPtr.Zero,true,0x08000400,env,root,ref startup,out child))throw new Exception("Cannot start the installed MCP runtime."); }
             finally { Marshal.FreeHGlobal(env); }
             try { WaitForSingleObject(child.process,0xffffffff); uint code;if(!GetExitCodeProcess(child.process,out code))return 1;return unchecked((int)code); }
             finally {CloseHandle(child.thread);CloseHandle(child.process);}
-        } catch(Exception) { Console.Error.WriteLine("PhoneBridge MCP could not start. Check the current-user desktop installation and configuration.");return 1; }
+        } catch(Exception) { Console.Error.WriteLine("PhoneBridge MCP could not start. Check the current-user desktop installation and configuration. Stage: "+stage+".");return 1; }
     }
 }

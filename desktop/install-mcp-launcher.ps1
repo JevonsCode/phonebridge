@@ -1,9 +1,10 @@
 #requires -Version 5.1
 function Assert-PhoneBridgeMcpBootstrap {
     param([Parameter(Mandatory)][string]$Path)
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $sid = $identity.User.Value
     $owner = [IO.File]::GetAccessControl($Path).GetOwner([Security.Principal.SecurityIdentifier]).Value
-    if ($owner -ne $sid) { throw 'The stable MCP launcher belongs to another user.' }
+    if ($owner -ne $sid -and $owner -ne $identity.Owner.Value) { throw 'The stable MCP launcher belongs to another user.' }
     $start = New-Object Diagnostics.ProcessStartInfo
     $start.FileName = $Path
     $start.Arguments = '--launcher-version'
@@ -27,8 +28,9 @@ function Install-PhoneBridgeMcpLauncher {
     $directory = Join-Path ([IO.Path]::GetFullPath($StateDirectory)) 'bin'
     [void][IO.Directory]::CreateDirectory($directory)
     if ((Get-Item -LiteralPath $directory).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The stable MCP directory must not be a link.' }
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    if ([IO.Directory]::GetAccessControl($directory).GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $sid) { throw 'The stable MCP directory belongs to another user.' }
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $owner = [IO.Directory]::GetAccessControl($directory).GetOwner([Security.Principal.SecurityIdentifier]).Value
+    if ($owner -ne $identity.User.Value -and $owner -ne $identity.Owner.Value) { throw 'The stable MCP directory belongs to another user.' }
     $destination = Join-Path $directory 'PhoneBridgeMcp.exe'
     if (Test-Path -LiteralPath $destination) {
         if ((Get-Item -LiteralPath $destination).Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'The stable MCP launcher must not be a link.' }
