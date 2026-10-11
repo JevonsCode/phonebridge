@@ -58,6 +58,9 @@ export PATH="$node_root/bin:$PATH"
 
 # Compile from checked-in source; copy only build output and locked production dependencies.
 (cd "$project/bridge" && "$node" "$npm" ci --ignore-scripts && "$node" "$npm" run build)
+(cd "$project/desktop_app" && flutter build macos --release --build-name "$version")
+mkdir -p "$work/image"
+cp -R "$project/desktop_app/build/macos/Build/Products/Release/PhoneBridge.app" "$work/image/PhoneBridge.app"
 app="$work/image/PhoneBridge.app"
 resources="$app/Contents/Resources"
 mkdir -p "$app/Contents/MacOS" "$resources/runtime" "$resources/bridge" "$resources/desktop/macos" "$resources/desktop/test"
@@ -66,56 +69,20 @@ cp "$node_root/LICENSE" "$resources/runtime/LICENSE"
 cp -R "$project/bridge/dist" "$resources/bridge/dist"
 cp "$project/bridge/package.json" "$project/bridge/package-lock.json" "$resources/bridge/"
 (cd "$resources/bridge" && "$node" "$npm" ci --omit=dev --ignore-scripts)
-for name in server.mjs network.mjs network-transaction.mjs dashboard.html dashboard.js; do
+for name in server.mjs network.mjs network-transaction.mjs dashboard.html dashboard.js mcp-bootstrap.mjs; do
   cp "$project/desktop/$name" "$resources/desktop/$name"
 done
-for name in server.mjs service.mjs lifecycle.mjs; do
+for name in server.mjs service.mjs lifecycle.mjs phonebridge-mcp.sh mcp-launcher.mjs; do
   cp "$project/desktop/macos/$name" "$resources/desktop/macos/$name"
 done
 # The isolated suite is part of the headless support command, not a development runtime.
 cp "$project/desktop/test/macos.test.mjs" "$resources/desktop/test/macos.test.mjs"
 cp "$project/LICENSE" "$resources/LICENSE"
-cp "$project/desktop/macos/Info.plist" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$app/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $version" "$app/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIconFile PhoneBridge.icns" "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
-xcrun swiftc -swift-version 5 -O -target "$swift_arch-apple-macos13.0" -framework AppKit \
-  "$project/desktop/macos/PhoneBridge.swift" -o "$app/Contents/MacOS/PhoneBridge"
-
-# Deterministic vector-derived icon; no credentials, screenshots or local user files.
-mkdir -p "$work/PhoneBridge.iconset"
-cat > "$work/icon.swift" <<'SWIFT'
-import AppKit
-import Foundation
-let directory = CommandLine.arguments[1]
-for size in [16, 32, 128, 256, 512] {
-    for scale in [1, 2] {
-        let pixels = size * scale
-        let image = NSImage(size: NSSize(width: CGFloat(pixels), height: CGFloat(pixels)))
-        image.lockFocus()
-        let p = CGFloat(pixels)
-        NSColor(calibratedRed: 0.08, green: 0.27, blue: 0.38, alpha: 1).setFill()
-        NSBezierPath(roundedRect: NSRect(x: 0, y: 0, width: p, height: p), xRadius: p * 0.22, yRadius: p * 0.22).fill()
-        NSColor.white.setStroke()
-        let phone = NSBezierPath(roundedRect: NSRect(x: p * 0.3, y: p * 0.16, width: p * 0.4, height: p * 0.68), xRadius: p * 0.07, yRadius: p * 0.07)
-        phone.lineWidth = p * 0.045
-        phone.stroke()
-        NSColor(calibratedRed: 0.35, green: 0.88, blue: 0.73, alpha: 1).setStroke()
-        let check = NSBezierPath()
-        check.move(to: NSPoint(x: p * 0.39, y: p * 0.51))
-        check.line(to: NSPoint(x: p * 0.48, y: p * 0.42))
-        check.line(to: NSPoint(x: p * 0.63, y: p * 0.61))
-        check.lineWidth = p * 0.045
-        check.stroke()
-        image.unlockFocus()
-        guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff), let png = bitmap.representation(using: .png, properties: [:]) else { fatalError("Icon render failed") }
-        let suffix = scale == 2 ? "@2x" : ""
-        try png.write(to: URL(fileURLWithPath: "\(directory)/icon_\(size)x\(size)\(suffix).png"))
-    }
-}
-SWIFT
-xcrun swift "$work/icon.swift" "$work/PhoneBridge.iconset"
-iconutil -c icns "$work/PhoneBridge.iconset" -o "$resources/PhoneBridge.icns"
+iconutil -c icns "$project/assets/brand/PhoneBridge.iconset" -o "$resources/PhoneBridge.icns"
 "$node" - "$resources/package-manifest.json" "$version" "$arch" "$expected" "$source/$archive" <<'NODE'
 const fs = require('node:fs');
 const [, , path, version, arch, hash, source] = process.argv;
@@ -123,7 +90,7 @@ fs.writeFileSync(path, JSON.stringify({product:'PhoneBridge',version,platform:`d
 NODE
 chmod 755 "$resources/runtime/node" "$app/Contents/MacOS/PhoneBridge"
 codesign --force --sign - "$resources/runtime/node"
-codesign --force --sign - "$app"
+codesign --force --deep --sign - "$app"
 codesign --verify --strict --verbose=2 "$app"
 codesign --verify --strict "$resources/runtime/node"
 file "$app/Contents/MacOS/PhoneBridge" "$resources/runtime/node"

@@ -1,10 +1,10 @@
 # macOS client preview
 
-This PR adds a native PhoneBridge window for macOS 13 or later and an independent window for Windows. Mac test packages are CI artifacts, not a formal release. The public 0.6.0 downloads and Android APK remain unchanged.
+This PR adds a Flutter PhoneBridge window for macOS 13 or later and Windows, using the same visual style and logo as Android. Mac test packages are CI artifacts, not a formal release. The public 0.6.0 downloads and Android APK remain unchanged.
 
 ## Download and open
 
-1. Open the PR's **Checks → macOS client preview → Details**. On the run summary, download `phonebridge-macos-arm64-preview` for Apple Silicon (M1 or later), or `phonebridge-macos-x64-preview` for an Intel Mac. GitHub may require sign-in to download artifacts; they expire after 14 days.
+1. Open the PR's **Checks → Flutter desktop client preview → Details**. On the run summary, download `phonebridge-macos-arm64-preview` for Apple Silicon (M1 or later), or `phonebridge-macos-x64-preview` for an Intel Mac. GitHub may require sign-in to download artifacts; they expire after 14 days.
 2. Extract the artifact ZIP. It contains a DMG, an alternative App ZIP, and SHA256 sidecars. In that folder, run `shasum -a 256 -c phonebridge-0.6.1-macos-arm64.dmg.sha256` (replace `arm64` with `x64` on Intel). Open the matching DMG and drag **PhoneBridge.app** into **Applications**. `~/Applications` also works. Do not run the persistent service directly from the mounted DMG or Downloads.
 3. Open **PhoneBridge**. The window shows connection status, the selected network, a pairing QR and **Copy MCP configuration**. Keep the Android phone on the same reachable private Wi-Fi, scan once in PhoneBridge, and enable the Android permissions on the phone. Later openings retain this pairing.
 
@@ -28,7 +28,7 @@ The command verifies the owned plist and the loaded executable/arguments before 
 
 ## Physical Mac checklist
 
-CI compiles and executes the matching native launcher, isolated lifecycle tests, bundled diagnostics/self-test, code-signature checks and read-only DMG checks. These checks do not prove real phone pairing, the system's approval prompts or the physical GUI experience.
+CI compiles and executes the matching Flutter desktop application, isolated lifecycle tests, bundled diagnostics/self-test, code-signature checks and read-only DMG checks. These checks do not prove real phone pairing, the system's approval prompts or the physical GUI experience.
 
 - Copy the App to Applications; opening presents a visible window with loading or an actionable error.
 - Select the expected Wi-Fi/Ethernet interface; QR pairs the phone once. Reopen and confirm the original phone pairing remains.
@@ -59,4 +59,4 @@ bash scripts/package-macos.sh --arch arm64 --output /absolute/output/folder
 # Intel: --arch x64
 ```
 
-The script checks the pinned official Node 22.23.3 archive against the official SHA256 list before copying the runtime, builds locked production dependencies, compiles AppKit for macOS 13, and signs the App locally with an ad-hoc signature.
+The script checks the pinned official Node 22.23.3 archive against the official SHA256 list before copying the runtime, builds locked production dependencies, builds Flutter for macOS 13, and signs the App locally with an ad-hoc signature.

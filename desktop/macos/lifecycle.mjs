@@ -4,6 +4,7 @@ import { networkInterfaces, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { privateIPv4, selectNetworks } from '../network.mjs';
+import { installMcpLauncher } from './mcp-launcher.mjs';
 
 export const agentLabel = 'dev.phonebridge.desktop';
 export const macConfigPath = () => process.env.PHONEBRIDGE_DESKTOP_CONFIG ?? join(homedir(), '.phonebridge', 'desktop-macos.json');
@@ -97,6 +98,8 @@ export async function installService({ config, previous, configFile, home = home
   const loaded = run(['print', job]);
   if (loaded.status === 0 && (!oldPlist || !ownsLoadedJob(loaded.stdout,previous??config,configFile,plistPath))) throw new Error('A foreign service uses the PhoneBridge name. It was preserved.');
   await privateDirectory(join(home,'.phonebridge'),uid);
+  const mcpLauncherPath = await installMcpLauncher(dirname(configFile), uid);
+  config = { ...config, mcpLauncherPath };
   for (const name of ['macos-service.stdout.log','macos-service.stderr.log']) await privateLog(join(home,'.phonebridge',name),uid);
   const nextPlist = launchAgent({ ...config, configFile }, home);
   const oldConfigText = await readPrivateFile(configFile, uid).catch(e => { if (e.code === 'ENOENT') return undefined; throw e; });

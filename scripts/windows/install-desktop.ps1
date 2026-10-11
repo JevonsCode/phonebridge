@@ -44,6 +44,9 @@ try {
 if ($existing.Count -gt 0) { Assert-PhoneBridgeTaskOwnership $existing[0] $oldConfig $ConfigurationPath }
 $arguments = Get-PhoneBridgeTaskArguments $launcher $ConfigurationPath
 $config = [ordered]@{ schema = 'phonebridge-desktop-v1'; ownerSid = $sid; projectRoot = $ProjectRoot; nodePath = $NodePath; hostAddress = $HostAddress; port = $Port; launcherPath = $launcher; powershellPath = $powershell }
+$stableMcp = Join-Path (Split-Path $ConfigurationPath -Parent) 'bin\PhoneBridgeMcp.exe'
+if (Test-Path -LiteralPath $stableMcp -PathType Leaf) { $config.mcpLauncherPath = $stableMcp }
+if ($oldConfig -and $oldConfig.PSObject.Properties.Name -contains 'credentialFile') { $config.credentialFile = $oldConfig.credentialFile }
 $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments -WorkingDirectory $ProjectRoot
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $sid
 $principal = New-ScheduledTaskPrincipal -UserId $sid -LogonType Interactive -RunLevel Limited
@@ -66,11 +69,12 @@ $temporaryConfig = "$ConfigurationPath.tmp-$([Guid]::NewGuid().ToString('N'))"
 try {
     $json = $config | ConvertTo-Json
     [IO.File]::WriteAllText($temporaryConfig, $json, (New-Object Text.UTF8Encoding($false)))
-    Move-Item -LiteralPath $temporaryConfig -Destination $ConfigurationPath -Force
+    if ([IO.File]::Exists($ConfigurationPath)) { [IO.File]::Replace($temporaryConfig, $ConfigurationPath, $null) }
+    else { [IO.File]::Move($temporaryConfig, $ConfigurationPath) }
     try {
         [void](Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -InputObject $task -Force -ErrorAction Stop)
     } catch {
-        if ($backup) { Copy-Item -LiteralPath $backup -Destination $ConfigurationPath -Force }
+        if ($backup) { [IO.File]::Copy($backup, $temporaryConfig, $false); [IO.File]::Replace($temporaryConfig, $ConfigurationPath, $null) }
         else { Remove-Item -LiteralPath $ConfigurationPath -Force }
         throw "Task registration failed; the previous desktop configuration was restored. This installer will not elevate privileges or create a system service. Check current-user Task Scheduler permission. $($_.Exception.Message)"
     }

@@ -1,10 +1,11 @@
 import http from 'node:http';
 import { randomBytes, createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir, unlink, lstat, link } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { homedir, hostname } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
+import { lstatSync } from 'node:fs';
 import { localNetworks, privateIPv4, windowsIdentity } from './network.mjs';
 import { serializeNetworkChange } from './network-transaction.mjs';
 
@@ -29,7 +30,17 @@ export async function authenticatedStatus(config, token) {
   if (typeof status.connected !== 'boolean') throw new Error('Unexpected endpoint identity.');
   return status;
 }
-export function createMcpConfiguration(config, credentialFile) {
+export function createMcpConfiguration(config, credentialFile, { configFile, platform = config.schema === 'phonebridge-macos-desktop-v1' ? 'darwin' : 'win32' } = {}) {
+  const activeConfig = configFile ?? process.env.PHONEBRIDGE_DESKTOP_CONFIG ?? join(homedir(), '.phonebridge', platform === 'darwin' ? 'desktop-macos.json' : 'desktop.json');
+  const stable = join(dirname(resolve(activeConfig)), 'bin', platform === 'darwin' ? 'phonebridge-mcp' : 'PhoneBridgeMcp.exe');
+  const installedCredential = config.credentialFile ?? join(dirname(resolve(activeConfig)), 'pairing.json');
+  const canonicalName = platform === 'darwin' ? 'desktop-macos.json' : 'desktop.json';
+  if (basename(activeConfig) === canonicalName && config.mcpLauncherPath === stable && resolve(credentialFile) === resolve(installedCredential)) {
+    try {
+      const info = lstatSync(stable);
+      if (info.isFile() && !info.isSymbolicLink()) return { mcpServers: { phonebridge: platform === 'darwin' ? { command: '/bin/sh', args: [stable] } : { command: stable, args: [] } } };
+    } catch { /* Portable/development use retains the explicit direct-runtime configuration. */ }
+  }
   return { mcpServers: { phonebridge: { command: config.nodePath,
     args: [join(config.projectRoot,'bridge','dist','mcp.js')],
     env: { PHONEBRIDGE_URL:`http://${config.hostAddress}:${config.port}`,PHONEBRIDGE_CREDENTIAL_FILE:resolve(credentialFile) }
@@ -154,7 +165,8 @@ async function main() {
     const { credentialPath, loadOrCreateSavedToken } = await import('../bridge/dist/credentials.js');
     const { pairingUri } = await import('../bridge/dist/pairing.js');
     const { default: QRCode } = await import('../bridge/node_modules/qrcode/lib/index.js');
-    const token = await loadOrCreateSavedToken(credentialPath());
+    const savedCredentialFile = config.credentialFile ?? credentialPath();
+    const token = await loadOrCreateSavedToken(savedCredentialFile);
     const start = async () => {
       try { await authenticatedStatus(config, token); return; } catch {}
       if (!localNetworks().some(a => a.address === config.hostAddress) && !(process.env.PHONEBRIDGE_DESKTOP_TEST === '1' && config.hostAddress === '127.0.0.1')) throw new Error('The saved network is unavailable. Select your current private network.');
@@ -203,7 +215,7 @@ async function main() {
         startupError=undefined;
       }), language: process.env.LANG?.startsWith('zh') || spawnSync(config.powershellPath, ['-NoProfile', '-Command', '(Get-UICulture).Name'], { encoding: 'utf8', windowsHide: true,timeout:10000 }).stdout?.trim().startsWith('zh') ? 'zh' : 'en',
       qr: () => QRCode.toDataURL(pairingUri(`ws://${config.hostAddress}:${config.port}/device`, token), { width: 360, margin: 3 }),
-      mcpConfiguration:()=>createMcpConfiguration(config,credentialPath()),allowLan,
+      mcpConfiguration:()=>createMcpConfiguration(config,savedCredentialFile),allowLan,
       testShutdown: process.env.PHONEBRIDGE_DESKTOP_TEST === '1' ? () => void stop() : undefined });
     await writeFile(statePath, JSON.stringify({ ownerSid: sid, pid: process.pid, url: dashboard.url }));
     // The private URL is emitted only to an explicitly requested native-child pipe.

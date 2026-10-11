@@ -7,6 +7,7 @@ $PackageRoot = (Resolve-Path -LiteralPath $PackageRoot).ProviderPath
 $configPath = if ($env:PHONEBRIDGE_DESKTOP_CONFIG) { [IO.Path]::GetFullPath($env:PHONEBRIDGE_DESKTOP_CONFIG) } else { Join-Path ([Environment]::GetFolderPath('UserProfile')) '.phonebridge\desktop.json' }
 . (Join-Path $PackageRoot 'scripts\windows\run-desktop.ps1') -LoadHelpers
 . (Join-Path $PSScriptRoot 'setup-transaction.ps1')
+. (Join-Path $PSScriptRoot 'install-mcp-launcher.ps1')
 $previous = $null
 if (Test-Path -LiteralPath $configPath) { $previous = Read-PhoneBridgeDesktopConfiguration $configPath }
 $task = @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop | Where-Object TaskName -eq 'PhoneBridge Desktop')
@@ -17,6 +18,9 @@ if ($ValidateOnly) { [pscustomobject]@{ DryRun=$true; ExistingOwnedConfig=($null
 $backup = "$configPath.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss-fffffff')"
 if ($previous) { Copy-Item -LiteralPath $configPath -Destination $backup }
 if ($task.Count -gt 0) { Export-ScheduledTask -TaskName 'PhoneBridge Desktop' -TaskPath '\' | Set-Content -LiteralPath "$backup.task.xml" -Encoding UTF8 }
+# Publish before changing the active configuration. A failure preserves the old
+# target; the immutable bootstrap remains safe through subsequent rollback.
+[void](Install-PhoneBridgeMcpLauncher -Source (Join-Path $PackageRoot 'PhoneBridgeMcp.exe') -StateDirectory (Split-Path $configPath -Parent))
 Invoke-PhoneBridgeSetupTransaction -HadTask ($task.Count -gt 0) -Install {
     & (Join-Path $PackageRoot 'scripts\windows\install-desktop.ps1') -ProjectRoot $PackageRoot -NodePath (Join-Path $PackageRoot 'runtime\node.exe') -HostAddress $address -Port $(if ($previous) { $previous.port } else { 8767 }) -ConfigurationPath $configPath
 } -CreateShortcut {
@@ -29,7 +33,11 @@ Invoke-PhoneBridgeSetupTransaction -HadTask ($task.Count -gt 0) -Install {
 } -RestoreTask {
     [void](Register-ScheduledTask -TaskName 'PhoneBridge Desktop' -TaskPath '\' -Xml (Get-Content -LiteralPath "$backup.task.xml" -Raw) -Force)
 } -RestoreConfiguration {
-    if ($previous) { Copy-Item -LiteralPath $backup -Destination $configPath -Force }
+    if ($previous) {
+        $restore = "$configPath.restore-$([Guid]::NewGuid().ToString('N'))"
+        try { [IO.File]::Copy($backup, $restore, $false); if ([IO.File]::Exists($configPath)) { [IO.File]::Replace($restore, $configPath, $null) } else { [IO.File]::Move($restore, $configPath) } }
+        finally { if (Test-Path -LiteralPath $restore) { Remove-Item -LiteralPath $restore } }
+    }
     elseif (Test-Path -LiteralPath $configPath) {
         $newConfig = Read-PhoneBridgeDesktopConfiguration $configPath
         if ($newConfig.projectRoot -ne $PackageRoot) { throw 'Cannot remove configuration whose installation ownership changed.' }

@@ -40,7 +40,7 @@ Windows 10/11 用户可以直接下载安装程序，不需要装 Node.js、输�
 
 Windows 客户端内置运行环境，登录后自动启动；也提供可选 ZIP 便携包。可以直接把这句话发给 AI：**按照 https://github.com/JevonsCode/phonebridge/blob/main/docs/agent-install.md 安装 PhoneBridge，连接我的安卓手机并配置 MCP。**
 
-本分支增加 Windows 独立窗口和 macOS 原生客户端预览，打开后直接显示连接状态、配对码与「复制 MCP 配置」。Mac 提供 Apple Silicon 和 Intel 测试包，内置运行环境，复制到 Applications 即可打开；首次配对后登录自动启动，关闭窗口后服务继续运行。Mac 需要 macOS 13+，测试包下载和真机检查步骤见 [Mac 测试说明](docs/macos-testing.md)。这些包来自 PR 的 CI 构建，尚未替换上面的 0.6.0 正式下载入口。
+本分支增加 与手机端统一样式的 Windows / macOS Flutter 客户端预览，打开后直接显示连接状态、配对码与「复制 MCP 配置」。Mac 提供 Apple Silicon 和 Intel 测试包，内置运行环境，复制到 Applications 即可打开；首次配对后登录自动启动，关闭窗口后服务继续运行。Mac 需要 macOS 13+，测试包下载和真机检查步骤见 [Mac 测试说明](docs/macos-testing.md)。这些包来自 PR 的 CI 构建，尚未替换上面的 0.6.0 正式下载入口。
 
 预览 APK 使用 **debug 签名**。部分安卓系统安装外部 APK 后需要在应用信息页允许「受限设置」，再开启无障碍服务。
 

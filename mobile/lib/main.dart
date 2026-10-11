@@ -663,12 +663,18 @@ class _ConnectionPageState extends State<ConnectionPage> {
           onTap: () => showLicensePage(
             context: context,
             applicationName: 'PhoneBridge',
+            applicationIcon: Image.asset(
+              'assets/brand/logo.png',
+              width: 64,
+              height: 64,
+            ),
             applicationLegalese: 'MIT License',
           ),
         ),
       ],
     ),
     const SizedBox(height: 28),
+    Center(child: Image.asset('assets/brand/logo.png', width: 64, height: 64)),
     Center(
       child: Text(
         tr(context, 'PhoneBridge'),

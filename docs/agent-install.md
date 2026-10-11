@@ -70,26 +70,28 @@ The helper removes only local, inbound Windows-generated `TCP Query User{...}` b
 
 Use a trusted **Private** home/work network. This button does not change the network category or enable Public-network access. Retry the phone connection and verify its connected state after approval; local `/status` success alone does not prove LAN reachability. It does not change Android permissions or pairing identity. Agents may run `desktop/allow-lan.ps1 -ConfigurationPath <owned-config> -ValidateOnly` for a read-only rule plan. `-RequestElevation` is an explicit owner action; never invoke `-Apply` silently on the owner's behalf.
 
-In the local dashboard, expand **Connect AI / 连接 AI** and click **Copy MCP configuration / 复制 MCP 配置**. Add the generated stdio server to an AI client that accepts `mcpServers` JSON. The dashboard fills the actual installed Node path, compiled MCP entry, current service address and port, and saved credential file. It does not put the pairing key in the configuration.
+In the desktop client, open **Connect AI / 连接 AI** and click **Copy MCP configuration / 复制 MCP 配置**. Add the generated stdio server to an AI client that accepts `mcpServers` JSON. The new desktop preview installs a fixed current-user MCP entry. Each new MCP process reads the owned desktop configuration to find the current installed runtime, service address, port and saved credential file. The AI configuration contains no pairing key and no version directory.
 
-This is the generated shape; the example paths and LAN address below are illustrative. Use the dashboard's copied values for your computer:
+For an installed Windows preview, the generated shape is below. Use the client's copied absolute path for your account:
 
 ```json
 {
   "mcpServers": {
     "phonebridge": {
-      "command": "C:/Users/Owner/.phonebridge/app/versions/0.6.0/bundle-example/runtime/node.exe",
-      "args": ["C:/Users/Owner/.phonebridge/app/versions/0.6.0/bundle-example/bridge/dist/mcp.js"],
-      "env": {
-        "PHONEBRIDGE_URL": "http://192.168.1.20:8767",
-        "PHONEBRIDGE_CREDENTIAL_FILE": "C:/Users/Owner/.phonebridge/pairing.json"
-      }
+      "command": "C:/Users/Owner/.phonebridge/bin/PhoneBridgeMcp.exe",
+      "args": []
     }
   }
 }
 ```
 
-The desktop defaults to port `8767`; setting `PHONEBRIDGE_URL` explicitly avoids the standalone MCP adapter's default port `8765`. The MCP process reads the current user's saved DPAPI credential. Keep the desktop service running and confirm the phone is connected before requesting an observation. The phone's allowlist and action consent remain enforced for every operation.
+On an installed Mac preview, the server entry uses `"command": "/bin/sh"` and `"args": ["/Users/Owner/.phonebridge/bin/phonebridge-mcp"]`. The shell entry reads `desktop-macos.json`; Windows reads `desktop.json`. Both resolve `pairing.json` beside that configuration (or its explicit `credentialFile` override), forward stdin/stdout/stderr, and return the MCP exit code. Windows credentials remain protected with DPAPI. The desktop defaults to port `8767`; the launcher always supplies the actual configured endpoint rather than using the standalone adapter's default port `8765`.
+
+**One-time migration from 0.6.0 or an older copied configuration:** after installing the new preview, copy its MCP configuration and replace only the existing `phonebridge` server entry in your AI client. Remove that entry's old version-specific arguments and `PHONEBRIDGE_URL`/credential environment settings. Then disconnect/reconnect that MCP server or restart the AI client. Subsequent desktop upgrades do not require another AI configuration edit. A running MCP process keeps its current target until reconnect; it does not hot-swap. Windows installation retains the immutable fixed executable even while it is running and publishes active configuration changes atomically. The new launcher is installed before the active target changes; a failed publication preserves the old configuration and existing sessions.
+
+Portable or development use without an installed fixed entry still copies an explicit Node path, MCP script and environment. That fallback is version-specific and must be copied again when its paths or endpoint change. Merely unpacking a portable update does not migrate the owned installation. The public 0.6.0 release retains its previous behavior; these fixed entries are part of the current preview.
+
+Keep the desktop service running and confirm the phone is connected before requesting an observation. The phone's allowlist and action consent remain enforced for every operation.
 
 For an Agent, use the copied command/arguments/environment as the local MCP connection specification. Verify a real connection and an owner-authorized read-only observation before reporting AI integration successful. Different AI clients store stdio server settings in different formats; convert this server entry to the client's supported format without transferring the pairing key or changing other servers.
 

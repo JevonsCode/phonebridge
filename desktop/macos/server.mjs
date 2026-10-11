@@ -34,8 +34,8 @@ export async function main(args = process.argv.slice(2)) {
   let saved = config;
   if (!config) { const network = macNetworks()[0]; if (!network) throw new Error('Connect to a private Wi-Fi or Ethernet network.'); config = {schema:'phonebridge-macos-desktop-v1',ownerUid:uid,projectRoot:root,nodePath:process.execPath,hostAddress:network.address,port:8767}; }
   // Upgrading the App keeps the credential and logs; only our owned job can be refreshed.
-  config = { ...config, projectRoot: root, nodePath: process.execPath };
-  const token = await loadOrCreateSavedToken(credentialPath());
+  config = { ...config, projectRoot: root, nodePath: process.execPath, credentialFile: config.credentialFile ?? credentialPath() };
+  const token = await loadOrCreateSavedToken(config.credentialFile);
   let errorMessage, starting;
   const start = () => {
     if (starting) return starting;
@@ -45,6 +45,7 @@ export async function main(args = process.argv.slice(2)) {
       const current = await authenticatedStatus(config, token).catch(() => undefined);
       if (current?.connected && saved && (saved.projectRoot !== config.projectRoot || saved.nodePath !== config.nodePath)) throw new Error('Disconnect the phone before moving or upgrading the desktop App.');
       const result = await installService({ config, previous:saved, configFile:path, probe: next => authenticatedStatus(next,token) });
+      config.mcpLauncherPath = join(dirname(path), 'bin', 'phonebridge-mcp');
       saved = { ...config }; errorMessage = undefined; return result;
     })().catch(error => { errorMessage=error.message; throw error; }).finally(() => { starting=undefined; });
     return starting;
@@ -60,7 +61,7 @@ export async function main(args = process.argv.slice(2)) {
       try { await start(); } catch(error) {config.hostAddress=previousAddress;throw error;}
     }), language:process.env.LANG?.startsWith('zh')?'zh':'en',
     qr:()=>QRCode.toDataURL(pairingUri(`ws://${config.hostAddress}:${config.port}/device`,token),{width:360,margin:3}),
-    mcpConfiguration:()=>createMcpConfiguration(config,credentialPath()),startupError:()=>errorMessage });
+    mcpConfiguration:()=>createMcpConfiguration(config,config.credentialFile),startupError:()=>errorMessage });
   if (!args.includes('--native-window') && !args.includes('--no-open')) spawn('/usr/bin/open',[dashboard.url],{stdio:'ignore'}).unref();
   console.log(JSON.stringify(nativeReady(args,dashboard.url)));
   void start().catch(()=>{});

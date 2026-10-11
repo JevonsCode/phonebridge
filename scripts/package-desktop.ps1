@@ -1,15 +1,41 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version='0.6.0', [string]$OutputDirectory, [string]$NodeVersion='22.23.3')
+param([ValidatePattern('^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version='0.6.1', [string]$OutputDirectory, [string]$NodeVersion='22.23.3', [string]$FlutterBuildDirectory)
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $project = Split-Path $PSScriptRoot -Parent
+if (-not $FlutterBuildDirectory) {
+  Push-Location -LiteralPath (Join-Path $project 'desktop_app')
+  try {
+    & flutter build windows --release --build-name $Version
+    if ($LASTEXITCODE -ne 0) { throw 'Flutter Windows compilation failed.' }
+  } finally { Pop-Location }
+  $FlutterBuildDirectory=Join-Path $project 'desktop_app\build\windows\x64\runner\Release'
+}
+$FlutterBuildDirectory=[IO.Path]::GetFullPath($FlutterBuildDirectory)
+foreach ($required in @('PhoneBridge.exe','flutter_windows.dll','data\flutter_assets\AssetManifest.bin')) {
+  if (-not (Test-Path -LiteralPath (Join-Path $FlutterBuildDirectory $required))) { throw "Missing Flutter release file: $required" }
+}
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $project 'artifacts\desktop' }
 $OutputDirectory=[IO.Path]::GetFullPath($OutputDirectory)
 [void](New-Item -ItemType Directory -Path $OutputDirectory -Force)
 $stage=Join-Path $OutputDirectory "stage-$Version"
 if (Test-Path -LiteralPath $stage) { throw "Packaging stage already exists: $stage. Choose a new output directory or remove this exact stage manually." }
 [void](New-Item -ItemType Directory -Path $stage)
+Get-ChildItem -LiteralPath $FlutterBuildDirectory | Copy-Item -Destination $stage -Recurse
+# App-local CRT permits opening the Flutter window on a clean Windows machine.
+$vswhere=Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$vsRoot=& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+if (-not $vsRoot) { throw 'Visual C++ redistributable location unavailable.' }
+$redistVersion=(Get-Content -LiteralPath (Join-Path $vsRoot 'VC\Auxiliary\Build\Microsoft.VCRedistVersion.default.txt') -Raw).Trim()
+$redistRoot=Join-Path $vsRoot "VC\Redist\MSVC\$redistVersion\x64"
+$crt=@(Get-ChildItem -LiteralPath $redistRoot -Directory | Where-Object Name -Match '^Microsoft\.VC\d+\.CRT$')
+if ($crt.Count -ne 1) { throw 'Matching x64 Visual C++ runtime not found.' }
+Get-ChildItem -LiteralPath $crt[0].FullName -Filter '*.dll' -File | Copy-Item -Destination $stage
+foreach ($required in @('msvcp140.dll','vcruntime140.dll','vcruntime140_1.dll')) {
+  if (-not (Test-Path -LiteralPath (Join-Path $stage $required))) { throw "Missing C++ runtime: $required" }
+}
+[IO.File]::WriteAllText((Join-Path $stage 'THIRD-PARTY-NOTICES.txt'), "Includes Microsoft Visual C++ Runtime $redistVersion (x64), redistributed from Visual Studio. Copyright Microsoft Corporation. Noto Sans SC is distributed under the SIL Open Font License in data/flutter_assets/assets/fonts/OFL.txt.`n")
 $cache=Join-Path $OutputDirectory 'node-cache'
 [void](New-Item -ItemType Directory -Path $cache -Force)
 if ($NodeVersion -notmatch '^22\.\d+\.\d+$') { throw 'Use a pinned official Node 22 version.' }
@@ -50,8 +76,8 @@ $manifest=[ordered]@{product='PhoneBridge';version=$Version;platform='windows-x6
 $manifest | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $stage 'package-manifest.json') -Encoding UTF8
 $csc=Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $csc)) { throw 'Windows .NET Framework C# compiler missing.' }
-& $csc /nologo /target:winexe /optimize+ /reference:System.Windows.Forms.dll /reference:System.Drawing.dll /reference:System.Web.Extensions.dll "/out:$(Join-Path $stage 'PhoneBridge.exe')" (Join-Path $project 'desktop\Launcher.cs') (Join-Path $project 'desktop\DesktopWindow.cs')
-if ($LASTEXITCODE -ne 0) { throw 'Launcher compilation failed.' }
+& $csc /nologo /target:exe /optimize+ /reference:System.Web.Extensions.dll "/out:$(Join-Path $stage 'PhoneBridgeMcp.exe')" (Join-Path $project 'desktop\McpLauncher.cs')
+if ($LASTEXITCODE -ne 0) { throw 'Stable MCP launcher compilation failed.' }
 # No development source, test artifacts, private pairing, npm binary or TypeScript toolchain in the payload.
 Get-ChildItem -LiteralPath (Join-Path $stage 'desktop') -File | Where-Object Extension -eq '.cs' | Remove-Item
 Remove-Item -LiteralPath (Join-Path $stage 'desktop\integration-test.mjs')
@@ -62,7 +88,7 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 $installerSource=Join-Path $OutputDirectory 'Installer.generated.cs'
 (Get-Content -LiteralPath (Join-Path $project 'desktop\Installer.cs') -Raw).Replace('__VERSION__',$Version) | Set-Content -LiteralPath $installerSource -Encoding UTF8
 $installer=Join-Path $OutputDirectory "phonebridge-$Version-windows-setup.exe"
-& $csc /nologo /target:winexe /optimize+ /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/resource:$zip,PhoneBridgePackage" "/out:$installer" $installerSource
+& $csc /nologo /target:winexe /optimize+ /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/win32icon:$(Join-Path $project 'assets\brand\phonebridge.ico')" "/resource:$zip,PhoneBridgePackage" "/out:$installer" $installerSource
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
 foreach ($file in @($zip,$installer)) { $hash=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant(); [IO.File]::WriteAllText("$file.sha256", "$hash  $([IO.Path]::GetFileName($file))`n", (New-Object Text.UTF8Encoding($false))) }
 Write-Output $zip
