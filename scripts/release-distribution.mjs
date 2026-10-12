@@ -189,6 +189,15 @@ export async function distribute({ root, release, tag, apkBytes, badging, signer
   const generated = createPublicUpdates(current, files, verified, release.body || undefined, desktopAssets);
   requireThat(typeof outputDir === 'string', 'An output directory outside the checkout is required');
   outputDir = path.resolve(outputDir);
+  // Resolve the existing ancestor before creating anything (macOS /var aliases /private/var).
+  let ancestor = outputDir; const missing = [];
+  while (true) {
+    try { outputDir = path.join(await realpath(ancestor), ...missing.reverse()); break; }
+    catch (error) {
+      if (error.code !== 'ENOENT' || path.dirname(ancestor) === ancestor) throw error;
+      missing.push(path.basename(ancestor)); ancestor = path.dirname(ancestor);
+    }
+  }
   requireThat(!inside(root, outputDir), 'Submission artifacts must be outside the checkout');
   await mkdir(outputDir, { recursive: true });
   requireThat(!inside(root, await realpath(outputDir)), 'Submission output resolves inside checkout');

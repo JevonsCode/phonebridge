@@ -153,6 +153,72 @@ const _errors = <String, String>{
 };
 
 const _english = <String, String>{
+  "\u6765\u81ea\u7535\u8111\u7684\u6587\u4ef6": "Files from your computer",
+  "\u63a5\u6536\u540e\u70b9\u5206\u4eab\uff0c\u9009\u62e9\u5fae\u4fe1\u3001WhatsApp \u6216\u5176\u4ed6\u5e94\u7528":
+      "Receive, then share to WeChat, WhatsApp or another app.",
+  "\u7b49\u5f85\u4f60\u63a5\u6536": "Waiting for you to receive",
+  "\u6b63\u5728\u63a5\u6536\u5e76\u6821\u9a8c\u2026":
+      "Receiving and verifying\u2026",
+  "\u5df2\u63a5\u6536": "Received",
+  "\u5df2\u62d2\u7edd": "Declined",
+  "\u6587\u4ef6\u5df2\u8fc7\u671f\uff0c\u8bf7\u8ba9\u7535\u8111\u91cd\u65b0\u53d1\u9001":
+      "Expired. Ask the computer to send it again.",
+  "\u8fde\u63a5\u5df2\u65ad\u5f00\uff0c\u8bf7\u8ba9\u7535\u8111\u91cd\u65b0\u53d1\u9001":
+      "Disconnected. Ask the computer to send it again.",
+  "\u63a5\u6536\u5931\u8d25\uff0c\u8bf7\u8ba9\u7535\u8111\u91cd\u65b0\u53d1\u9001":
+      "Reception failed. Ask the computer to send it again.",
+  "\u63a5\u6536": "Receive",
+  "\u62d2\u7edd": "Decline",
+  "\u5206\u4eab": "Share",
+  "\u79fb\u9664": "Remove",
+  "\u64cd\u4f5c\u65e5\u5fd7": "Operation history",
+  "\u6309\u65f6\u95f4\u67e5\u770b\u64cd\u4f5c\u4e0e\u6587\u4ef6\u4f20\u8f93\u8bb0\u5f55":
+      "Timeline of operations and file transfers",
+  "\u5237\u65b0": "Refresh",
+  "\u8bfb\u53d6\u754c\u9762": "Read screen",
+  "\u67e5\u770b\u622a\u56fe": "View screenshot",
+  "\u70b9\u51fb": "Tap",
+  "\u957f\u6309": "Long press",
+  "\u6ed1\u52a8": "Swipe",
+  "\u8f93\u5165\u6587\u5b57": "Enter text",
+  "\u7cfb\u7edf\u5bfc\u822a": "System navigation",
+  "\u6253\u5f00\u5e94\u7528": "Launch app",
+  "\u53d1\u9001\u6587\u4ef6\u9080\u8bf7": "Offer file",
+  "\u6587\u4ef6\u4f20\u8f93": "File transfer",
+  "\u64cd\u4f5c": "Operation",
+  "\u9080\u8bf7\u5df2\u9001\u8fbe\uff0c\u7b49\u5f85\u624b\u673a\u63a5\u6536":
+      "Offer delivered; waiting for receipt",
+  "\u8bbe\u5907\u5df2\u5b8c\u6210": "Device reported success",
+  "\u5931\u8d25": "Failed",
+  "\u7ed3\u679c\u4e0d\u786e\u5b9a\uff0c\u8bf7\u68c0\u67e5\u624b\u673a":
+      "Outcome unknown; check your phone",
+  "\u7b49\u5f85\u63a5\u6536": "Awaiting receipt",
+  "\u6b63\u5728\u63a5\u6536": "Receiving",
+  "\u5df2\u8fc7\u671f": "Expired",
+  "\u8fde\u63a5\u4e2d\u65ad": "Disconnected",
+  "\u5df2\u6253\u5f00\u5206\u4eab\u9762\u677f\uff0c\u53d1\u9001\u7ed3\u679c\u7531\u76ee\u6807\u5e94\u7528\u786e\u8ba4":
+      "Share sheet opened; check the target app for sending outcome",
+  "\u72b6\u6001\u672a\u77e5": "Unknown status",
+  "\u6700\u8fd1 100 \u6761\u7535\u8111\u64cd\u4f5c\u4e0e\u672c\u673a\u6587\u4ef6\u8bb0\u5f55 \u00b7 \u6700\u65b0\u5728\u524d":
+      "Latest 100 computer operations and local file events \u00b7 Newest first",
+  "\u4e0d\u8bb0\u5f55\u8f93\u5165\u5185\u5bb9\u3001\u622a\u56fe\u6216\u914d\u5bf9\u5bc6\u94a5":
+      "No entered text, screenshots or pairing keys are logged",
+  "\u6b63\u5728\u8bfb\u53d6\u65e5\u5fd7\u2026": "Loading history\u2026",
+  "\u6682\u65e0\u64cd\u4f5c\u8bb0\u5f55": "No operations yet",
+  "\u65e0\u6cd5\u8bfb\u53d6\u65e5\u5fd7\uff0c\u8bf7\u7a0d\u540e\u5237\u65b0":
+      "History unavailable. Please refresh later.",
+  "\u8fde\u63a5\u7535\u8111\u540e\u53ef\u67e5\u770b\u7535\u8111\u64cd\u4f5c\u65e5\u5fd7":
+      "Connect to view the computer's operation history",
+  "\u65e0\u6cd5\u8bfb\u53d6\u7535\u8111\u65e5\u5fd7\uff0c\u8bf7\u68c0\u67e5\u8fde\u63a5\u540e\u5237\u65b0":
+      "Could not load computer history. Check the connection and refresh.",
+  "\u8fde\u63a5\u5df2\u5207\u6362\uff0c\u8bf7\u5237\u65b0\u65e5\u5fd7":
+      "Connection changed. Refresh history.",
+  "\u63a5\u6536\u5931\u8d25\uff0c\u6587\u4ef6\u53ef\u80fd\u5df2\u8fc7\u671f\uff0c\u8bf7\u8ba9\u7535\u8111\u91cd\u65b0\u53d1\u9001":
+      "Reception failed or expired. Ask the computer to send it again.",
+  "\u6587\u4ef6\u5df2\u63a5\u6536\uff0c\u7535\u8111\u672a\u6536\u5230\u56de\u6267":
+      "Received; the computer did not receive confirmation",
+  "\u65e0\u6cd5\u4fdd\u5b58\u63a5\u6536\u8bb0\u5f55\uff0c\u8bf7\u68c0\u67e5\u624b\u673a\u5b58\u50a8\u7a7a\u95f4":
+      "Could not save the receipt. Check phone storage.",
   '显示操作轨迹': 'Show operation trails',
   '显示 AI 点击与滑动的位置': 'Show where AI taps and swipes',
   '无法读取操作轨迹设置，请重试': 'Could not load operation trail setting. Try again.',
@@ -230,6 +296,15 @@ const _english = <String, String>{
   '当前电脑': 'Current computer',
   '配对另一台电脑': 'Pair another computer',
   '电脑名称': 'Computer name',
+  '点击切换': 'Tap to switch',
+  '删除电脑': 'Remove computer',
+  '删除这台电脑？': 'Remove this computer?',
+  '删除': 'Remove',
+  '暂无已记住的电脑': 'No saved computers',
+  '删除后会断开当前连接并移除这台电脑的配对与授权。再次连接需要重新扫码。':
+      'This disconnects the current computer and removes its pairing and permissions. Scan again to reconnect.',
+  '将移除这台电脑的配对与授权。再次连接需要重新扫码，其他电脑不受影响。':
+      'This removes this computer’s pairing and permissions. Scan again to reconnect. Other computers are not affected.',
   '名称': 'Name',
   '修改名称': 'Rename',
   '取消': 'Cancel',
@@ -253,6 +328,11 @@ const _english = <String, String>{
   '先开启无障碍服务': 'Enable accessibility first',
   '用于读取界面和执行操作': 'Used to read the screen and perform actions',
   '扫描电脑配对码': 'Scan computer pairing code',
+  '扫一扫': 'Scan',
+  '扫描新的电脑？': 'Scan a new computer?',
+  '扫码前需要暂停当前连接。已记住的电脑和授权会保留。':
+      'Pause the current connection before scanning. Your saved computers and permissions will be kept.',
+  '暂停并扫码': 'Pause and scan',
   '收起手动设置': 'Hide manual setup',
   '手动输入连接信息': 'Enter connection details manually',
   '已识别电脑': 'Computer recognized',

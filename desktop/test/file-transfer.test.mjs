@@ -1,0 +1,31 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
+import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { once } from 'node:events';
+import WebSocket from '../../bridge/node_modules/ws/wrapper.mjs';
+import { PhoneHub } from '../../bridge/dist/hub.js';
+import { MemoryOperationJournal } from '../../bridge/dist/operation-journal.js';
+import { createDashboard, authenticatedStatus } from '../server.mjs';
+
+test('desktop file sender preserves local CSRF checks and reports pending until phone receipt', async t => {
+  const token = randomBytes(32).toString('base64url');
+  const hub = new PhoneHub({ token, port: 0, journal: new MemoryOperationJournal() });
+  const url = new URL(await hub.start()); t.after(() => hub.close());
+  const config = { hostAddress: url.hostname, port: Number(url.port) };
+  const dash = await createDashboard({ config, token, status: () => authenticatedStatus(config, token), networks: () => [], qr: async () => '' }); t.after(() => dash.close());
+  const ws = new WebSocket(url.toString().replace('http', 'ws') + 'device', { headers: { Authorization: `Bearer ${token}` } }); await once(ws, 'open');
+  ws.send(JSON.stringify({ type: 'hello', protocol: 1 }));
+  while (!(await authenticatedStatus(config, token)).connected) await new Promise(r => setTimeout(r, 5));
+  ws.on('message', bytes => { const request = JSON.parse(bytes.toString()); ws.send(JSON.stringify({ id: request.id, result: { queued: true } })); });
+  const dir = await mkdtemp(join(tmpdir(), 'phonebridge-desktop-file-')); t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, 'fixture.png'); await writeFile(path, 'fixture');
+  const body = JSON.stringify({ path });
+  assert.equal((await fetch(`${dash.url}/send-file`, { method: 'POST', body })).status, 403);
+  const headers = { Origin: new URL(dash.url).origin, 'X-PhoneBridge-CSRF': dash.secret, 'Content-Type': 'application/json' };
+  const result = await fetch(`${dash.url}/send-file`, { method: 'POST', headers, body });
+  assert.equal(result.status, 200); assert.equal((await result.json()).transfer.state, 'pending');
+  assert.equal((await (await fetch(`${dash.url}/status`)).json()).transfer.state, 'pending');
+});

@@ -37,7 +37,7 @@ export class DesktopSupervisor {
     this.server = options.tls
       ? https.createServer(options.tls, (req, res) => void this.handle(req, res))
       : http.createServer((req, res) => void this.handle(req, res));
-    this.server.requestTimeout = 10000;
+    this.server.requestTimeout = 60000;
     this.server.headersTimeout = 5000;
     this.server.on('connection', socket => this.track(socket));
     this.server.on('upgrade', (req, socket, head) => this.upgrade(req, socket as Socket, head));
@@ -92,7 +92,10 @@ export class DesktopSupervisor {
     let endpoint: URL;
     try { endpoint = new URL(req.url ?? '/', 'http://localhost'); }
     catch { req.resume(); this.respond(res, 400, { error: { code: 'INVALID_URL' } }); return; }
-    if (!((req.method === 'GET' && (req.url === '/status' || endpoint.pathname === '/operations')) || (req.method === 'POST' && req.url === '/rpc'))) {
+    const fileRoute = (req.method === 'POST' && req.url === '/files') ||
+      (['GET', 'DELETE'].includes(req.method ?? '') && /^\/files\/[a-f0-9-]{36}$/.test(req.url ?? '')) ||
+      (req.method === 'POST' && /^\/files\/[a-f0-9-]{36}\/received$/.test(req.url ?? ''));
+    if (!(fileRoute || (req.method === 'GET' && (req.url === '/status' || endpoint.pathname === '/operations')) || (req.method === 'POST' && req.url === '/rpc'))) {
       req.resume(); this.respond(res, 404, { error: { code: 'NOT_FOUND' } }); return;
     }
     const target = this.hubUrl;

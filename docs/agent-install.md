@@ -14,6 +14,14 @@ If Windows prompts about a network connection, the owner decides whether to allo
 
 The optional `phonebridge-0.6.0-windows-x64.zip` portable package contains `PhoneBridge.exe`. Extract the whole ZIP, then open that executable. Portable use does not register startup itself. Existing owned service configuration takes precedence over the extracted package, so unpacking a new version alone does not migrate an installed service.
 
+## macOS and visible desktop preview
+
+The current branch adds a visible native Windows window and self-contained macOS Apps for Apple Silicon and Intel, requiring macOS 13+. These are PR test packages; the public 0.6.0 Windows download above still uses its browser panel. Do not infer that the preview has been formally released.
+
+Follow [macOS test-package instructions](macos-testing.md) to download the matching CI artifact, verify its SHA256 and copy PhoneBridge.app to Applications before opening. The native window selects the network and shows status, a pairing QR and a Copy MCP button. No system Node.js installation is needed. The App registers only its owned current-user LaunchAgent, keeps pairing/history, and leaves the background service running when its window closes. The owner completes macOS approval and Android permission prompts.
+
+On a Mac, use the native App's `--diagnose`, `--self-test` and `--diagnose --report-path <absolute-path>` commands for sanitized checks. `--uninstall-service` removes only the exact owned login service and preserves identity and logs. Never remove quarantine, disable Gatekeeper or delete the pairing file as an installation workaround.
+
 ## Diagnostics for an Agent
 
 These installer commands validate the embedded package and path containment, then exit before installation, extraction, configuration writes or task registration:
@@ -35,6 +43,8 @@ if ($p.ExitCode -ne 0) { throw 'PhoneBridge diagnostics failed' }
 For an authorized unattended installation, the installer accepts `--silent --no-launch`. `--silent` suppresses completion/error dialogs; it does not bypass Windows or Android security dialogs. Without `--no-launch`, installation opens the local dashboard.
 
 Development validation:
+
+The packaged lifecycle check uses loopback by default. A real LAN network-switch test opens a random port and can trigger a Windows firewall prompt for each new package path. Run that check only deliberately with `PHONEBRIDGE_TEST_LAN=1`; the Windows preview CI job sets it explicitly. Local test output states when this case is skipped. The normal PhoneBridge LAN rule covers its configured TCP port on Private/LocalSubnet networks and survives package-path changes; do not disable firewall notifications for testing.
 
 ```powershell
 ./scripts/test-desktop-client.ps1
@@ -62,26 +72,28 @@ The helper removes only local, inbound Windows-generated `TCP Query User{...}` b
 
 Use a trusted **Private** home/work network. This button does not change the network category or enable Public-network access. Retry the phone connection and verify its connected state after approval; local `/status` success alone does not prove LAN reachability. It does not change Android permissions or pairing identity. Agents may run `desktop/allow-lan.ps1 -ConfigurationPath <owned-config> -ValidateOnly` for a read-only rule plan. `-RequestElevation` is an explicit owner action; never invoke `-Apply` silently on the owner's behalf.
 
-In the local dashboard, expand **Connect AI / 连接 AI** and click **Copy MCP configuration / 复制 MCP 配置**. Add the generated stdio server to an AI client that accepts `mcpServers` JSON. The dashboard fills the actual installed Node path, compiled MCP entry, current service address and port, and saved credential file. It does not put the pairing key in the configuration.
+In the desktop client, open **Connect AI / 连接 AI** and click **Copy MCP configuration / 复制 MCP 配置**. Add the generated stdio server to an AI client that accepts `mcpServers` JSON. The new desktop preview installs a fixed current-user MCP entry. Each new MCP process reads the owned desktop configuration to find the current installed runtime, service address, port and saved credential file. The AI configuration contains no pairing key and no version directory.
 
-This is the generated shape; the example paths and LAN address below are illustrative. Use the dashboard's copied values for your computer:
+For an installed Windows preview, the generated shape is below. Use the client's copied absolute path for your account:
 
 ```json
 {
   "mcpServers": {
     "phonebridge": {
-      "command": "C:/Users/Owner/.phonebridge/app/versions/0.6.0/bundle-example/runtime/node.exe",
-      "args": ["C:/Users/Owner/.phonebridge/app/versions/0.6.0/bundle-example/bridge/dist/mcp.js"],
-      "env": {
-        "PHONEBRIDGE_URL": "http://192.168.1.20:8767",
-        "PHONEBRIDGE_CREDENTIAL_FILE": "C:/Users/Owner/.phonebridge/pairing.json"
-      }
+      "command": "C:/Users/Owner/.phonebridge/bin/PhoneBridgeMcp.exe",
+      "args": []
     }
   }
 }
 ```
 
-The desktop defaults to port `8767`; setting `PHONEBRIDGE_URL` explicitly avoids the standalone MCP adapter's default port `8765`. The MCP process reads the current user's saved DPAPI credential. Keep the desktop service running and confirm the phone is connected before requesting an observation. The phone's allowlist and action consent remain enforced for every operation.
+On an installed Mac preview, the server entry uses `"command": "/bin/sh"` and `"args": ["/Users/Owner/.phonebridge/bin/phonebridge-mcp"]`. The shell entry reads `desktop-macos.json`; Windows reads `desktop.json`. Both resolve `pairing.json` beside that configuration (or its explicit `credentialFile` override), forward stdin/stdout/stderr, and return the MCP exit code. Windows credentials remain protected with DPAPI. The desktop defaults to port `8767`; the launcher always supplies the actual configured endpoint rather than using the standalone adapter's default port `8765`.
+
+**One-time migration from 0.6.0 or an older copied configuration:** after installing the new preview, copy its MCP configuration and replace only the existing `phonebridge` server entry in your AI client. Remove that entry's old version-specific arguments and `PHONEBRIDGE_URL`/credential environment settings. Then disconnect/reconnect that MCP server or restart the AI client. Subsequent desktop upgrades do not require another AI configuration edit. A running MCP process keeps its current target until reconnect; it does not hot-swap. Windows installation retains the immutable fixed executable even while it is running and publishes active configuration changes atomically. The new launcher is installed before the active target changes; a failed publication preserves the old configuration and existing sessions.
+
+Portable or development use without an installed fixed entry still copies an explicit Node path, MCP script and environment. That fallback is version-specific and must be copied again when its paths or endpoint change. Merely unpacking a portable update does not migrate the owned installation. The public 0.6.0 release retains its previous behavior; these fixed entries are part of the current preview.
+
+Keep the desktop service running and confirm the phone is connected before requesting an observation. The phone's allowlist and action consent remain enforced for every operation.
 
 For an Agent, use the copied command/arguments/environment as the local MCP connection specification. Verify a real connection and an owner-authorized read-only observation before reporting AI integration successful. Different AI clients store stdio server settings in different formats; convert this server entry to the client's supported format without transferring the pairing key or changing other servers.
 
