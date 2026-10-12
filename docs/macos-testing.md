@@ -1,11 +1,11 @@
 # macOS client preview
 
-This PR adds a Flutter PhoneBridge window for macOS 13 or later and Windows, using the same visual style and logo as Android. Mac test packages are CI artifacts, not a formal release. The public 0.6.0 downloads and Android APK remain unchanged.
+PhoneBridge provides a Flutter window for macOS 13 or later and Windows, using the same visual style and logo as Android. macOS packages are available with the GitHub developer preview releases for Apple Silicon and Intel.
 
 ## Download and open
 
-1. Open the PR's **Checks → Flutter desktop client preview → Details**. On the run summary, download `phonebridge-macos-arm64-preview` for Apple Silicon (M1 or later), or `phonebridge-macos-x64-preview` for an Intel Mac. GitHub may require sign-in to download artifacts; they expire after 14 days.
-2. Extract the artifact ZIP. It contains a DMG, an alternative App ZIP, and SHA256 sidecars. In that folder, run `shasum -a 256 -c phonebridge-0.6.1-macos-arm64.dmg.sha256` (replace `arm64` with `x64` on Intel). Open the matching DMG and drag **PhoneBridge.app** into **Applications**. `~/Applications` also works. Do not run the persistent service directly from the mounted DMG or Downloads.
+1. Open [GitHub Releases](https://github.com/JevonsCode/phonebridge/releases). For 0.6.1, download `phonebridge-0.6.1-macos-arm64.dmg` for Apple Silicon (M1 or later), or `phonebridge-0.6.1-macos-x64.dmg` for an Intel Mac, together with its `.sha256` file. Each architecture also has an alternative App ZIP. Unreleased PR builds remain available from **Checks → Flutter desktop client preview → Details** as 14-day CI artifacts.
+2. In the download folder, run `shasum -a 256 -c phonebridge-0.6.1-macos-arm64.dmg.sha256` (replace `arm64` with `x64` on Intel). Open the matching DMG and drag **PhoneBridge.app** into **Applications**. `~/Applications` also works. Do not run the persistent service directly from the mounted DMG or Downloads.
 3. Open **PhoneBridge**. The window shows connection status, the selected network, a pairing QR and **Copy MCP configuration**. Keep the Android phone on the same reachable private Wi-Fi, scan once in PhoneBridge, and enable the Android permissions on the phone. Later openings retain this pairing.
 
 The preview is ad-hoc signed, without Apple Developer ID signing or notarization. If macOS asks you to approve the App, use the system's normal approval flow. The package does not remove quarantine or disable Gatekeeper. Approve local-network access if macOS asks. Guest-network isolation or a Mac firewall policy can prevent phone access.
