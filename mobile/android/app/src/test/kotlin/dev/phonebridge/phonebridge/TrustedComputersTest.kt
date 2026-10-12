@@ -5,6 +5,31 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TrustedComputersTest {
+    @Test fun forgettingAnotherComputerPreservesActiveTrustAndPermissions() {
+        val first = TrustedComputers().remember(pairing())
+        val both = first.remember(pairing("b".repeat(32), false))
+        val remaining = both.forget(first.activeId!!)
+        assertEquals(both.activeId, remaining.activeId)
+        assertEquals(both.active, remaining.active)
+        assertEquals(listOf(both.active!!), remaining.entries)
+        assertEquals(remaining, TrustedComputers.decode(remaining.encode()))
+    }
+
+    @Test fun forgettingExplicitActiveIdNeverSelectsAnotherComputer() {
+        val both = TrustedComputers().remember(pairing()).remember(pairing("b".repeat(32)))
+        val remaining = both.forget(both.activeId!!)
+        assertNull(remaining.activeId)
+        assertEquals(listOf(both.entries.first()), remaining.entries)
+    }
+
+    @Test fun forgettingUnknownIdDoesNotDeleteActiveComputer() {
+        val original = TrustedComputers().remember(pairing())
+        try { original.forget("missing"); fail("Expected rejection") }
+        catch (_: IllegalArgumentException) { }
+        assertNotNull(original.active)
+        assertEquals(1, original.entries.size)
+    }
+
     @Test fun longValidHostnamesCannotMakeWrittenCatalogUnreadable() {
         val endpoint = EndpointPolicy.validate("wss://" + "a".repeat(60) + "." + "b".repeat(30) + ".com/device", false)
         val initial = TrustedComputers().remember(pairing())

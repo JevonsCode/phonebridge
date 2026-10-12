@@ -5,7 +5,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { writeFile, lstat, readFile } from 'node:fs/promises';
 import { createDashboard, createMcpConfiguration, authenticatedStatus, nativeReady } from '../server.mjs';
 import { serializeNetworkChange } from '../network-transaction.mjs';
-import { macConfigPath, macNetworks, privateDirectory, readMacConfig, validateInstalledApp, installService, uninstallService } from './lifecycle.mjs';
+import { macConfigPath, macNetworks, macRuntimeRevision, privateDirectory, readMacConfig, validateInstalledApp, installService, uninstallService } from './lifecycle.mjs';
 import { loadOrCreateSavedToken, credentialPath } from '../../bridge/dist/credentials.js';
 import { pairingUri } from '../../bridge/dist/pairing.js';
 import QRCode from '../../bridge/node_modules/qrcode/lib/index.js';
@@ -34,7 +34,7 @@ export async function main(args = process.argv.slice(2)) {
   let saved = config;
   if (!config) { const network = macNetworks()[0]; if (!network) throw new Error('Connect to a private Wi-Fi or Ethernet network.'); config = {schema:'phonebridge-macos-desktop-v1',ownerUid:uid,projectRoot:root,nodePath:process.execPath,hostAddress:network.address,port:8767}; }
   // Upgrading the App keeps the credential and logs; only our owned job can be refreshed.
-  config = { ...config, projectRoot: root, nodePath: process.execPath, credentialFile: config.credentialFile ?? credentialPath() };
+  config = { ...config, projectRoot: root, nodePath: process.execPath, credentialFile: config.credentialFile ?? credentialPath(), runtimeRevision: await macRuntimeRevision(root) };
   const token = await loadOrCreateSavedToken(config.credentialFile);
   let errorMessage, starting;
   const start = () => {
@@ -43,7 +43,7 @@ export async function main(args = process.argv.slice(2)) {
       if (!macNetworks().some(net => net.address === config.hostAddress)) throw new Error('The saved network is unavailable. Select your current network.');
       // A non-owned/occupied endpoint is never stopped. Registration checks exact job ownership.
       const current = await authenticatedStatus(config, token).catch(() => undefined);
-      if (current?.connected && saved && (saved.projectRoot !== config.projectRoot || saved.nodePath !== config.nodePath)) throw new Error('Disconnect the phone before moving or upgrading the desktop App.');
+      if (current?.connected && saved && (saved.projectRoot !== config.projectRoot || saved.nodePath !== config.nodePath || saved.runtimeRevision !== config.runtimeRevision)) throw new Error('Disconnect the phone before moving or upgrading the desktop App.');
       const result = await installService({ config, previous:saved, configFile:path, probe: next => authenticatedStatus(next,token) });
       config.mcpLauncherPath = join(dirname(path), 'bin', 'phonebridge-mcp');
       saved = { ...config }; errorMessage = undefined; return result;
@@ -69,4 +69,9 @@ export async function main(args = process.argv.slice(2)) {
   const stop=async()=>{if(stopping)return;stopping=true;await dashboard.close();};
   process.on('SIGINT',()=>void stop());process.on('SIGTERM',()=>void stop());
 }
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error=>{console.error(error.message);process.exitCode=1;});
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(error => {
+  // The native frontend consumes stdout; stderr alone leaves it with a generic EOF error.
+  if (process.argv.includes('--native-window')) console.log(JSON.stringify({ ready: false, error: error.message }));
+  console.error(error.message);
+  process.exitCode = 1;
+});

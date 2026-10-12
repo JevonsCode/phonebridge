@@ -18,6 +18,12 @@ The current-user LaunchAgent `dev.phonebridge.desktop` starts the service at log
 
 Data lives in `~/.phonebridge`. `desktop-macos.json` is separate from Windows's `desktop.json`; pairing remains in `pairing.json`, and operation history remains in `operations.jsonl`. Existing identity and logs are preserved. The generated MCP configuration reads that private credential file rather than embedding the pairing key. Changing an active network requires disconnecting the phone first.
 
+On reopening an upgraded App, a fingerprint of the bundled runtime inputs refreshes the owned service even when the installation path and version label are unchanged. Disconnect the phone before applying this refresh; if prompted, disconnect it and click **Start desktop service**. Reopening an unchanged bundle leaves the running service in place. A custom `credentialFile` in the saved Mac configuration is shared by the dashboard, background service and MCP; its operation history is stored alongside that credential unless `PHONEBRIDGE_LOG_FILE` explicitly overrides it.
+
+Service replacement waits for launchd to remove the old job after `bootout`, including during rollback. A successful `bootout` alone does not mean the old process has finished closing its sockets; bootstrapping immediately can return status 5 on macOS.
+
+In the updated Android source, **Scan / 扫一扫** is always visible at the top right of the connection home page, including for a remembered computer. It opens the built-in scanner directly. With an active connection, it first asks to pause; cancelling leaves the connection untouched, and pausing keeps remembered computers. Scanning fills pairing details only and still requires local consent. Older installed Android builds use **Connect computer**, or tap the remembered computer card → **Pair another computer** → **Scan computer pairing code**.
+
 To remove **only the owned login service**, quit the window and run:
 
 ```bash
@@ -51,6 +57,8 @@ When reporting issues, include Mac model/architecture, macOS version, stage, vis
 ```
 
 Diagnostics are read-only. Self-test uses temporary fixtures, mock launchctl calls and isolated local HTTP services; it does not register a production LaunchAgent or change the owner's pairing. The commands report exit codes and sanitized results.
+
+For an explicit source-level test of the real service using a custom credential on an active private interface, run `PHONEBRIDGE_TEST_LAN=1 node --test desktop/test/macos.test.mjs` after building `bridge`. It uses a temporary credential and random port, then stops its child service. The default suite skips this LAN listener. The source-only invalid-installation launch test is skipped inside packaged self-tests so it cannot open the installed dashboard or register a production job.
 
 Build packages on their corresponding native Mac architecture:
 

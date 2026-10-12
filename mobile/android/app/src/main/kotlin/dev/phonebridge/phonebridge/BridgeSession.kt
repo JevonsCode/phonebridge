@@ -46,6 +46,8 @@ object BridgeSession {
     private var appContext: Context? = null
     private var store: TrustedPairingStore? = null
     private var saved: TrustedPairing? = null
+    var fileInbox: FileInbox? = null
+        private set
     private var loaded = false
     private var computers = TrustedComputers()
     private const val CHANNEL = "phonebridge_session"
@@ -54,6 +56,7 @@ object BridgeSession {
 
     fun initialize(context: Context) {
         appContext = context.applicationContext
+        if (fileInbox == null) fileInbox = FileInbox(context.applicationContext)
         if (loaded) return
         try {
             val storage = store ?: TrustedPairingStore(context.applicationContext).also { store = it }
@@ -104,10 +107,23 @@ object BridgeSession {
         "activeComputerId" to (computers.activeId ?: ""),
         "computerName" to (computers.active?.name ?: ""),
         "computers" to computerList(),
+        "files" to (fileInbox?.status() ?: emptyList<Map<String, Any>>()),
         "autoReconnectEnabled" to (saved?.resumeAllowed == true),
         "rememberedActions" to (saved?.actionsEnabled == true),
         "reconnecting" to (retryTask != null),
     )
+
+    fun fileSource(): FileInbox.Source {
+        require(connected && socket != null) { "请先连接电脑" }
+        val request = socket!!.request()
+        val url = request.url.newBuilder().encodedPath("/").query(null).fragment(null).build()
+        return FileInbox.Source(url.toString().trimEnd('/'), request.header("Authorization")!!,
+            computers.active?.name?.ifBlank { null } ?: url.host, generation)
+    }
+
+    fun offerFile(params: JSONObject) {
+        fileInbox!!.offer(params, fileSource())
+    }
 
     fun computerList(): List<Map<String, Any>> = computers.entries.map { computer ->
         mapOf("id" to computer.id, "name" to computer.name, "endpoint" to computer.pairing.endpoint,
@@ -248,6 +264,18 @@ object BridgeSession {
         // An automatic reconnect may have succeeded while the HTTP request was pending.
         if (connected) return
         resumeSavedConnection()
+    }
+
+    fun forgetComputer(id: String) {
+        require(computers.entries.any { it.id == id }) { "Unknown computer." }
+        val removingActive = computers.activeId == id
+        if (removingActive) closeTransport()
+        try {
+            store!!.forget(id)
+            computers = store!!.list()
+            if (removingActive) saved = null
+            loaded = true
+        } catch (_: Exception) { storageFailure() }
     }
 
     fun forgetSavedConnection() {
@@ -433,6 +461,7 @@ object BridgeSession {
     }
 
     private fun closeTransport(error: String = "") {
+        fileInbox?.disconnected()
         service?.clearOperationTrail()
         operationScope.invalidate()
         connected = false

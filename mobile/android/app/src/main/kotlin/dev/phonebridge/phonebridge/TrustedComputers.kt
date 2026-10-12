@@ -29,6 +29,11 @@ data class TrustedComputers(val entries: List<TrustedComputer> = emptyList(), va
 
     fun forgetActive() = copy(entries = entries.filterNot { it.id == activeId }, activeId = null)
 
+    fun forget(id: String): TrustedComputers {
+        require(entries.any { it.id == id }) { "Unknown computer." }
+        return copy(entries = entries.filterNot { it.id == id }, activeId = activeId.takeUnless { it == id })
+    }
+
     fun rename(id: String, name: String): TrustedComputers {
         val trimmed = name.trim()
         require(trimmed.isNotEmpty() && trimmed.length <= 80 && trimmed.none { it.isISOControl() })

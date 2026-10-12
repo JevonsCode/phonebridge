@@ -51,6 +51,7 @@ class TrustedPairingStore(context: Context) : TrustedComputerPersistence {
     fun save(record: TrustedPairing) { repository.mutate { it.remember(record) } }
     fun select(id: String): TrustedPairing = repository.mutate { it.select(id) }.active!!.pairing
     fun rename(id: String, name: String) { repository.mutate { it.rename(id, name) } }
+    fun forget(id: String) { repository.mutate { it.forget(id) } }
     fun deactivate() { repository.mutate { it.copy(activeId = null) } }
 
     override fun read(): TrustedComputers {

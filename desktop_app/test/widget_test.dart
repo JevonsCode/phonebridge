@@ -10,6 +10,54 @@ import 'package:phonebridge_desktop/backend.dart';
 import 'backend_test.dart' show statusData;
 
 void main() {
+  for (final width in [400.0, 820.0]) {
+    testWidgets('minimum height and enlarged text remain usable at $width', (
+      tester,
+    ) async {
+      tester.view.physicalSize = Size(width, 520);
+      tester.view.devicePixelRatio = 1;
+      tester.platformDispatcher.textScaleFactorTestValue = 2;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+      final c = DesktopController()..status = DesktopStatus(statusData());
+      addTearDown(c.dispose);
+      await tester.pumpWidget(PhoneBridgeApp(controller: c));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      await tester.tap(find.text('Settings').first);
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+    });
+  }
+  testWidgets('unavailable service does not invite scanning an unusable QR', (
+    tester,
+  ) async {
+    final c = DesktopController();
+    addTearDown(c.dispose);
+    c.status = DesktopStatus({
+      ...statusData(),
+      'connected': false,
+      'unavailable': true,
+      'qr': 'data:image/png;base64,AA==',
+    });
+    await tester.pumpWidget(PhoneBridgeApp(controller: c));
+    expect(find.text('Service unavailable'), findsOneWidget);
+    expect(find.text('Scan to connect'), findsNothing);
+  });
+
+  testWidgets(
+    'healthy waiting service focuses on pairing without redundant start',
+    (tester) async {
+      final c = DesktopController();
+      addTearDown(c.dispose);
+      c.status = DesktopStatus({...statusData(), 'connected': false});
+      await tester.pumpWidget(PhoneBridgeApp(controller: c));
+      expect(find.text('Waiting for your phone'), findsOneWidget);
+      expect(find.text('Start desktop service'), findsNothing);
+    },
+  );
+
   test(
     'stable MCP guidance recognizes Windows and shell-based macOS entries',
     () {

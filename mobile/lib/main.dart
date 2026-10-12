@@ -8,6 +8,8 @@ import 'pairing_scanner.dart';
 import 'app_updates.dart';
 import 'app_language.dart';
 import 'operation_trails.dart';
+import 'file_inbox.dart';
+import 'operation_history.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
 void main() {
@@ -54,6 +56,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   bool consent = false, insecureLocal = false, busy = false, polling = false;
   bool remember = true;
   bool startingDesktop = false;
+  bool openingScanner = false;
   String? error;
   bool pairingPrefilled = false;
   int tab = 0;
@@ -122,17 +125,22 @@ class _ConnectionPageState extends State<ConnectionPage> {
     });
     try {
       await channel.invokeMethod<void>(method, args);
-      if (['disconnect', 'connect', 'forgetSavedConnection'].contains(method)) {
+      if ([
+        'disconnect',
+        'connect',
+        'forgetSavedConnection',
+        'forgetComputer',
+      ].contains(method)) {
         token.clear();
       }
-      if (method == 'forgetSavedConnection') {
+      if (method == 'forgetSavedConnection' || method == 'forgetComputer') {
         consent = false;
         insecureLocal = false;
         pairingPrefilled = false;
         showPairing = false;
       }
       await refresh();
-      if (method == 'forgetSavedConnection' &&
+      if ((method == 'forgetSavedConnection' || method == 'forgetComputer') &&
           !hasSavedPairing &&
           computers.isEmpty) {
         if (mounted) setState(() => showPairing = true);
@@ -228,6 +236,38 @@ class _ConnectionPageState extends State<ConnectionPage> {
     }
   }
 
+  Future<void> scanFromHome() async {
+    if (busy || startingDesktop || openingScanner) return;
+    setState(() => openingScanner = true);
+    try {
+      if (connected || connecting || autoReconnect) {
+        final pause = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: Text(tr(context, '扫描新的电脑？')),
+            content: Text(tr(context, '扫码前需要暂停当前连接。已记住的电脑和授权会保留。')),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(tr(context, '取消')),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(tr(context, '暂停并扫码')),
+              ),
+            ],
+          ),
+        );
+        if (!mounted || pause != true) return;
+      }
+      await pairAnotherComputer();
+      if (!mounted || error != null) return;
+      await scanPairing();
+    } finally {
+      if (mounted) setState(() => openingScanner = false);
+    }
+  }
+
   String get computerAddress {
     final value =
         status['savedEndpoint'] as String? ??
@@ -302,9 +342,19 @@ class _ConnectionPageState extends State<ConnectionPage> {
                   ? 'PhoneBridge'
                   : '设置',
             ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
           actions: !showPairing && tab == 0
               ? [
+                  TextButton.icon(
+                    key: const Key('home-scan-pairing'),
+                    onPressed: busy || startingDesktop || openingScanner
+                        ? null
+                        : scanFromHome,
+                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
+                    label: Text(tr(context, '扫一扫')),
+                  ),
                   IconButton(
                     tooltip: tr(context, '帮助'),
                     onPressed: () => showInfo(
@@ -435,9 +485,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         : hasSavedPairing
         ? '连接已暂停'
         : '连接你的电脑';
-    final subtitle = connected
-        ? '手机已与这台电脑连接'
-        : autoReconnect
+    final subtitle = autoReconnect
         ? '正在等待电脑，连接会自动恢复'
         : hasSavedPairing
         ? '电脑已记住，随时可以继续'
@@ -451,12 +499,14 @@ class _ConnectionPageState extends State<ConnectionPage> {
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.displaySmall,
       ),
-      const SizedBox(height: 10),
-      Text(
-        tr(context, subtitle),
-        textAlign: TextAlign.center,
-        style: const TextStyle(fontSize: 14, color: muted),
-      ),
+      if (!connected) ...[
+        const SizedBox(height: 10),
+        Text(
+          tr(context, subtitle),
+          textAlign: TextAlign.center,
+          style: const TextStyle(fontSize: 14, color: muted),
+        ),
+      ],
       const SizedBox(height: 32),
       if (hasSavedPairing || connected || computers.isNotEmpty) ...[
         SurfaceGroup(
@@ -464,7 +514,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
             SettingsRow(
               icon: Icons.computer_rounded,
               title: computerName,
-              subtitle: computerAddress,
+              subtitle:
+                  '${computerAddress.isEmpty || computerAddress == computerName ? '' : '$computerAddress\n'}${tr(context, '点击切换')}',
               onTap: busy || startingDesktop ? null : showComputer,
               trailing: Container(
                 padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -496,6 +547,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
           label: Text(tr(context, '连接电脑')),
         ),
         const SizedBox(height: 20),
+      ],
+      if ((status['files'] as List? ?? []).isNotEmpty) ...[
+        FileInboxCard(
+          files: (status['files'] as List)
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList(),
+          busy: busy,
+          onAction: (method, id) => perform(method, {'id': id}),
+        ),
+        const SizedBox(height: 16),
       ],
       SurfaceGroup(
         children: [
@@ -674,6 +735,21 @@ class _ConnectionPageState extends State<ConnectionPage> {
       ],
     ),
     const SizedBox(height: 28),
+    SurfaceGroup(
+      children: [
+        SettingsRow(
+          icon: Icons.history_rounded,
+          title: '操作日志',
+          subtitle: '按时间查看操作与文件传输记录',
+          onTap: () => Navigator.of(context).push(
+            MaterialPageRoute<void>(
+              builder: (_) => OperationHistoryPage(computerName: computerName),
+            ),
+          ),
+        ),
+      ],
+    ),
+    const SizedBox(height: 28),
     Center(child: Image.asset('assets/brand/logo.png', width: 64, height: 64)),
     Center(
       child: Text(
@@ -742,13 +818,29 @@ class _ConnectionPageState extends State<ConnectionPage> {
     final renamed = await showDialog<String>(
       context: context,
       builder: (dialogContext) => AlertDialog(
+        insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        scrollable: true,
         title: Text(tr(context, '电脑名称')),
-        content: TextField(
-          key: const Key('computer-name'),
-          controller: name,
-          autofocus: true,
-          maxLength: 80,
-          decoration: InputDecoration(labelText: tr(context, '名称')),
+        content: SizedBox(
+          width: 440,
+          child: TextField(
+            key: const Key('computer-name'),
+            controller: name,
+            autofocus: true,
+            maxLength: 80,
+            decoration: InputDecoration(
+              labelText: tr(context, '名称'),
+              enabledBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: Color(0xFFD8DEE8)),
+              ),
+              focusedBorder: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(8),
+                borderSide: const BorderSide(color: blue, width: 1.5),
+              ),
+            ),
+          ),
         ),
         actions: [
           TextButton(
@@ -777,6 +869,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   Future<void> pairAnotherComputer() async {
     if (busy || startingDesktop) return;
+    setState(() => error = null);
     if (connected || connecting || autoReconnect) await perform('disconnect');
     if (!mounted || error != null) return;
     token.clear();
@@ -788,104 +881,205 @@ class _ConnectionPageState extends State<ConnectionPage> {
     openPairing();
   }
 
-  Future<void> showComputer() => showModalBottomSheet<void>(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    backgroundColor: Colors.white,
-    builder: (sheetContext) => SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+  Future<void> forgetComputer(Map<String, dynamic> computer) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        title: Text(tr(context, '删除这台电脑？')),
+        scrollable: true,
+        content: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
             Text(
-              tr(context, '已记住的电脑'),
-              style: Theme.of(context).textTheme.titleLarge,
+              computer['name'] as String? ?? '',
+              style: Theme.of(context).textTheme.titleMedium,
             ),
+            const SizedBox(height: 6),
+            Text(computer['endpoint'] as String? ?? ''),
             const SizedBox(height: 16),
-            if (computers.isNotEmpty)
-              SurfaceGroup(
+            Text(
+              tr(
+                context,
+                computer['active'] == true
+                    ? '删除后会断开当前连接并移除这台电脑的配对与授权。再次连接需要重新扫码。'
+                    : '将移除这台电脑的配对与授权。再次连接需要重新扫码，其他电脑不受影响。',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(tr(context, '取消')),
+          ),
+          FilledButton(
+            key: const Key('confirm-forget-computer'),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFB13B31),
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(tr(context, '删除')),
+          ),
+        ],
+      ),
+    );
+    if (mounted && confirmed == true) {
+      await perform('forgetComputer', {'id': computer['id']});
+    }
+  }
+
+  Future<void> showComputer() async {
+    var editing = false;
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      backgroundColor: Colors.white,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (sheetContext, updateSheet) {
+          Future<void> edit(Future<void> Function() action) async {
+            if (editing || busy || startingDesktop) return;
+            updateSheet(() => editing = true);
+            try {
+              await action();
+            } finally {
+              if (sheetContext.mounted) updateSheet(() => editing = false);
+            }
+          }
+
+          final disabled = editing || busy || startingDesktop;
+          return SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 28),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  for (final computer in computers)
-                    ListTile(
+                  Text(
+                    tr(context, '已记住的电脑'),
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  const SizedBox(height: 16),
+                  if (error != null) ...[
+                    Text(
+                      tr(context, error!),
+                      key: const Key('computer-sheet-error'),
+                      style: const TextStyle(color: Color(0xFFB13B31)),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                  for (final computer in computers) ...[
+                    InkWell(
                       key: Key('computer-${computer['id']}'),
-                      leading: const Icon(Icons.computer_rounded, color: blue),
-                      title: Text(computer['name'] as String? ?? ''),
-                      subtitle: Text(
-                        '${computer['endpoint']}\n${tr(context, switch (computer['state']) {
-                          'connected' => '已连接',
-                          'connecting' => '正在连接',
-                          'paused' => '连接已暂停',
-                          _ => '已记住',
-                        })}${computer['active'] == true ? ' · ${tr(context, '当前电脑')}' : ''}',
-                      ),
-                      isThreeLine: true,
-                      trailing: IconButton(
-                        key: Key('rename-${computer['id']}'),
-                        tooltip: tr(context, '修改名称'),
-                        icon: const Icon(Icons.edit_outlined, size: 20),
-                        onPressed: busy || startingDesktop
-                            ? null
-                            : () {
-                                Navigator.pop(sheetContext);
-                                renameComputer(computer);
-                              },
-                      ),
-                      onTap: busy || startingDesktop || !enabled
+                      borderRadius: BorderRadius.circular(12),
+                      onTap: disabled || !enabled
                           ? null
                           : () {
                               Navigator.pop(sheetContext);
                               perform('selectComputer', {'id': computer['id']});
                             },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    computer['name'] as String? ?? '',
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.titleMedium,
+                                  ),
+                                ),
+                                IconButton(
+                                  key: Key('rename-${computer['id']}'),
+                                  tooltip: tr(context, '修改名称'),
+                                  icon: const Icon(
+                                    Icons.edit_outlined,
+                                    size: 20,
+                                  ),
+                                  onPressed: disabled
+                                      ? null
+                                      : () => edit(
+                                          () => renameComputer(computer),
+                                        ),
+                                ),
+                                IconButton(
+                                  key: Key('forget-${computer['id']}'),
+                                  tooltip: tr(context, '删除电脑'),
+                                  color: const Color(0xFFB13B31),
+                                  icon: const Icon(
+                                    Icons.delete_outline_rounded,
+                                    size: 20,
+                                  ),
+                                  onPressed: disabled
+                                      ? null
+                                      : () => edit(
+                                          () => forgetComputer(computer),
+                                        ),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              computer['endpoint'] as String? ?? '',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: muted,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${tr(context, switch (computer['state']) {
+                                'connected' => '已连接',
+                                'connecting' => '正在连接',
+                                'paused' => '连接已暂停',
+                                _ => '已记住',
+                              })}${computer['active'] == true ? ' · ${tr(context, '当前电脑')}' : ''}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: muted,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
+                    const Divider(),
+                  ],
+                  if (computers.isEmpty) Text(tr(context, '暂无已记住的电脑')),
+                  const SizedBox(height: 16),
+                  Text(
+                    tr(context, '连接信息和你的授权已加密保存在手机中。更新 App 或网络恢复后，无需重新扫码。'),
+                    style: const TextStyle(
+                      height: 1.7,
+                      fontSize: 13,
+                      color: muted,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    key: const Key('pair-another-computer'),
+                    onPressed: disabled
+                        ? null
+                        : () {
+                            Navigator.pop(sheetContext);
+                            pairAnotherComputer();
+                          },
+                    icon: const Icon(Icons.add_rounded, size: 20),
+                    label: Text(tr(context, '配对另一台电脑')),
+                  ),
                 ],
-              )
-            else if (hasSavedPairing)
-              Text(
-                status['savedEndpoint'] as String? ?? '',
-                key: const Key('saved-endpoint'),
               ),
-            const SizedBox(height: 16),
-            Text(
-              tr(context, '连接信息和你的授权已加密保存在手机中。更新 App 或网络恢复后，无需重新扫码。'),
-              style: const TextStyle(height: 1.7, fontSize: 13, color: muted),
             ),
-            const SizedBox(height: 20),
-            FilledButton.icon(
-              key: const Key('pair-another-computer'),
-              onPressed: busy || startingDesktop
-                  ? null
-                  : () {
-                      Navigator.pop(sheetContext);
-                      pairAnotherComputer();
-                    },
-              icon: const Icon(Icons.add_rounded, size: 20),
-              label: Text(tr(context, '配对另一台电脑')),
-            ),
-            if (hasSavedPairing) ...[
-              const SizedBox(height: 8),
-              TextButton.icon(
-                key: const Key('forget-saved'),
-                onPressed: busy || startingDesktop
-                    ? null
-                    : () {
-                        Navigator.pop(sheetContext);
-                        perform('forgetSavedConnection');
-                      },
-                style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFFB13B31),
-                ),
-                icon: const Icon(Icons.link_off_rounded, size: 20),
-                label: Text(tr(context, '忘记这台电脑')),
-              ),
-            ],
-          ],
-        ),
+          );
+        },
       ),
-    ),
-  );
+    );
+  }
 
   List<Widget> pairingView() => [
     const SizedBox(height: 8),

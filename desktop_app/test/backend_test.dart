@@ -51,6 +51,73 @@ class FakeChild implements BackendProcess {
 
 void main() {
   test(
+    'polling preserves a failed action until the next explicit attempt',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      var rejectAction = true;
+      server.listen((r) async {
+        if (r.method == 'POST' && rejectAction) {
+          r.response.statusCode = 409;
+          r.response.write(
+            jsonEncode({
+              'error': 'Disconnect the phone before changing networks.',
+            }),
+          );
+        } else {
+          r.response.write(jsonEncode(statusData()));
+        }
+        await r.response.close();
+      });
+      final child = FakeChild();
+      final c = DesktopController(
+        starter: () async {
+          scheduleMicrotask(() => child.ready(server.port));
+          return child;
+        },
+        pollInterval: const Duration(hours: 1),
+      );
+      addTearDown(c.dispose);
+      await c.start();
+      await c.mutate('network', {'address': '192.168.1.3'});
+      await c.refresh();
+      expect(
+        c.failure?.detail,
+        'Disconnect the phone before changing networks.',
+      );
+      rejectAction = false;
+      await c.mutate('start');
+      expect(c.failure, isNull);
+      await c.shutdown();
+    },
+  );
+  test(
+    'native startup reports an actionable failure without losing its detail',
+    () async {
+      final child = FakeChild();
+      final controller = DesktopController(
+        starter: () async {
+          scheduleMicrotask(() {
+            child.stdout.add(
+              utf8.encode(
+                '${jsonEncode({'ready': false, 'error': 'Copy PhoneBridge.app to Applications before starting the service.'})}\n',
+              ),
+            );
+          });
+          return child;
+        },
+      );
+      addTearDown(controller.dispose);
+      await controller.start();
+      expect(
+        controller.failure?.detail,
+        'Copy PhoneBridge.app to Applications before starting the service.',
+      );
+      expect(child.terminations, 1);
+    },
+  );
+
+  test(
     'installed version reads bundle metadata including Windows BOM',
     () async {
       final root = await Directory.systemTemp.createTemp(

@@ -6,13 +6,62 @@ import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { validateMacConfig, macNetworks, launchAgent, installService, readMacConfig, privateDirectory, readPrivateFile, validateInstalledApp, uninstallService } from '../macos/lifecycle.mjs';
+import { spawn } from 'node:child_process';
+import { loadOrCreateSavedToken } from '../../bridge/dist/credentials.js';
+import { validateMacConfig, macNetworks, macRuntimeRevision, launchAgent, installService, readMacConfig, privateDirectory, readPrivateFile, validateInstalledApp, uninstallService } from '../macos/lifecycle.mjs';
 import { nativeReady, createDashboard, authenticatedStatus, createMcpConfiguration } from '../server.mjs';
 import { DesktopSupervisor } from '../../bridge/dist/supervisor.js';
 
 const uid = process.getuid?.() ?? 501;
 const configFor = root => ({schema:'phonebridge-macos-desktop-v1',ownerUid:uid,projectRoot:root,nodePath:join(root,'runtime','node'),hostAddress:'192.168.1.2',port:8767});
 const posix = {skip:process.platform==='win32'};
+test('native Mac launch outside Applications reports a recoverable installation error', {
+  // A packaged self-test must never launch the installed production dashboard.
+  skip: process.platform !== 'darwin' || import.meta.url.includes('/Contents/Resources/'),
+}, async t => {
+  const f = await fixture(t);
+  const child = spawn(process.execPath, [new URL('../macos/server.mjs', import.meta.url).pathname, '--native-window'], {
+    env: {...process.env, PHONEBRIDGE_DESKTOP_CONFIG: f.configFile}, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let output = '';
+  child.stdout.on('data', data => { output += data; });
+  child.stderr.resume();
+  const code = await new Promise(r => child.once('exit', r));
+  assert.equal(code, 1);
+  assert.ok(output.trim(), 'Native frontend needs a structured failure record');
+  const failure = JSON.parse(output);
+  assert.equal(failure.ready, false);
+  assert.match(failure.error, /Applications/);
+});
+test('Mac service uses the credential selected by its saved configuration', {
+  skip: process.platform !== 'darwin' || process.env.PHONEBRIDGE_TEST_LAN !== '1',
+}, async t => {
+  const f = await fixture(t);
+  const network = macNetworks()[0];
+  assert.ok(network, 'An active private network is required for the explicit LAN test');
+  const listener = createServer();
+  await new Promise(r => listener.listen(0, network.address, r));
+  const port = listener.address().port;
+  await new Promise(r => listener.close(r));
+  const credentialFile = join(f.home, '.phonebridge', 'selected-pairing.json');
+  const token = await loadOrCreateSavedToken(credentialFile);
+  const config = {...f.config, hostAddress: network.address, port, credentialFile};
+  await writeFile(f.configFile, JSON.stringify(config), {mode: 0o600});
+  const child = spawn(process.execPath, [new URL('../macos/service.mjs', import.meta.url).pathname, '--config', f.configFile], {
+    env: {...process.env, PHONEBRIDGE_CREDENTIAL_FILE: join(f.home, 'missing-default.json')},
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const exit = new Promise(r => child.once('exit', r));
+  t.after(async () => { child.kill(); await exit; });
+  let stderr = '';
+  child.stderr.on('data', data => { stderr += data; });
+  await new Promise((done, reject) => {
+    const timer = setTimeout(() => reject(new Error('Service readiness timed out')), 5000);
+    child.stdout.once('data', () => { clearTimeout(timer); done(); });
+    child.once('exit', code => { clearTimeout(timer); reject(new Error(`Service exited ${code}: ${stderr}`)); });
+  });
+  assert.equal((await authenticatedStatus(config, token)).connected, false);
+});
 async function fixture(t) {
   const home=await realpath(await mkdtemp(join(tmpdir(),'phonebridge-mac-')));
   t.after(()=>rm(home,{recursive:true,force:true}));
@@ -69,6 +118,23 @@ test('first registration and repeat opening retain configuration and owned job',
   assert.equal(ctl.calls.filter(a=>a[0]==='bootstrap').length,1);
   assert.equal(ctl.calls.some(a=>a[0]==='bootout'),false);
 });
+test('same-path runtime replacement refreshes the service once and preserves pairing',posix,async t=>{
+  const f=await fixture(t),ctl=fakeLaunchctl(),root=f.config.projectRoot;
+  for (const path of ['desktop/macos','bridge/dist']) await mkdir(join(root,path),{recursive:true});
+  for (const path of ['package-manifest.json','desktop/macos/service.mjs','desktop/macos/lifecycle.mjs','desktop/network.mjs','bridge/package-lock.json','bridge/dist/hub.js']) await writeFile(join(root,path),'original');
+  const first={...f.config,runtimeRevision:await macRuntimeRevision(root)};
+  const pairing=join(f.home,'.phonebridge','pairing.json');
+  await writeFile(pairing,'preserved',{mode:0o600});
+  await installService({...f,config:first,uid,run:ctl.run,probe:async()=>({connected:false}),attempts:1,delay:0});
+  await writeFile(join(root,'bridge/dist/hub.js'),'updated');
+  const next={...f.config,runtimeRevision:await macRuntimeRevision(root)};
+  assert.notEqual(first.runtimeRevision,next.runtimeRevision);
+  await installService({...f,config:next,previous:first,uid,run:ctl.run,probe:async()=>({connected:false}),attempts:1,delay:0});
+  await installService({...f,config:next,previous:next,uid,run:ctl.run,probe:async()=>({connected:false}),attempts:1,delay:0});
+  assert.equal(ctl.calls.filter(a=>a[0]==='bootstrap').length,2);
+  assert.equal(ctl.calls.filter(a=>a[0]==='bootout').length,1);
+  assert.equal(await readFile(pairing,'utf8'),'preserved');
+});
 test('modified plist and foreign loaded job are never changed or stopped',posix,async t=>{
   const f=await fixture(t);await mkdir(join(f.home,'Library','LaunchAgents'),{recursive:true});
   const plist=join(f.home,'Library','LaunchAgents','dev.phonebridge.desktop.plist');await writeFile(plist,'foreign',{mode:0o600});
@@ -91,6 +157,20 @@ test('failed network update restores old configuration and loaded LaunchAgent',p
   assert.equal(await readFile(f.configFile,'utf8'),old);
   assert.equal(await readFile(join(f.home,'Library','LaunchAgents','dev.phonebridge.desktop.plist'),'utf8'),launchAgent({...f.config,configFile:f.configFile},f.home));
   assert.equal(ctl.calls.filter(a=>a[0]==='bootstrap').length,3);
+});
+test('service replacement waits for the old launchd job to disappear before bootstrap',posix,async t=>{
+  const f=await fixture(t),ctl=fakeLaunchctl();
+  await installService({...f,uid,run:ctl.run,probe:async()=>({connected:false}),attempts:1,delay:0});
+  let pending=0,waits=0;
+  const run=args=>{
+    if(args[0]==='bootout'){pending=2;return {status:0,stdout:''};}
+    if(args[0]==='print' && pending>0){waits++;if(--pending===0)ctl.run(['bootout',args[1]]);}
+    if(args[0]==='bootstrap' && pending>0)return {status:5,stdout:'',error:false};
+    return ctl.run(args);
+  };
+  await installService({...f,config:{...f.config,runtimeRevision:'new-build'},previous:f.config,uid,run,probe:async()=>({connected:false}),attempts:4,delay:0});
+  assert.equal(waits,2);
+  assert.equal((await readMacConfig(f.configFile,uid)).runtimeRevision,'new-build');
 });
 test('unchanged files with unloaded job roll back a failed bootstrap',posix,async t=>{
   const f=await fixture(t);await mkdir(join(f.home,'Library','LaunchAgents'),{recursive:true});

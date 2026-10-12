@@ -2,12 +2,26 @@ import { lstat, mkdir, readFile, writeFile, rename, unlink, realpath } from 'nod
 import { join, dirname, resolve, isAbsolute } from 'node:path';
 import { networkInterfaces, homedir } from 'node:os';
 import { spawnSync } from 'node:child_process';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, createHash } from 'node:crypto';
+import { readdir } from 'node:fs/promises';
 import { privateIPv4, selectNetworks } from '../network.mjs';
 import { installMcpLauncher } from './mcp-launcher.mjs';
 
 export const agentLabel = 'dev.phonebridge.desktop';
 export const macConfigPath = () => process.env.PHONEBRIDGE_DESKTOP_CONFIG ?? join(homedir(), '.phonebridge', 'desktop-macos.json');
+// Paths stay stable when an App is replaced. Fingerprint the service's inputs so
+// reopening a newer bundle refreshes the owned job, including same-version previews.
+export async function macRuntimeRevision(resources) {
+  const hash = createHash('sha256');
+  const add = async path => {
+    hash.update(path).update('\0').update(await readFile(join(resources, path))).update('\0');
+  };
+  for (const path of ['package-manifest.json', 'desktop/macos/service.mjs', 'desktop/macos/lifecycle.mjs', 'desktop/network.mjs', 'bridge/package-lock.json']) await add(path);
+  for (const name of (await readdir(join(resources, 'bridge', 'dist'))).sort()) {
+    if (name.endsWith('.js')) await add(join('bridge', 'dist', name));
+  }
+  return hash.digest('hex');
+}
 export function validateMacConfig(value, uid = process.getuid?.(), { test = false } = {}) {
   if (!value || value.schema !== 'phonebridge-macos-desktop-v1' || value.ownerUid !== uid || !Number.isInteger(uid)) throw new Error('Unsupported desktop configuration or another owner.');
   if (!privateIPv4(value.hostAddress) && !(test && value.hostAddress === '127.0.0.1')) throw new Error('Select a private Wi-Fi or Ethernet network.');
@@ -68,6 +82,17 @@ export function runLaunchctl(args) {
   return { status: result.status, stdout: result.stdout ?? '', error: !!result.error };
 }
 function requireSuccess(result) { if (result.status !== 0 || result.error) throw new Error('macOS could not start the user service. Existing setup was preserved.'); }
+async function waitForJobRemoval({ run, job, config, configFile, plistPath, attempts, delay }) {
+  for (let i = 0; i < attempts; i++) {
+    const loaded = run(['print', job]);
+    if (loaded.status !== 0 && !loaded.error) return;
+    if (loaded.status === 0 && !ownsLoadedJob(loaded.stdout, config, configFile, plistPath)) {
+      throw new Error('A foreign service uses the PhoneBridge name. It was preserved.');
+    }
+    await new Promise(resolve => setTimeout(resolve, delay));
+  }
+  throw new Error('macOS is still stopping the previous service. Try Start service again.');
+}
 export function ownsLoadedJob(output, config, configFile, plistPath) {
   const lines=output.split('\n').map(line=>line.trim());
   const argumentsBlock=/\barguments = \{\s*\n([\s\S]*?)\n\s*\}/.exec(output)?.[1];
@@ -106,7 +131,13 @@ export async function installService({ config, previous, configFile, home = home
   const unchanged = oldPlist === nextPlist && oldConfigText === JSON.stringify(config);
   let bootedOut = false, installed = false;
   try {
-    if (loaded.status === 0 && !unchanged) { requireSuccess(run(['bootout', job])); bootedOut = true; }
+    if (loaded.status === 0 && !unchanged) {
+      requireSuccess(run(['bootout', job]));
+      bootedOut = true;
+      // bootout returns while a SIGTERM handler can still be closing sockets.
+      // Replacing its plist or bootstrapping now fails with launchctl status 5.
+      await waitForJobRemoval({ run, job, config: previous ?? config, configFile, plistPath, attempts, delay });
+    }
     if (!unchanged) {
       if (oldConfigText !== undefined) await writePrivateFile(configFile + '.backup', oldConfigText, uid);
       await writePrivateFile(configFile, JSON.stringify(config), uid);
@@ -117,11 +148,16 @@ export async function installService({ config, previous, configFile, home = home
     for (let i = 0; i < attempts; i++) { try { const status = await probe(config); if (typeof status.connected === 'boolean') return status; } catch {} await new Promise(r => setTimeout(r, delay)); }
     throw new Error('The desktop service did not become ready. Check the network and try Start service again.');
   } catch (error) {
-    if (installed) run(['bootout', job]);
+    if (installed) {
+      requireSuccess(run(['bootout', job]));
+      await waitForJobRemoval({ run, job, config, configFile, plistPath, attempts, delay });
+    } else if (bootedOut) {
+      await waitForJobRemoval({ run, job, config: previous ?? config, configFile, plistPath, attempts, delay });
+    }
     if (!unchanged) {
       if (oldConfigText === undefined) await unlink(configFile).catch(() => {}); else await writePrivateFile(configFile, oldConfigText, uid);
       if (oldPlist === undefined) await unlink(plistPath).catch(() => {}); else await writePrivateFile(plistPath, oldPlist, uid);
-      if (bootedOut && oldPlist) { run(['bootstrap', domain, plistPath]); run(['kickstart', job]); }
+      if (bootedOut && oldPlist) { requireSuccess(run(['bootstrap', domain, plistPath])); requireSuccess(run(['kickstart', job])); }
     }
     throw error;
   }
