@@ -113,7 +113,9 @@ class DashboardApi {
   Duration deadline(String route) =>
       timeout ??
       Duration(
-        seconds: route == 'allow-lan'
+        seconds: route == 'send-file'
+            ? 65
+            : route == 'allow-lan'
             ? 90
             : route == 'status'
             ? 5
@@ -126,7 +128,13 @@ class DashboardApi {
     Map<String, dynamic>? body,
   }) async {
     if (_closed ||
-        !['status', 'start', 'network', 'allow-lan'].contains(route)) {
+        ![
+          'status',
+          'start',
+          'network',
+          'allow-lan',
+          'send-file',
+        ].contains(route)) {
       throw const BackendFailure('unavailable');
     }
     HttpClientRequest? active;
@@ -198,6 +206,9 @@ class DesktopStatus {
     port = data['port'];
     name = data['name'] is String ? data['name'] : 'PhoneBridge';
     error = safeDetail(data['error']);
+    transfer = data['transfer'] is Map
+        ? Map<String, dynamic>.from(data['transfer'])
+        : null;
     networks = (data['networks'] is List ? data['networks'] as List : [])
         .whereType<Map>()
         .where((n) => n['address'] is String && n['name'] is String)
@@ -223,6 +234,7 @@ class DesktopStatus {
   late final String address, name;
   late final int port;
   late final String? error;
+  late final Map<String, dynamic>? transfer;
   late final List<({String address, String name})> networks;
   late final Map<String, dynamic>? mcpConfiguration;
   Uint8List? qr;
@@ -246,7 +258,14 @@ class DesktopController extends ChangeNotifier {
   bool starting = false, mutating = false;
   final String? installedVersion;
   DesktopStatus? status;
-  BackendFailure? failure;
+  BackendFailure? _connectionFailure, _actionFailure;
+  BackendFailure? get failure => _connectionFailure ?? _actionFailure;
+  bool get connectionFailed => _connectionFailure != null;
+  void dismissActionFailure() {
+    _actionFailure = null;
+    changed();
+  }
+
   bool get ready => _api != null;
   void changed() {
     if (!_disposed) notifyListeners();
@@ -255,7 +274,8 @@ class DesktopController extends ChangeNotifier {
   Future<void> start() async {
     if (starting || _disposed || mutating) return;
     starting = true;
-    failure = null;
+    _connectionFailure = null;
+    _actionFailure = null;
     status = null;
     changed();
     final generation = ++_generation;
@@ -283,6 +303,12 @@ class DesktopController extends ChangeNotifier {
           if (newline < 0) return;
           try {
             final data = jsonDecode(utf8.decode(buffer.sublist(0, newline)));
+            if (data is Map && data['ready'] == false) {
+              ready.completeError(
+                BackendFailure('startup', safeDetail(data['error'])),
+              );
+              return;
+            }
             if (data is! Map ||
                 data['ready'] != true ||
                 data['dashboardUrl'] is! String) {
@@ -321,7 +347,7 @@ class DesktopController extends ChangeNotifier {
       }
     } catch (error) {
       if (!_disposed && generation == _generation) {
-        failure = error is BackendFailure
+        _connectionFailure = error is BackendFailure
             ? error
             : const BackendFailure('runtime');
         await _cleanup();
@@ -342,11 +368,13 @@ class DesktopController extends ChangeNotifier {
       final next = DesktopStatus(await _api!.request('status'));
       if (!_disposed && generation == _generation) {
         status = next;
-        failure = null;
+        _connectionFailure = null;
       }
     } catch (e) {
       if (!_disposed && generation == _generation) {
-        failure = e is BackendFailure ? e : const BackendFailure('response');
+        _connectionFailure = e is BackendFailure
+            ? e
+            : const BackendFailure('response');
       }
     } finally {
       _polling = false;
@@ -360,19 +388,21 @@ class DesktopController extends ChangeNotifier {
   ]) async {
     if (_disposed || mutating || _api == null) return;
     mutating = true;
-    failure = null;
+    _actionFailure = null;
     changed();
     try {
       await _api!.request(route, body: body);
     } catch (e) {
       if (!_disposed) {
-        failure = e is BackendFailure ? e : const BackendFailure('request');
+        _actionFailure = e is BackendFailure
+            ? e
+            : const BackendFailure('request');
       }
     } finally {
       mutating = false;
       changed();
     }
-    if (failure == null) await refresh();
+    if (_actionFailure == null) await refresh();
   }
 
   Future<void> _cleanup() async {

@@ -60,6 +60,17 @@ void main() {
               'hasSavedPairing': saved,
               'savedEndpoint': saved ? 'ws://192.168.1.10:8765/device' : '',
               'autoReconnectEnabled': autoReconnect,
+              'computers': saved
+                  ? [
+                      {
+                        'id': 'saved',
+                        'name': '我的电脑',
+                        'endpoint': 'ws://192.168.1.10:8765/device',
+                        'active': true,
+                        'state': connected ? 'connected' : 'paused',
+                      },
+                    ]
+                  : [],
             };
           }
           if (call.method == 'getUpdateStatus' ||
@@ -78,7 +89,11 @@ void main() {
             connected = false;
             autoReconnect = false;
           }
-          if (call.method == 'forgetSavedConnection') saved = false;
+          if (call.method == 'forgetComputer') {
+            saved = false;
+            connected = false;
+            autoReconnect = false;
+          }
           if (call.method == 'startDesktopService') {
             if (desktopStart != null) await desktopStart!.future;
             if (desktopFailure != null) throw desktopFailure!;
@@ -360,7 +375,11 @@ void main() {
       await tester.ensureVisible(forget);
       await tester.pumpAndSettle();
       await tester.tap(forget);
-      await tester.pump();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('confirm-forget-computer')));
+      await tester.pumpAndSettle();
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
       expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
       await tester.tap(find.byKey(const Key('manual-pairing')));
       await tester.pumpAndSettle();

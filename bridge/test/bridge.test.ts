@@ -174,8 +174,10 @@ test(`MCP stdio discovers tools and returns state/image/error through real hub (
   const transport = new StdioClientTransport({ command: process.execPath, args: ['--import', 'tsx', fileURLToPath(new URL('../src/mcp.ts', import.meta.url))], env: clientEnv, stderr: 'pipe' });
   const client = new Client({ name: 'test', version: '1' });
   await client.connect(transport); t.after(() => client.close());
-  const list = await client.listTools(); assert.equal(list.tools.length, 10);
+  const list = await client.listTools(); assert.equal(list.tools.length, 11);
   assert.equal(list.tools.find(x => x.name === 'phone_state')?.annotations?.readOnlyHint, true);
+  assert.ok(list.tools.some(x => x.name === 'phone_send_file'));
+  assert.ok(!list.tools.some(x => x.name === 'phone_file_offer'));
   const historyTool = list.tools.find(x => x.name === 'phone_operation_history');
   assert.equal(historyTool?.annotations?.readOnlyHint, true);
   assert.equal(historyTool?.annotations?.destructiveHint, false);

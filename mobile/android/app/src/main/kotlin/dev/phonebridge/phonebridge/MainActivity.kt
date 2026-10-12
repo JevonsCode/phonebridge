@@ -58,6 +58,17 @@ class MainActivity : FlutterActivity() {
                             BridgeSession.refreshNotificationLanguage()
                             result.success(null)
                         }
+                        "receiveFile" -> { BridgeSession.fileInbox!!.receive(call.argument<String>("id") ?: ""); result.success(null) }
+                        "declineFile" -> { BridgeSession.fileInbox!!.decline(call.argument<String>("id") ?: ""); result.success(null) }
+                        "removeReceivedFile" -> { BridgeSession.fileInbox!!.remove(call.argument<String>("id") ?: ""); result.success(null) }
+                        "shareFile" -> { BridgeSession.fileInbox!!.share(this, call.argument<String>("id") ?: ""); result.success(null) }
+                        "operationHistory" -> {
+                            val inbox = BridgeSession.fileInbox!!
+                            if (!BridgeSession.connected) result.success(mapOf("operations" to "[]", "files" to inbox.history(), "error" to "连接电脑后可查看电脑操作日志"))
+                            else inbox.readHistory(BridgeSession.fileSource()) { operations, error ->
+                                result.success(mapOf("operations" to (operations ?: "[]"), "files" to inbox.history(), "error" to error))
+                            }
+                        }
                         "status" -> result.success(BridgeSession.status())
                         "listComputers" -> result.success(BridgeSession.computerList())
                         "selectComputer" -> {
@@ -123,6 +134,12 @@ class MainActivity : FlutterActivity() {
                         "forgetSavedConnection" -> {
                             cancelDesktopRecovery()
                             BridgeSession.forgetSavedConnection()
+                            result.success(BridgeSession.status())
+                        }
+                        "forgetComputer" -> {
+                            val id = call.argument<String>("id") ?: ""
+                            if (BridgeSession.status()["activeComputerId"] == id) cancelDesktopRecovery()
+                            BridgeSession.forgetComputer(id)
                             result.success(BridgeSession.status())
                         }
                         else -> result.notImplemented()

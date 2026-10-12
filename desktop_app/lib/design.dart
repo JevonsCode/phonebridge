@@ -184,11 +184,16 @@ class SettingsRow extends StatelessWidget {
 }
 
 class ConnectionIllustration extends StatelessWidget {
-  const ConnectionIllustration({required this.connected, super.key});
+  const ConnectionIllustration({
+    required this.connected,
+    required this.semanticLabel,
+    super.key,
+  });
   final bool connected;
+  final String semanticLabel;
   @override
   Widget build(BuildContext context) => Semantics(
-    label: tr(context, connected ? '手机与电脑已连接' : '手机等待连接电脑'),
+    label: semanticLabel,
     child: ExcludeSemantics(
       child: SizedBox(
         height: 128,

@@ -32,12 +32,14 @@ class PhoneBridgeApp extends StatefulWidget {
     this.initialChinese = false,
     this.onLanguageChanged,
     this.supportsLanPermission,
+    this.chooseFile,
     super.key,
   });
   final DesktopController controller;
   final bool initialChinese;
   final ValueChanged<bool>? onLanguageChanged;
   final bool? supportsLanPermission;
+  final Future<String?> Function()? chooseFile;
   @override
   State<PhoneBridgeApp> createState() => _PhoneBridgeAppState();
 }
@@ -45,6 +47,36 @@ class PhoneBridgeApp extends StatefulWidget {
 class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
   late bool zh = widget.initialChinese;
   int page = 0;
+  bool choosingFile = false;
+  String? fileError;
+  Future<void> sendFile() async {
+    setState(() {
+      choosingFile = true;
+      fileError = null;
+    });
+    try {
+      final path =
+          await (widget.chooseFile?.call() ??
+              const MethodChannel(
+                'dev.phonebridge/files',
+              ).invokeMethod<String>('chooseFile'));
+      if (path != null && mounted) {
+        await c.mutate('send-file', {'path': path});
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(
+          () => fileError = t(
+            '无法打开文件选择器，请重试',
+            'Could not open the file chooser. Please try again.',
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => choosingFile = false);
+    }
+  }
+
   String t(String cn, String en) => zh ? cn : en;
   DesktopController get c => widget.controller;
   @override
@@ -56,7 +88,9 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
       animation: c,
       builder: (context, _) => LayoutBuilder(
         builder: (context, constraints) {
-          final wide = constraints.maxWidth >= 820;
+          final wide =
+              constraints.maxWidth >= 820 &&
+              MediaQuery.textScalerOf(context).scale(14) <= 21;
           final titles = [
             t('连接', 'Connection'),
             t('接入 AI', 'Connect AI'),
@@ -215,13 +249,15 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
     children: [
       Image.asset('assets/brand/logo.png', width: 38, height: 38),
       const SizedBox(width: 10),
-      const Text(
-        'PhoneBridge',
-        style: TextStyle(
-          fontSize: 20,
-          fontWeight: FontWeight.w600,
-          letterSpacing: -.5,
-          color: ink,
+      const Flexible(
+        child: Text(
+          'PhoneBridge',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+            letterSpacing: -.5,
+            color: ink,
+          ),
         ),
       ),
     ],
@@ -251,15 +287,29 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
             const SizedBox(width: 10),
             Expanded(
               child: Text(
-                t('暂时无法连接', 'Unable to connect'),
+                c.connectionFailed
+                    ? t('暂时无法连接', 'Unable to connect')
+                    : t('操作未完成', 'Action could not be completed'),
                 style: const TextStyle(fontWeight: FontWeight.w500, color: ink),
               ),
             ),
+            if (!c.connectionFailed)
+              IconButton(
+                onPressed: c.dismissActionFailure,
+                tooltip: t('关闭提示', 'Dismiss message'),
+                icon: const Icon(Icons.close_rounded),
+              ),
           ],
         ),
         const SizedBox(height: 10),
         Text(
-          c.failure?.detail ??
+          (c.failure?.detail ==
+                      'Copy PhoneBridge.app to Applications before starting the service.'
+                  ? t(
+                      '请先将 PhoneBridge.app 拖入「应用程序」文件夹，再重新打开。',
+                      'Copy PhoneBridge.app to Applications, then reopen it.',
+                    )
+                  : c.failure?.detail) ??
               (c.failure?.code == 'runtime'
                   ? t(
                       '内置运行时缺失或无法启动，请重新安装完整的 PhoneBridge。',
@@ -270,12 +320,14 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                       'The local service did not respond. Check your private network, then try again.',
                     )),
         ),
-        const SizedBox(height: 16),
-        OutlinedButton.icon(
-          onPressed: c.starting || c.mutating ? null : c.start,
-          icon: const Icon(Icons.refresh_rounded),
-          label: Text(t('重试连接', 'Retry connection')),
-        ),
+        if (c.connectionFailed) ...[
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: c.starting || c.mutating ? null : c.start,
+            icon: const Icon(Icons.refresh_rounded),
+            label: Text(t('重试连接', 'Retry connection')),
+          ),
+        ],
       ],
     ),
   );
@@ -283,10 +335,10 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
   List<Widget> _connection(BuildContext context) {
     final s = c.status;
     final connected =
-        s?.connected == true && s?.unavailable != true && c.failure == null;
+        s?.connected == true && s?.unavailable != true && !c.connectionFailed;
     final title = c.starting
         ? t('正在准备连接', 'Getting ready')
-        : c.failure != null
+        : c.connectionFailed
         ? t('连接已中断', 'Connection interrupted')
         : s?.unavailable == true
         ? t('服务暂不可用', 'Service unavailable')
@@ -299,7 +351,12 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
           width: double.infinity,
           child: Column(
             children: [
-              ConnectionIllustration(connected: connected),
+              ConnectionIllustration(
+                connected: connected,
+                semanticLabel: connected
+                    ? t('手机与电脑已连接', 'Phone and computer connected')
+                    : t('手机等待连接电脑', 'Waiting to connect your phone'),
+              ),
               const SizedBox(height: 18),
               Text(
                 title,
@@ -332,7 +389,8 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                   icon: const Icon(Icons.auto_awesome_outlined, size: 18),
                   label: Text(t('接入 AI', 'Connect AI')),
                 )
-              else
+              else if (!c.connectionFailed &&
+                  (s == null || s.unavailable || s.error != null))
                 FilledButton.icon(
                   onPressed: c.mutating
                       ? null
@@ -367,7 +425,92 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
         ),
       ),
       const SizedBox(height: 20),
-      if (!connected && s?.qr != null && c.failure == null)
+      if (Platform.isMacOS || widget.chooseFile != null) ...[
+        card(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              label(t('发送文件到手机', 'Send a file to your phone')),
+              const SizedBox(height: 10),
+              Text(
+                t(
+                  '选择图片或文件，手机接收后可分享给微信、WhatsApp 等应用。每次一个文件，最大 50 MB。',
+                  'Choose an image or file. Receive it on your phone, then share to WeChat, WhatsApp or another app. One file at a time, up to 50 MB.',
+                ),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                key: const Key('send-file'),
+                onPressed:
+                    !connected ||
+                        !c.ready ||
+                        c.mutating ||
+                        choosingFile ||
+                        [
+                          'uploading',
+                          'pending',
+                          'receiving',
+                        ].contains(s?.transfer?['state'])
+                    ? null
+                    : sendFile,
+                icon: const Icon(Icons.upload_file_rounded, size: 18),
+                label: Text(
+                  choosingFile || c.mutating
+                      ? t('正在处理…', 'Working…')
+                      : t('选择文件', 'Choose file'),
+                ),
+              ),
+              if (!connected)
+                Text(
+                  t('连接手机后即可发送', 'Connect your phone to send files'),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              if (s?.transfer != null) ...[
+                const SizedBox(height: 12),
+                Text(s!.transfer!['name'] as String? ?? ''),
+                Text(switch (s.transfer!['state']) {
+                  'pending' => t(
+                    '等待手机接收 · 请打开手机 PhoneBridge',
+                    'Waiting for receipt · Open PhoneBridge on your phone',
+                  ),
+                  'receiving' => t(
+                    '手机正在接收并校验',
+                    'Phone is receiving and verifying',
+                  ),
+                  'received' => t(
+                    '手机已接收，可在手机上点分享',
+                    'Received on your phone. Tap Share there.',
+                  ),
+                  'declined' => t('手机已拒绝接收', 'Declined on the phone'),
+                  'expired' => t(
+                    '文件已过期，请重新选择发送',
+                    'Expired. Choose the file again to send.',
+                  ),
+                  'cancelled' => t(
+                    '连接已中断，请确认手机状态',
+                    'Connection interrupted. Check the phone.',
+                  ),
+                  'uploading' => t('正在传输…', 'Uploading…'),
+                  _ => t(
+                    '传输失败，请确认手机状态后重试',
+                    'Transfer failed. Check the phone before retrying.',
+                  ),
+                }, style: const TextStyle(fontSize: 12)),
+              ],
+              if (fileError != null)
+                Text(
+                  fileError!,
+                  style: const TextStyle(color: Color(0xFFA34726)),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
+      if (!connected &&
+          s?.unavailable == false &&
+          s?.qr != null &&
+          !c.connectionFailed)
         card(
           LayoutBuilder(
             builder: (context, box) {
@@ -378,8 +521,8 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                   const SizedBox(height: 12),
                   Text(
                     t(
-                      '打开手机上的 PhoneBridge，点击「扫码连接」。配对后，你可以随时在手机上暂停控制。',
-                      'Open PhoneBridge on your phone and tap Scan to connect. You can pause control on your phone at any time.',
+                      '打开手机上的 PhoneBridge，点击首页右上角「扫一扫」（旧版可点电脑卡片 → 配对另一台电脑 → 扫描电脑配对码）。配对后，你可以随时在手机上暂停控制。',
+                      'Open PhoneBridge on your phone and tap Scan at the top right. On older versions, tap the computer card → Pair another computer → Scan computer pairing code. You can pause control on your phone at any time.',
                     ),
                   ),
                   const SizedBox(height: 18),
@@ -598,7 +741,9 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              key: ValueKey('network-${s?.address}-${networks.keys.join()}'),
+              key: ValueKey(
+                'network-${s?.address}-${networks.keys.join()}-${c.mutating}',
+              ),
               initialValue: networks.containsKey(s?.address)
                   ? s?.address
                   : null,

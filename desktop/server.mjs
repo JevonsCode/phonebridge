@@ -105,11 +105,17 @@ export async function createDashboard({ config, token, status, startService, cha
       if (req.method === 'GET' && req.url === `${base}/ping`) { send(200, { client: 'phonebridge-desktop', pid: process.pid, clientIdentity }); return; }
       if (req.method === 'GET' && req.url === `${base}/status`) {
         let current; try { current = await status(); } catch { current = { connected: false, unavailable: true }; }
-        send(200, { connected: current.connected, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? hostname(), error: startupError?.() }); return;
+        send(200, { connected: current.connected, transfer: current.transfer, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? hostname(), error: startupError?.() }); return;
       }
       if (req.method === 'POST' && req.url === `${base}/start`) { req.resume(); await startService(); send(200, { ok: true }); return; }
       if (allowLan && req.method === 'POST' && req.url === `${base}/allow-lan`) { req.resume(); await allowLan(); send(200, { ok: true }); return; }
       if (testShutdown && req.method === 'POST' && req.url === `${base}/shutdown`) { req.resume(); send(200,{ok:true}); setImmediate(testShutdown); return; }
+      if (req.method === 'POST' && req.url === `${base}/send-file`) {
+        let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 8192) throw new Error('Request too large'); }
+        const { path } = JSON.parse(body);
+        const { sendLocalFile } = await import('../bridge/dist/send-file.js');
+        send(200, await sendLocalFile(new URL(`http://${config.hostAddress}:${config.port}`), token, path)); return;
+      }
       if (req.method === 'POST' && req.url === `${base}/network`) {
         let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 1024) throw new Error('Request too large'); }
         const { address } = JSON.parse(body); await changeNetwork(address); send(200, { ok: true }); return;
