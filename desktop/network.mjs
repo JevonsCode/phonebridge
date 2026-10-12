@@ -21,9 +21,11 @@ export function windowsIdentity() {
   return r.stdout.trim();
 }
 
-export function localNetworks() {
-  const code = "$ErrorActionPreference='Stop'; $r=@(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0'); @(Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object { $a=Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue; [pscustomobject]@{address=$_.IPAddress;name=$_.InterfaceAlias;active=($a.Status -eq 'Up');physical=[bool]$a.HardwareInterface;defaultRoute=([bool]($r | Where-Object InterfaceIndex -eq $_.InterfaceIndex));metric=($r | Where-Object InterfaceIndex -eq $_.InterfaceIndex | Select-Object -First 1 -ExpandProperty RouteMetric)}}) | ConvertTo-Json -Compress";
-  const r = spawnSync(process.env.SystemRoot + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', code], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+export function localNetworks({ run = spawnSync } = {}) {
+  // Windows PowerShell 5.1 otherwise encodes redirected stdout with the active
+  // console code page. Node's UTF-8 decoder cannot recover localized aliases.
+  const code = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false); $r=@(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0'); @(Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object { $a=Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue; [pscustomobject]@{address=$_.IPAddress;name=$_.InterfaceAlias;active=($a.Status -eq 'Up');physical=[bool]$a.HardwareInterface;defaultRoute=([bool]($r | Where-Object InterfaceIndex -eq $_.InterfaceIndex));metric=($r | Where-Object InterfaceIndex -eq $_.InterfaceIndex | Select-Object -First 1 -ExpandProperty RouteMetric)}}) | ConvertTo-Json -Compress";
+  const r = run(process.env.SystemRoot + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', code], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
   if (r.status === 0) { try { const parsed = JSON.parse(r.stdout); return selectNetworks(Array.isArray(parsed) ? parsed : [parsed]); } catch {} }
   return selectNetworks(Object.entries(networkInterfaces()).flatMap(([name, values]) => (values ?? []).map(v => ({ name, address: v.address, internal: v.internal }))));
 }

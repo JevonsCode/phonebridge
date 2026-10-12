@@ -6,7 +6,7 @@ import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DesktopSupervisor } from '../dist/supervisor.js';
@@ -17,7 +17,7 @@ async function until(check: () => boolean | Promise<boolean>, message: string) {
 }
 async function setup(t: TestContext, autoStart = false) {
   const token = randomBytes(32).toString('base64url');
-  const dir = await mkdtemp(join(tmpdir(), 'phonebridge-supervisor-log-'));
+  const dir = await realpath(await mkdtemp(join(tmpdir(), 'phonebridge-supervisor-log-')));
   const supervisor = new DesktopSupervisor({ token, port: 0, autoStart, restartDelayMs: 50, logFile: join(dir, 'operations.jsonl') });
   const url = await supervisor.start();
   t.after(async () => { await supervisor.close(); await rm(dir, { recursive: true, force: true }); });
@@ -136,4 +136,21 @@ test('forced parent termination closes the orphan worker via IPC disconnect', as
   await replacement.start();
   assert.equal(replacement.serviceRunning, true);
   await replacement.close();
+});
+
+test('file upload, download and receipt pass through the installed service port', async t => {
+  const { url, headers } = await setup(t, true);
+  const phone = new WebSocket(`${url.replace('http', 'ws')}/device`, { headers });
+  t.after(() => phone.terminate()); await once(phone, 'open');
+  phone.send(JSON.stringify({ type: 'hello', protocol: 1, readOnly: true }));
+  await until(async () => (await (await fetch(`${url}/status`, { headers })).json()).connected, 'Phone handshake failed');
+  let fileId = '';
+  phone.on('message', bytes => { const request = JSON.parse(bytes.toString()); fileId = request.params.id; phone.send(JSON.stringify({ id: request.id, result: { queued: true } })); });
+  const metadata = Buffer.from(JSON.stringify({ name: 'fixture.png', mimeType: 'image/png', size: 3 })).toString('base64url');
+  const upload = await fetch(`${url}/files`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/octet-stream', 'X-PhoneBridge-File': metadata }, body: 'abc' });
+  assert.equal(upload.status, 201);
+  assert.equal((await fetch(`${url}/files/${fileId}`)).status, 401);
+  assert.equal(await (await fetch(`${url}/files/${fileId}`, { headers })).text(), 'abc');
+  assert.equal((await fetch(`${url}/files/${fileId}/received`, { method: 'POST', headers })).status, 200);
+  assert.equal((await (await fetch(`${url}/status`, { headers })).json()).transfer.state, 'received');
 });

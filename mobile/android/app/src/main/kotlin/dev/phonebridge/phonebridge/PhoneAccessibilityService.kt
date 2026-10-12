@@ -240,6 +240,10 @@ class PhoneAccessibilityService : AccessibilityService() {
         val mutation = method in setOf("tap", "long_press", "swipe", "set_text", "commit_text", "global_action", "launch_app")
         requireSession(generation, mutation)
         when (method) {
+            "file_offer" -> {
+                BridgeSession.offerFile(params)
+                complete(JSONObject().put("queued", true), null)
+            }
             "state" -> {
                 validateKeys(params, emptySet())
                 complete(observe(), null)

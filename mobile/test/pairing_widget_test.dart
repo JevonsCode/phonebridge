@@ -10,6 +10,8 @@ void main() {
   const channel = MethodChannel('dev.phonebridge/control');
   TestWidgetsFlutterBinding.ensureInitialized();
   final calls = <MethodCall>[];
+  var connected = false, saved = false, reconnecting = false;
+  PlatformException? disconnectFailure;
   final token = 'a' * 40;
   final pairing = PairingData.parse(
     Uri(
@@ -27,17 +29,25 @@ void main() {
     TestWidgetsFlutterBinding.instance.platformDispatcher.localeTestValue =
         const Locale('zh');
     calls.clear();
+    connected = saved = reconnecting = false;
+    disconnectFailure = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
           if (call.method == 'status') {
             return {
               'accessibilityEnabled': true,
-              'connected': false,
+              'connected': connected,
               'connecting': false,
+              'hasSavedPairing': saved,
+              'autoReconnectEnabled': reconnecting,
               'actionsEnabled': false,
               'lastError': '',
             };
+          }
+          if (call.method == 'disconnect') {
+            if (disconnectFailure != null) throw disconnectFailure!;
+            connected = reconnecting = false;
           }
           return null;
         });
@@ -67,6 +77,113 @@ void main() {
       ),
     ),
   );
+
+  for (final paired in [false, true]) {
+    testWidgets('home scan is directly accessible with saved pairing $paired', (
+      tester,
+    ) async {
+      saved = paired;
+      await tester.pumpWidget(app());
+      await tester.pumpAndSettle();
+      final entry = find.byKey(const Key('home-scan-pairing'));
+      expect(entry.hitTestable(), findsOneWidget);
+      await tester.tap(entry);
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('scanner-result')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('scanner-result')));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('pairing-prefilled')), findsOneWidget);
+      expect(
+        tester.widget<CheckboxListTile>(find.byKey(const Key('consent'))).value,
+        isFalse,
+      );
+      expect(calls.where((c) => c.method != 'status'), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  for (final language in ['zh', 'en']) {
+    testWidgets(
+      'home scan remains visible at 200% text on a narrow $language screen',
+      (tester) async {
+        tester.view.physicalSize = const Size(320, 720);
+        tester.view.devicePixelRatio = 1;
+        tester.platformDispatcher.textScaleFactorTestValue = 2;
+        tester.platformDispatcher.localeTestValue = Locale(language);
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+        addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
+        await tester.pumpWidget(const PhoneBridgeApp());
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('home-scan-pairing')).hitTestable(),
+          findsOneWidget,
+        );
+        expect(find.text(language == 'zh' ? '扫一扫' : 'Scan'), findsOneWidget);
+        expect(tester.takeException(), isNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
+
+  testWidgets(
+    'cancelling home scan confirmation preserves the active connection',
+    (tester) async {
+      connected = saved = true;
+      await tester.pumpWidget(app());
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('home-scan-pairing')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('取消'));
+      await tester.pumpAndSettle();
+      expect(connected, isTrue);
+      expect(find.byKey(const Key('scanner-result')), findsNothing);
+      expect(calls.where((c) => c.method != 'status'), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  for (final active in ['connected', 'reconnecting']) {
+    testWidgets('home scan pauses $active but retains saved pairing', (
+      tester,
+    ) async {
+      saved = true;
+      connected = active == 'connected';
+      reconnecting = active == 'reconnecting';
+      await tester.pumpWidget(app(cancel: true));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('home-scan-pairing')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('暂停并扫码'));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('scanner-result')), findsOneWidget);
+      await tester.tap(find.byKey(const Key('scanner-result')));
+      await tester.pumpAndSettle();
+      expect(calls.where((c) => c.method == 'disconnect'), hasLength(1));
+      expect(calls.where((c) => c.method == 'forgetSavedConnection'), isEmpty);
+      expect(saved, isTrue);
+      expect(find.byKey(const Key('consent')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+  }
+
+  testWidgets('failed pause does not open the camera or erase pairing', (
+    tester,
+  ) async {
+    connected = saved = true;
+    disconnectFailure = PlatformException(code: 'DISCONNECT_FAILED');
+    await tester.pumpWidget(app());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('home-scan-pairing')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('暂停并扫码'));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('scanner-result')), findsNothing);
+    expect(saved, isTrue);
+    expect(connected, isTrue);
+    expect(find.byKey(const Key('error')), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('scanning prefills only and resets prior acknowledgements', (
     tester,

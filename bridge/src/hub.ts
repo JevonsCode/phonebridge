@@ -6,6 +6,8 @@ import { z } from 'zod';
 import { BridgeError, parseCommand, validateToken, type Method, type Reply } from './protocol.js';
 import { FileOperationJournal, historyQuerySchema, journalErrorCode, operationParams, type OperationJournal, type OperationRecord } from './operation-journal.js';
 
+import { FileTransferSlot, fileMetadataSchema } from './file-transfer.js';
+
 type Options = { token: string; host?: string; port?: number; allowLan?: boolean; timeoutMs?: number; tls?: { cert: Buffer; key: Buffer }; journal?: OperationJournal };
 type Pending = { id: string; resolve: (reply: Reply) => void; reject: (error: BridgeError) => void; timer: NodeJS.Timeout };
 const responseSchema = z.object({ id: z.string().max(100), result: z.record(z.unknown()).optional(), error: z.object({ code: z.string().max(100), message: z.string().max(500) }).strict().optional() }).strict().refine(r => (r.result !== undefined) !== (r.error !== undefined));
@@ -22,6 +24,7 @@ export class PhoneHub {
   private digest: Buffer;
   private journal: OperationJournal;
   private dispatching = false;
+  private files = new FileTransferSlot();
   constructor(private options: Options) {
     validateToken(options.token);
     this.journal = options.journal ?? new FileOperationJournal();
@@ -29,7 +32,7 @@ export class PhoneHub {
     const host = options.host ?? '127.0.0.1';
     if (!['127.0.0.1', '::1', 'localhost'].includes(host) && !options.allowLan) throw new Error('Non-loopback bind requires --allow-lan. Prefer a trusted network or TLS.');
     this.server = options.tls ? https.createServer(options.tls, (q, s) => void this.handle(q, s)) : http.createServer((q, s) => void this.handle(q, s));
-    this.server.requestTimeout = 10000;
+    this.server.requestTimeout = 60000;
     this.server.headersTimeout = 5000;
     this.server.on('upgrade', (req, socket, head) => {
       if (req.url !== '/device' || req.headers.origin || !this.authorized(req)) {
@@ -52,10 +55,46 @@ export class PhoneHub {
     if (req.headers.origin) { this.respond(res, 403, { error: { code: 'ORIGIN_REFUSED', message: 'Browser origins are not supported.' } }); return; }
     if (req.method === 'GET' && req.url === '/health') { this.respond(res, 200, { ok: true, protocol: 1 }); return; }
     if (!this.authorized(req)) { this.respond(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } }); return; }
-    if (req.method === 'GET' && req.url === '/status') { this.respond(res, 200, { connected: this.ready, busy: !!this.pending || this.dispatching, protocol: 1 }); return; }
+    if (req.method === 'GET' && req.url === '/status') { this.respond(res, 200, { connected: this.ready, busy: !!this.pending || this.dispatching, protocol: 1, transfer: this.files.status() }); return; }
     let endpoint: URL;
     try { endpoint = new URL(req.url ?? '/', 'http://localhost'); }
     catch { req.resume(); this.respond(res, 400, { error: { code: 'INVALID_URL', message: 'Malformed request URL.' } }); return; }
+    if (endpoint.pathname === '/files' || /^\/files\/[a-f0-9-]{36}(?:\/received)?$/.test(endpoint.pathname)) {
+      let offeredId: string | undefined;
+      try {
+        if (req.method === 'POST' && endpoint.pathname === '/files') {
+          if (!this.ready || !this.phone) throw new BridgeError('NO_DEVICE', 'Connect the phone first.', 503);
+          const phone = this.phone;
+          const encoded = req.headers['x-phonebridge-file'];
+          if (typeof encoded !== 'string' || encoded.length > 4096) throw new BridgeError('INVALID_FILE', 'Missing file metadata.');
+          const metadata = fileMetadataSchema.safeParse(JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')));
+          if (!metadata.success || req.headers['content-type'] !== 'application/octet-stream' || Number(req.headers['content-length']) !== metadata.data.size) throw new BridgeError('INVALID_FILE', 'Invalid file metadata or size. Maximum 50 MiB.');
+          const offer = await this.files.upload(metadata.data, req);
+          offeredId = offer.id;
+          if (!this.ready || this.phone !== phone) throw new BridgeError('DISCONNECTED', 'Phone disconnected during upload.', 503);
+          const reply = await this.command('file_offer', offer);
+          if (reply.error) throw new BridgeError(reply.error.code, reply.error.message, 409);
+          this.respond(res, 201, { transfer: this.files.status() });
+        } else {
+          const id = endpoint.pathname.split('/')[2]!;
+          if (req.method === 'GET' && !endpoint.pathname.endsWith('/received')) {
+            const bytes = this.files.download(id);
+            res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.length, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+            res.end(bytes);
+          } else if (req.method === 'POST' && endpoint.pathname.endsWith('/received')) {
+            this.files.finish(id, 'received'); req.resume(); this.respond(res, 200, { ok: true });
+          } else if (req.method === 'DELETE' && !endpoint.pathname.endsWith('/received')) {
+            this.files.finish(id, 'declined'); req.resume(); this.respond(res, 200, { ok: true });
+          } else { req.resume(); this.respond(res, 404, { error: { code: 'NOT_FOUND', message: 'Unknown endpoint.' } }); }
+        }
+      } catch (error) {
+        if (offeredId && this.files.status()?.id === offeredId) this.files.clear('failed');
+        req.resume();
+        const e = error instanceof BridgeError ? error : new BridgeError('FILE_UNAVAILABLE', 'File unavailable, invalid, or another file is awaiting the phone.', 409);
+        if (!res.headersSent && !res.destroyed) this.respond(res, e.status, { error: { code: e.code, message: e.message } });
+      }
+      return;
+    }
     if (req.method === 'GET' && endpoint.pathname === '/operations') {
       try {
         const raw: Record<string, unknown> = Object.create(null);
@@ -111,7 +150,7 @@ export class PhoneHub {
     ws.on('close', () => {
       clearTimeout(helloTimeout);
       if (this.phone !== ws) return;
-      this.phone = undefined; this.ready = false;
+      this.phone = undefined; this.ready = false; this.files.clear();
       this.rejectPending(new BridgeError('DISCONNECTED', 'Phone disconnected. Action outcome may be unknown; observe before trying again.', 503));
     });
   }
@@ -175,7 +214,7 @@ export class PhoneHub {
     return `${this.options.tls ? 'https' : 'http'}://${address.family === 'IPv6' ? `[${address.address}]` : address.address}:${address.port}`;
   }
   async close(): Promise<void> {
-    clearInterval(this.heartbeat); this.ready = false;
+    clearInterval(this.heartbeat); this.ready = false; this.files.clear();
     this.rejectPending(new BridgeError('SHUTDOWN', 'Hub stopped.', 503));
     for (const ws of this.wss.clients) ws.terminate();
     await new Promise<void>(resolve => this.wss.close(() => resolve()));

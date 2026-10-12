@@ -1,0 +1,179 @@
+name: Flutter desktop client preview
+
+on:
+  pull_request:
+    paths:
+      - 'desktop/**'
+      - 'desktop_app/**'
+      - 'assets/brand/**'
+      - 'bridge/**'
+      - 'scripts/package-macos.sh'
+      - 'scripts/package-desktop.ps1'
+      - 'scripts/test-desktop-client.ps1'
+      - 'scripts/windows/**'
+      - '.github/workflows/macos-client.yml'
+      - 'LICENSE'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-client-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-client:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      PACKAGE_ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+          cache-dependency-path: bridge/package-lock.json
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.9'
+          channel: stable
+          cache: true
+      - name: Verify Flutter desktop
+        working-directory: desktop_app
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+      - name: Build and test bridge
+        working-directory: bridge
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          npm test
+      - name: Test macOS lifecycle and private dashboard
+        run: node --test desktop/test/macos.test.mjs
+      - name: Test dashboard upgrade isolation
+        run: node --test desktop/test/client-reuse.test.mjs
+      - name: Test stable MCP bootstrap
+        run: node --test desktop/test/stable-mcp.test.mjs
+      - name: Package signed Flutter App, DMG and ZIP
+        run: bash scripts/package-macos.sh --arch "$PACKAGE_ARCH" --output "$RUNNER_TEMP/phonebridge-packages"
+      - name: Verify hashes and read-only DMG layout
+        run: |
+          set -euo pipefail
+          output="$RUNNER_TEMP/phonebridge-packages"
+          cd "$output"
+          shasum -a 256 -c "phonebridge-0.6.1-macos-$PACKAGE_ARCH.dmg.sha256"
+          shasum -a 256 -c "phonebridge-0.6.1-macos-$PACKAGE_ARCH.zip.sha256"
+          mount="$RUNNER_TEMP/phonebridge-dmg"
+          mkdir -p "$mount"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "phonebridge-0.6.1-macos-$PACKAGE_ARCH.dmg"
+          trap 'hdiutil detach "$mount"' EXIT
+          test -d "$mount/PhoneBridge.app"
+          test -L "$mount/Applications"
+          test "$(readlink "$mount/Applications")" = /Applications
+          test -f "$mount/READ-ME.txt"
+          app="$mount/PhoneBridge.app"
+          test -f "$app/Contents/Resources/LICENSE"
+          test -f "$app/Contents/Resources/PhoneBridge.icns"
+          test -f "$app/Contents/Resources/package-manifest.json"
+          test -f "$app/Contents/Resources/bridge/dist/mcp.js"
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --verify --strict "$app"
+          codesign --verify --strict "$app/Contents/Resources/runtime/node"
+          "$app/Contents/MacOS/PhoneBridge" --self-test
+          "$app/Contents/MacOS/PhoneBridge" --diagnose --report-path "$RUNNER_TEMP/macos-diagnostics.json"
+          node -e 'const fs=require("node:fs");const r=JSON.parse(fs.readFileSync(process.argv[1]));if(r.product!=="PhoneBridge"||r.dryRun!==true)throw new Error("Invalid diagnostics")' "$RUNNER_TEMP/macos-diagnostics.json"
+      - name: Upload PR test packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonebridge-macos-${{ matrix.arch }}-preview
+          path: |
+            ${{ runner.temp }}/phonebridge-packages/*.dmg
+            ${{ runner.temp }}/phonebridge-packages/*.zip
+            ${{ runner.temp }}/phonebridge-packages/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+  windows-client:
+    name: Windows Flutter window and preview package
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      PHONEBRIDGE_SCREENSHOTS: '1'
+      PHONEBRIDGE_TEST_LAN: '1'
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.3'
+          cache: npm
+          cache-dependency-path: bridge/package-lock.json
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.9'
+          channel: stable
+          cache: true
+      - name: Verify Flutter desktop
+        working-directory: desktop_app
+        run: |
+          flutter pub get
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter dependencies failed.' }
+          flutter analyze
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter analysis failed.' }
+          flutter test
+          if ($LASTEXITCODE -ne 0) { throw 'Flutter tests failed.' }
+      - name: Build bridge for MCP regression
+        working-directory: bridge
+        run: |
+          npm ci --ignore-scripts
+          if ($LASTEXITCODE -ne 0) { throw 'Bridge dependencies failed.' }
+          npm run build
+          if ($LASTEXITCODE -ne 0) { throw 'Bridge compilation failed.' }
+      - name: Test dashboard upgrade isolation
+        run: node --test desktop/test/client-reuse.test.mjs
+      - name: Test stable MCP bootstrap
+        run: node --test desktop/test/stable-mcp.test.mjs
+      - name: Package Windows 0.6.1 preview
+        run: |
+          ./scripts/package-desktop.ps1 -Version 0.6.1 -OutputDirectory (Join-Path $env:RUNNER_TEMP 'phonebridge-windows')
+          if ($LASTEXITCODE -ne 0) { throw 'Windows preview packaging failed.' }
+      - name: Verify package, headless launcher and isolated lifecycle
+        run: |
+          ./scripts/test-desktop-client.ps1 -Version 0.6.1 -PackageDirectory (Join-Path $env:RUNNER_TEMP 'phonebridge-windows\stage-0.6.1')
+          if ($LASTEXITCODE -ne 0) { throw 'Windows packaged desktop regression failed.' }
+      - name: Upload Windows preview packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonebridge-windows-x64-preview
+          path: |
+            ${{ runner.temp }}/phonebridge-windows/phonebridge-0.6.1-windows-setup.exe
+            ${{ runner.temp }}/phonebridge-windows/phonebridge-0.6.1-windows-x64.zip
+            ${{ runner.temp }}/phonebridge-windows/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Flutter fixture screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phonebridge-flutter-fixture-screenshots
+          path: desktop_app/artifacts/*.png
+          if-no-files-found: ignore
+          retention-days: 14

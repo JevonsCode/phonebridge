@@ -312,6 +312,7 @@ test('binary public file is rejected before writes', async t => {
 test('artifact directory inside checkout is rejected before writes', async t => {
   const f = await fixture(t);
   await assert.rejects(distribute({ ...f, ...input(), outputDir: path.join(f.root, 'kit') }), /outside the checkout/);
+  await assert.rejects(access(path.join(f.root, 'kit')), { code: 'ENOENT' });
   await assertUntouched(f);
 });
 

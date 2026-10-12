@@ -45,10 +45,13 @@ void main() {
                 call.arguments['name'];
           }
           if (call.method == 'disconnect') connected = false;
-          if (call.method == 'forgetSavedConnection') {
-            entries.removeWhere((e) => e['id'] == active);
-            active = null;
-            connected = false;
+          if (call.method == 'forgetComputer') {
+            final id = call.arguments['id'];
+            entries.removeWhere((e) => e['id'] == id);
+            if (active == id) {
+              active = null;
+              connected = false;
+            }
           }
           if (call.method == 'status') {
             final selected = entries
@@ -135,14 +138,17 @@ void main() {
     'forget selected leaves the other computer accessible and does not connect it',
     (tester) async {
       await open(tester);
-      await tester.tap(find.byKey(const Key('forget-saved')));
+      await tester.tap(find.byKey(const Key('forget-first')));
+      await tester.pumpAndSettle();
+      expect(find.text('工作电脑'), findsWidgets);
+      expect(entries, hasLength(2));
+      await tester.tap(find.byKey(const Key('confirm-forget-computer')));
       await tester.pumpAndSettle();
       expect(entries.single['id'], 'second');
       expect(active, isNull);
       expect(find.byKey(const Key('consent')), findsNothing);
-      await tester.tap(find.text('我的电脑'));
-      await tester.pumpAndSettle();
       expect(find.byKey(const Key('computer-second')), findsOneWidget);
+      expect(find.byKey(const Key('computer-first')), findsNothing);
       expect(calls.where((c) => c.method == 'selectComputer'), isEmpty);
       await tester.pumpWidget(const SizedBox());
     },
@@ -163,8 +169,71 @@ void main() {
       'id': 'first',
       'name': '我的笔记本',
     });
-    expect(find.text('我的笔记本'), findsOneWidget);
+    expect(find.byKey(const Key('computer-first')), findsOneWidget);
+    expect(find.text('我的笔记本').hitTestable(), findsOneWidget);
     expect(connected, isTrue);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('cancel rename preserves the computer sheet and connection', (
+    tester,
+  ) async {
+    await open(tester);
+    await tester.tap(find.byKey(const Key('rename-first')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(
+      find.byKey(const Key('computer-second')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(calls.where((c) => c.method == 'renameComputer'), isEmpty);
+    expect(connected, isTrue);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('cancel deletion keeps all computers and the sheet', (
+    tester,
+  ) async {
+    await open(tester);
+    expect(find.byKey(const Key('forget-saved')), findsNothing);
+    await tester.tap(find.byKey(const Key('forget-second')));
+    await tester.pumpAndSettle();
+    expect(
+      find.descendant(
+        of: find.byType(AlertDialog),
+        matching: find.text('ws://192.168.1.20:8765/device'),
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('取消'));
+    await tester.pumpAndSettle();
+    expect(entries, hasLength(2));
+    expect(
+      find.byKey(const Key('computer-first')).hitTestable(),
+      findsOneWidget,
+    );
+    expect(calls.where((c) => c.method == 'forgetComputer'), isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('deleting another computer preserves the current connection', (
+    tester,
+  ) async {
+    await open(tester);
+    await tester.tap(find.byKey(const Key('forget-second')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('confirm-forget-computer')));
+    await tester.pumpAndSettle();
+    expect(calls.where((c) => c.method == 'forgetComputer').single.arguments, {
+      'id': 'second',
+    });
+    expect(entries.single['id'], 'first');
+    expect(active, 'first');
+    expect(connected, isTrue);
+    expect(find.byKey(const Key('computer-second')), findsNothing);
+    expect(find.byKey(const Key('computer-first')), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 

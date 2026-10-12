@@ -47,6 +47,8 @@ No documented developer store-upload API was found during the approved release d
 
 ## Run and verify
 
+For an Android preview built with the existing preview signer, use `flutter build apk --debug --target-platform android-arm64 --split-per-abi`, then sign `app-arm64-v8a-debug.apk` with the original preview key outside the repository. Specifying only `--target-platform` can leave other architectures' dependency libraries in the universal APK. Flutter adds 2000 to the source build number for the ARM64 split (source 2019 produces versionCode 4019); read the final APK metadata rather than assuming the source build number is its versionCode. Run native tests before this final packaging step, keep signing material out of Git/artifacts, and verify the final signature, package, version, architecture set and checksum before upload. This is the existing developer-preview channel, not production release signing.
+
 Run the local fixture tests with Node.js 22 or later:
 
 ```sh
