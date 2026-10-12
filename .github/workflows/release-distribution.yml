@@ -71,6 +71,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install Bridge dependencies
+        working-directory: bridge
+        run: npm ci
+      - name: Build Bridge for packaged MCP tests
+        working-directory: bridge
+        run: npm run build
       - name: Validate desktop source and packaging
         shell: pwsh
         run: ./scripts/test-desktop-client.ps1
