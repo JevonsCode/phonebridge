@@ -31,6 +31,14 @@ PhoneBridge MCP → 本机 Hub ← 经过配对的 Android 手机
 
 不能绕过锁屏、指纹、应用沙箱或受保护截图。系统栏和边缘键盘会从截图与操作范围中裁掉；分屏、悬浮窗或无法裁掉的遮挡仍可能拒绝部分操作。AI 必须每次操作后重新观察结果，不能把“指令已接受”当成任务已完成。
 
+### 手机扫码下载
+
+用手机浏览器扫码，下载 **PhoneBridge <!-- android-qr-version -->0.6.1<!-- /android-qr-version -->**（Android 11+ · ARM64）。
+
+<a href="https://github.com/JevonsCode/phonebridge/releases/download/v0.6.1/phonebridge-0.6.1-arm64.apk"><img src="website/dist/android-download-qr.png" width="240" height="240" alt="PhoneBridge 安卓 APK 下载二维码"></a>
+
+[手机上直接下载 APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.6.1/phonebridge-0.6.1-arm64.apk) · 安装后，再用 App 的「扫一扫」扫描电脑上的配对码。
+
 ## 快速开始：配对一次，自动连接
 
 Windows 10/11 用户可以直接下载安装程序，不需要装 Node.js、输入命令或查电脑 IP。手机需要 Android 11+；当前 APK 支持 ARM64。
