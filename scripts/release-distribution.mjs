@@ -3,11 +3,14 @@ import { execFileSync } from 'node:child_process';
 import { lstat, mkdir, readFile, realpath, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 export const REPOSITORY = 'JevonsCode/phonebridge';
 export const PACKAGE = 'dev.phonebridge.phonebridge';
 export const CERTIFICATE = '8ce72b7e5687933ea65307b99d3e2b1e41c837a26d18740f9dbc72aeb0bcdbc0';
-export const PUBLIC_FILES = ['website/dist/update.json', 'website/dist/index.html', 'website/dist/en/index.html', 'README.md'];
+export const PUBLIC_TEXT_FILES = ['website/dist/update.json', 'website/dist/index.html', 'website/dist/en/index.html', 'README.md'];
+export const DOWNLOAD_QR_FILE = 'website/dist/android-download-qr.png';
+export const PUBLIC_FILES = [...PUBLIC_TEXT_FILES, DOWNLOAD_QR_FILE];
 const CONSOLE_URL = 'https://www.uptodown.dev/apps/1000896707';
 const SHA256 = /^[a-f0-9]{64}$/;
 const apkLinks = /https:\/\/github\.com\/JevonsCode\/phonebridge\/releases\/download\/v\d+\.\d+\.\d+\/phonebridge-\d+\.\d+\.\d+-arm64\.apk/g;
@@ -121,11 +124,12 @@ export function createPublicUpdates(current, files, verified, notes, desktopAsse
   if (order === 0) requireThat(verified.versionCode === current.versionCode && verified.sha256 === current.sha256 && verified.url === current.apkUrl && verified.size === current.size, 'An existing release cannot be silently replaced');
   if (order > 0) requireThat(verified.versionCode > current.versionCode, 'Newer version must increase versionCode');
   const updates = {};
-  for (const file of PUBLIC_FILES.slice(1)) {
+  for (const file of PUBLIC_TEXT_FILES.slice(1)) {
     const original = files[file];
     requireThat(typeof original === 'string' && !original.includes('\0'), `Public text file is missing or binary: ${file}`);
     requireThat((original.match(apkLinks) || []).length > 0, `Official APK link not found in ${file}`);
     let updated = original.replace(apkLinks, verified.url);
+    updated = updated.replace(/(<!-- android-qr-version -->)[0-9]+\.[0-9]+\.[0-9]+(<!-- \/android-qr-version -->)/g, `$1${verified.version}$2`);
     for (const desktop of desktopAssets) {
       const suffix = desktop.kind === 'installer' ? 'windows-setup\\.exe' : 'windows-x64\\.zip';
       const links = new RegExp(`https://github\\.com/JevonsCode/phonebridge/releases/download/v[0-9]+\\.[0-9]+\\.[0-9]+/phonebridge-[0-9]+\\.[0-9]+\\.[0-9]+-${suffix}`, 'g');
@@ -178,7 +182,7 @@ export async function distribute({ root, release, tag, apkBytes, badging, signer
   const targets = {}, files = {};
   for (const relative of PUBLIC_FILES) {
     targets[relative] = await safePublicPath(root, relative);
-    files[relative] = await readFile(targets[relative], 'utf8');
+    files[relative] = await readFile(targets[relative], relative === DOWNLOAD_QR_FILE ? undefined : 'utf8');
   }
   const current = JSON.parse(files[PUBLIC_FILES[0]]);
   const candidate = selectReleaseAsset(release, tag);
@@ -186,7 +190,13 @@ export async function distribute({ root, release, tag, apkBytes, badging, signer
   const trustedHash = expectedHash || (current.versionName === candidate.version && current.apkUrl === candidate.url ? current.sha256 : undefined);
   const verified = verifyApk({ release, tag, apkBytes, badging, signerReport, expectedHash: trustedHash });
   const desktopAssets = selectDesktopAssets(release, tag);
-  const generated = createPublicUpdates(current, files, verified, release.body || undefined, desktopAssets);
+  const releaseNotes = release.body?.replace(/\n*<!-- phonebridge-download-qr:start -->[\s\S]*?<!-- phonebridge-download-qr:end -->\n*/g, '\n').trim();
+  const generated = createPublicUpdates(current, files, verified, releaseNotes || undefined, desktopAssets);
+  // Encode only the APK URL that just passed identity, signature and digest checks.
+  const QRCode = createRequire(new URL('../bridge/package.json', import.meta.url))('qrcode');
+  const qrPng = await QRCode.toBuffer(verified.url, { type: 'png', errorCorrectionLevel: 'M', margin: 4, scale: 10 });
+  const qrName = `phonebridge-${verified.version}-android-download-qr.png`;
+  if (!generated.stale) generated.updates[DOWNLOAD_QR_FILE] = qrPng;
   requireThat(typeof outputDir === 'string', 'An output directory outside the checkout is required');
   outputDir = path.resolve(outputDir);
   // Resolve the existing ancestor before creating anything (macOS /var aliases /private/var).
@@ -209,13 +219,14 @@ export async function distribute({ root, release, tag, apkBytes, badging, signer
   }
   let changed = false;
   for (const [relative, text] of Object.entries(generated.updates)) {
-    if (text === files[relative]) continue;
+    if (Buffer.isBuffer(text) ? text.equals(files[relative]) : text === files[relative]) continue;
     const temporary = `${targets[relative]}.release-tmp`;
     await writeFile(temporary, text, { flag: 'wx' });
     await rename(temporary, targets[relative]);
     changed = true;
   }
-  const result = { tag: verified.tag, version: verified.version, sha256: verified.sha256, size: verified.size, apkUrl: verified.url, stale: generated.stale, changed };
+  const result = { tag: verified.tag, version: verified.version, sha256: verified.sha256, size: verified.size, apkUrl: verified.url, qrName, qrSha256: createHash('sha256').update(qrPng).digest('hex'), stale: generated.stale, changed };
+  await writeFile(path.join(outputDir, qrName), qrPng);
   await writeFile(path.join(outputDir, 'uptodown-submission.json'), `${JSON.stringify(kit.metadata, null, 2)}\n`);
   await writeFile(path.join(outputDir, 'uptodown-submission.md'), kit.markdown);
   await writeFile(path.join(outputDir, 'result.json'), `${JSON.stringify(result, null, 2)}\n`);

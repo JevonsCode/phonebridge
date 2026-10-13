@@ -173,8 +173,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install locked QR generator dependencies
+        working-directory: bridge
+        run: npm ci --ignore-scripts
       - name: Test release validation and synchronization
-        run: node --test scripts/test/release-distribution.test.mjs
+        run: node --test scripts/test/*.test.mjs
       - name: Validate requested tag and repository
         run: |
           node --input-type=module <<'NODE'
@@ -242,6 +245,8 @@ jobs:
           const result = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/phonebridge-submission/result.json`, 'utf8'));
           appendFileSync(process.env.GITHUB_OUTPUT, `stale=${result.stale}\nchanged=${result.changed}\n`);
           NODE
+      - name: Publish the versioned Android download QR
+        run: node scripts/publish-download-qr.mjs "$RUNNER_TEMP/phonebridge-submission"
       - name: Upload Uptodown manual/editorial submission kit
         uses: actions/upload-artifact@v4
         with:
@@ -252,15 +257,15 @@ jobs:
             ${{ runner.temp }}/phonebridge-submission/result.json
           if-no-files-found: error
           retention-days: 90
-      - name: Commit only generated public text files
+      - name: Commit only generated public download files
         if: steps.generate.outputs.changed == 'true'
         run: |
-          git add -- website/dist/update.json website/dist/index.html website/dist/en/index.html README.md
+          git add -- website/dist/update.json website/dist/index.html website/dist/en/index.html README.md website/dist/android-download-qr.png
           node --input-type=module <<'NODE'
           import { execFileSync } from 'node:child_process';
           import { PUBLIC_FILES } from './scripts/release-distribution.mjs';
           const files = execFileSync('git', ['diff', '--cached', '--name-only', '-z'], { encoding: 'utf8' }).split('\0').filter(Boolean);
-          if (!files.length || files.some(file => !PUBLIC_FILES.includes(file))) throw new Error('Staged changes exceed the public text allowlist');
+          if (!files.length || files.some(file => !PUBLIC_FILES.includes(file))) throw new Error('Staged changes exceed the public download allowlist');
           NODE
           git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m "chore: distribute ${RELEASE_TAG}"
           git push origin HEAD:main

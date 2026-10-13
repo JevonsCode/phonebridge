@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { CERTIFICATE, PACKAGE, PUBLIC_FILES, createPublicUpdates, distribute, parseVersion, selectDesktopAssets, selectReleaseAsset, validateDesktopIdentity, verifyApk } from '../release-distribution.mjs';
+import { CERTIFICATE, PACKAGE, PUBLIC_FILES, PUBLIC_TEXT_FILES, DOWNLOAD_QR_FILE, createPublicUpdates, distribute, parseVersion, selectDesktopAssets, selectReleaseAsset, validateDesktopIdentity, verifyApk } from '../release-distribution.mjs';
 
 const apkBytes = Buffer.from('fixture APK bytes, deliberately not a real signed APK');
 const hash = createHash('sha256').update(apkBytes).digest('hex');
@@ -26,7 +26,8 @@ function publicFixture() {
     [PUBLIC_FILES[0]]: `${JSON.stringify(current(), null, 2)}\n`,
     [PUBLIC_FILES[1]]: `<a href="${assetUrl('0.2.5')}">下载</a><small>当前版本 0.2.5</small><a href="${assetUrl('0.2.5')}">安装</a>`,
     [PUBLIC_FILES[2]]: `<a href="${assetUrl('0.2.5')}">Download</a><small>Current version 0.2.5</small><a href="${assetUrl('0.2.5')}">Install</a>`,
-    'README.md': `[APK](${assetUrl('0.2.5')})\nDo not change this content.`
+    'README.md': `[APK](${assetUrl('0.2.5')})\nDo not change this content.`,
+    [DOWNLOAD_QR_FILE]: Buffer.from('previous QR fixture')
   };
 }
 async function fixture(t, contents = publicFixture()) {
@@ -41,7 +42,7 @@ async function fixture(t, contents = publicFixture()) {
   return { root, outputDir: path.join(base, 'submission'), base, contents };
 }
 async function assertUntouched(f) {
-  for (const file of PUBLIC_FILES) assert.equal(await readFile(path.join(f.root, file), 'utf8'), f.contents[file]);
+  for (const file of PUBLIC_FILES) assert.deepEqual(await readFile(path.join(f.root, file)), Buffer.from(f.contents[file]));
   await assert.rejects(access(f.outputDir), { code: 'ENOENT' });
 }
 
@@ -143,12 +144,12 @@ test('the exact workflow PowerShell guard rejects single-backslash traversal and
 
 test('present Windows assets synchronize existing desktop URLs in both languages and README and join kit', async t => {
   const contents = publicFixture();
-  for (const file of PUBLIC_FILES.slice(1)) {
+  for (const file of PUBLIC_TEXT_FILES.slice(1)) {
     contents[file] += '\nhttps://github.com/JevonsCode/phonebridge/releases/download/v0.2.5/phonebridge-0.2.5-windows-setup.exe\nhttps://github.com/JevonsCode/phonebridge/releases/download/v0.2.5/phonebridge-0.2.5-windows-x64.zip';
   }
   const f = await fixture(t, contents);
   await distribute({ ...f, ...addDesktopAssets(input('0.6.0', 2011)) });
-  for (const file of PUBLIC_FILES.slice(1)) {
+  for (const file of PUBLIC_TEXT_FILES.slice(1)) {
     const text = await readFile(path.join(f.root, file), 'utf8');
     assert.ok(text.includes('/v0.6.0/phonebridge-0.6.0-windows-setup.exe'));
     assert.ok(text.includes('/v0.6.0/phonebridge-0.6.0-windows-x64.zip'));
@@ -212,7 +213,7 @@ test('end-to-end generation synchronizes every bilingual URL and mock version, R
   assert.equal(result.changed, true); assert.equal(result.stale, false);
   const manifest = JSON.parse(await readFile(path.join(f.root, PUBLIC_FILES[0]), 'utf8'));
   assert.deepEqual(manifest, { schema: 1, versionName: '0.2.6', versionCode: 2010, apkUrl: assetUrl('0.2.6'), sha256: hash, size: apkBytes.length, notes: '中文更新。English update.' });
-  for (const file of PUBLIC_FILES.slice(1)) {
+  for (const file of PUBLIC_TEXT_FILES.slice(1)) {
     const text = await readFile(path.join(f.root, file), 'utf8');
     assert.ok(text.includes(assetUrl('0.2.6'))); assert.ok(!text.includes(assetUrl('0.2.5')));
   }
@@ -226,21 +227,36 @@ test('end-to-end generation synchronizes every bilingual URL and mock version, R
   assert.match(await readFile(path.join(f.outputDir, 'uptodown-submission.md'), 'utf8'), /No store API upload was performed/);
 });
 
+test('verified releases refresh the public download PNG and retain a version-specific release copy', async t => {
+  const contents = publicFixture();
+  const qr = 'website/dist/android-download-qr.png';
+  contents[qr] = Buffer.from('previous QR fixture');
+  const f = await fixture(t, contents);
+  const result = await distribute({ ...f, ...input() });
+  const png = await readFile(path.join(f.root, qr));
+  assert.deepEqual(png.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  assert.equal(result.qrName, 'phonebridge-0.2.6-android-download-qr.png');
+  assert.deepEqual(await readFile(path.join(f.outputDir, result.qrName)), png);
+  const next = await distribute({ ...f, ...input('0.2.7', 2011) });
+  assert.notDeepEqual(await readFile(path.join(f.root, qr)), png);
+  assert.equal(next.qrName, 'phonebridge-0.2.7-android-download-qr.png');
+});
+
 test('transforms actual current website and README layouts without changing the real checkout', async t => {
   const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
-  const actual = {};
+  const actual = { [DOWNLOAD_QR_FILE]: await readFile(path.join(repositoryRoot, DOWNLOAD_QR_FILE)) };
   actual[PUBLIC_FILES[0]] = publicFixture()[PUBLIC_FILES[0]];
-  for (const file of PUBLIC_FILES.slice(1)) actual[file] = await readFile(path.join(repositoryRoot, file), 'utf8');
+  for (const file of PUBLIC_TEXT_FILES.slice(1)) actual[file] = await readFile(path.join(repositoryRoot, file), 'utf8');
   const f = await fixture(t, actual);
   await distribute({ ...f, ...input() });
-  for (const file of PUBLIC_FILES.slice(1)) assert.ok((await readFile(path.join(f.root, file), 'utf8')).includes(assetUrl('0.2.6')));
+  for (const file of PUBLIC_TEXT_FILES.slice(1)) assert.ok((await readFile(path.join(f.root, file), 'utf8')).includes(assetUrl('0.2.6')));
 });
 
 test('older release is verified but preserves all newer public files and marks kit stale', async t => {
   const f = await fixture(t), i = input('0.2.4', 2008);
   const result = await distribute({ ...f, ...i });
   assert.equal(result.stale, true); assert.equal(result.changed, false);
-  for (const file of PUBLIC_FILES) assert.equal(await readFile(path.join(f.root, file), 'utf8'), f.contents[file]);
+  for (const file of PUBLIC_FILES) assert.deepEqual(await readFile(path.join(f.root, file)), Buffer.from(f.contents[file]));
   assert.match(await readFile(path.join(f.outputDir, 'summary.md'), 'utf8'), /Pages deployment is skipped/);
 });
 
@@ -292,7 +308,7 @@ test('existing temporary public output fails preflight before any public writes'
   const f = await fixture(t);
   await writeFile(path.join(f.root, 'README.md.release-tmp'), 'other process output');
   await assert.rejects(distribute({ ...f, ...input() }), /Temporary output already exists/);
-  for (const file of PUBLIC_FILES) assert.equal(await readFile(path.join(f.root, file), 'utf8'), f.contents[file]);
+  for (const file of PUBLIC_FILES) assert.deepEqual(await readFile(path.join(f.root, file)), Buffer.from(f.contents[file]));
 });
 
 test('the requested v0.6.0 release uses the same dynamic validation and synchronization path', async t => {
@@ -447,4 +463,16 @@ test('Android verification tools resolve sdkmanager without PATH and fail closed
   await rm(apksigner); assert.notEqual(run({}).status, 0);
   await executable(apksigner); await executable(manager, '#!/bin/bash\nexit 23\n'); assert.equal(run({}).status, 23);
   await rm(manager); assert.notEqual(run({}).status, 0);
+});
+
+
+test('download labels advance with the QR and generated QR notes stay out of in-app release notes', async t => {
+  const contents = publicFixture();
+  contents['README.md'] += '\n<!-- android-qr-version -->0.2.5<!-- /android-qr-version -->';
+  const f = await fixture(t, contents), i = input();
+  i.release.body += '\n\n<!-- phonebridge-download-qr:start -->\nPublic QR section\n<!-- phonebridge-download-qr:end -->\n';
+  await distribute({ ...f, ...i });
+  assert.match(await readFile(path.join(f.root, 'README.md'), 'utf8'), /android-qr-version -->0\.2\.6<!--/);
+  const manifest = JSON.parse(await readFile(path.join(f.root, PUBLIC_FILES[0]), 'utf8'));
+  assert.equal(manifest.notes, '中文更新。English update.');
 });
