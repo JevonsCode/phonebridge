@@ -15,6 +15,7 @@ void main() {
   var autoReconnect = false;
   var rememberedActions = false, connecting = false;
   var accessibility = true, reconnecting = false;
+  var lastError = '';
   Completer<void>? desktopStart;
   PlatformException? desktopFailure;
   setUp(() {
@@ -27,6 +28,7 @@ void main() {
     rememberedActions = false;
     connecting = false;
     accessibility = true;
+    lastError = '';
     reconnecting = false;
     desktopStart = null;
     desktopFailure = null;
@@ -60,7 +62,7 @@ void main() {
               'connecting': connecting,
               'rememberedActions': rememberedActions,
               'actionsEnabled': false,
-              'lastError': '',
+              'lastError': lastError,
               'hasSavedPairing': saved,
               'savedEndpoint': saved ? 'ws://192.168.1.10:8765/device' : '',
               'autoReconnectEnabled': autoReconnect,
@@ -151,6 +153,7 @@ void main() {
   testWidgets('failed reconnects tell the owner what to check', (tester) async {
     saved = true;
     autoReconnect = true;
+    lastError = 'Connection lost. Reconnecting to the trusted computer.';
     await tester.pumpWidget(const PhoneBridgeApp());
     await tester.pump();
     expect(find.text('正在等待电脑，连接会自动恢复'), findsOneWidget);
@@ -159,6 +162,8 @@ void main() {
     await tester.pump();
     expect(find.textContaining('请确认电脑端 PhoneBridge 已打开'), findsOneWidget);
     expect(find.byKey(const Key('enable-accessibility')), findsNothing);
+    // The retry notice is not repeated as an error banner.
+    expect(find.byKey(const Key('error')), findsNothing);
     // The next attempt is in flight; the hint must not flicker away.
     reconnecting = false;
     await tester.pump(const Duration(seconds: 1));

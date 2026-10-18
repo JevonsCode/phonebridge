@@ -44,6 +44,14 @@ class ConnectionPage extends StatefulWidget {
   State<ConnectionPage> createState() => _ConnectionPageState();
 }
 
+const _retryNotices = {
+  'Connection was interrupted.',
+  'Connection lost. Reconnecting to the trusted computer.',
+  'Connection timed out. Reconnecting to the trusted computer.',
+  'Desktop disconnected. Reconnecting to the trusted computer.',
+  'Observation timed out. Reconnecting to the trusted computer.',
+};
+
 class _ConnectionPageState extends State<ConnectionPage> {
   static const channel = MethodChannel('dev.phonebridge/control');
   final endpoint = TextEditingController(text: 'ws://127.0.0.1:8765/device');
@@ -342,9 +350,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   Widget build(BuildContext context) {
     final nativeError = status['lastError'] as String?;
+    // While retrying, the home subtitle already says so; a banner would
+    // repeat it and shift the page each time it appears.
+    final retrying =
+        autoReconnect && !connected && _retryNotices.contains(nativeError);
     final message =
         error ??
-        (nativeError?.isNotEmpty == true
+        (nativeError?.isNotEmpty == true && !retrying
             ? userError(null, nativeError, '操作失败，请检查手机状态')
             : null);
     return PopScope(
