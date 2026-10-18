@@ -62,6 +62,21 @@ class MainActivity : FlutterActivity() {
                         "declineFile" -> { BridgeSession.fileInbox!!.decline(call.argument<String>("id") ?: ""); result.success(null) }
                         "removeReceivedFile" -> { BridgeSession.fileInbox!!.remove(call.argument<String>("id") ?: ""); result.success(null) }
                         "shareFile" -> { BridgeSession.fileInbox!!.share(this, call.argument<String>("id") ?: ""); result.success(null) }
+                        "storageStatus" -> result.success(BridgeSession.fileInbox!!.storage())
+                        "openFilesFolder" -> {
+                            AppStorage.openFolder(this, BridgeSession.fileInbox!!.storage()["files"] != 0)
+                            result.success(null)
+                        }
+                        "cleanupFiles" -> {
+                            val days = call.argument<Int>("olderThanDays")
+                            result.success(BridgeSession.fileInbox!!.cleanup(days))
+                        }
+                        "clearCache" -> {
+                            // Keep an update that is downloading or waiting to be installed.
+                            val phase = updater?.status()?.get("phase")
+                            val keepUpdates = phase in setOf("downloading", "ready", "permissionRequired", "installerOpened")
+                            result.success(AppStorage.clearCache(this, keepUpdates))
+                        }
                         "operationHistory" -> {
                             val inbox = BridgeSession.fileInbox!!
                             if (!BridgeSession.connected) result.success(mapOf("operations" to "[]", "files" to inbox.history(), "error" to "连接电脑后可查看电脑操作日志"))

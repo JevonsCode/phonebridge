@@ -98,6 +98,43 @@ void main() {
     await tester.scrollUntilVisible(find.byKey(const Key('file-f44')), 300);
     expect(more, findsNothing);
   });
+  testWidgets('cleanup asks for an age and opens the shared folder', (
+    tester,
+  ) async {
+    final files = ValueNotifier<List<Map<String, dynamic>>>([
+      {'id': 'a', 'name': 'a.png', 'size': 1, 'state': 'received'},
+    ]);
+    addTearDown(files.dispose);
+    final cleaned = <int?>[];
+    var opened = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: FileInboxPage(
+          files: files,
+          onAction: (_, _) async {},
+          onOpenFolder: () => opened++,
+          onCleanup: (days) async {
+            cleaned.add(days);
+            return days == null ? 1 : 0;
+          },
+        ),
+      ),
+    );
+    expect(find.textContaining('Download/PhoneBridge'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('file-inbox-folder')));
+    expect(opened, 1);
+    await tester.tap(find.byKey(const Key('file-inbox-cleanup')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Older than 7 days'));
+    await tester.pumpAndSettle();
+    expect(find.text('No files to clean up'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('file-inbox-cleanup')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('All files'));
+    await tester.pumpAndSettle();
+    expect(cleaned, [7, null]);
+    expect(find.text('Removed 1 files'), findsOneWidget);
+  });
   testWidgets('home shows one compact file row instead of the list', (
     tester,
   ) async {
