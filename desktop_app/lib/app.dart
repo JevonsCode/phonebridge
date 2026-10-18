@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'backend.dart';
 import 'design.dart';
+import 'tray.dart';
 
 bool isStableMcpConfiguration(Map<String, dynamic>? config) {
   final servers = config?['mcpServers'];
@@ -33,6 +34,8 @@ class PhoneBridgeApp extends StatefulWidget {
     this.onLanguageChanged,
     this.supportsLanPermission,
     this.chooseFile,
+    this.initialTrayIcon = true,
+    this.onTrayIconChanged,
     super.key,
   });
   final DesktopController controller;
@@ -40,12 +43,17 @@ class PhoneBridgeApp extends StatefulWidget {
   final ValueChanged<bool>? onLanguageChanged;
   final bool? supportsLanPermission;
   final Future<String?> Function()? chooseFile;
+  final bool initialTrayIcon;
+
+  /// Shows the tray setting; the host applies and persists the choice.
+  final ValueChanged<bool>? onTrayIconChanged;
   @override
   State<PhoneBridgeApp> createState() => _PhoneBridgeAppState();
 }
 
 class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
   late bool zh = widget.initialChinese;
+  late bool trayIcon = widget.initialTrayIcon;
   int page = 0;
   bool choosingFile = false;
   String? fileError;
@@ -336,15 +344,7 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
     final s = c.status;
     final connected =
         s?.connected == true && s?.unavailable != true && !c.connectionFailed;
-    final title = c.starting
-        ? t('正在准备连接', 'Getting ready')
-        : c.connectionFailed
-        ? t('连接已中断', 'Connection interrupted')
-        : s?.unavailable == true
-        ? t('服务暂不可用', 'Service unavailable')
-        : connected
-        ? t('手机已连接', 'Your phone is connected')
-        : t('等待手机连接', 'Waiting for your phone');
+    final title = connectionTitle(c, zh);
     return [
       card(
         SizedBox(
@@ -728,6 +728,45 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                 ),
               ],
             ),
+            if (widget.onTrayIconChanged != null) ...[
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Icon(Icons.push_pin_outlined, color: muted),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          Platform.isMacOS
+                              ? t('在菜单栏显示图标', 'Show icon in the menu bar')
+                              : t('在任务栏显示图标', 'Show icon in the system tray'),
+                          style: const TextStyle(color: ink),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          t(
+                            '开启后，关闭窗口会收起到图标，点击图标即可找回配对二维码。',
+                            'When on, closing the window keeps PhoneBridge in the icon. Click it to get back to the pairing code.',
+                          ),
+                          style: const TextStyle(fontSize: 12, color: muted),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Switch(
+                    key: const Key('tray-icon'),
+                    value: trayIcon,
+                    onChanged: (v) {
+                      setState(() => trayIcon = v);
+                      widget.onTrayIconChanged?.call(v);
+                    },
+                  ),
+                ],
+              ),
+            ],
             const SizedBox(height: 20),
             const Divider(),
             const SizedBox(height: 22),
