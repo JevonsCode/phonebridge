@@ -22,7 +22,9 @@ void main() {
       addTearDown(tester.platformDispatcher.clearTextScaleFactorTestValue);
       final c = DesktopController()..status = DesktopStatus(statusData());
       addTearDown(c.dispose);
-      await tester.pumpWidget(PhoneBridgeApp(controller: c));
+      await tester.pumpWidget(
+        PhoneBridgeApp(controller: c, onTrayIconChanged: (_) {}),
+      );
       await tester.pumpAndSettle();
       expect(tester.takeException(), isNull);
       await tester.tap(find.text('Settings').first);
