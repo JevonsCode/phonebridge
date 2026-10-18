@@ -72,6 +72,68 @@ class _ConnectionPageState extends State<ConnectionPage> {
   // Retries alternate between scheduled and in flight; keep the hint until connected.
   bool reconnectFailed = false;
   final files = ValueNotifier<List<Map<String, dynamic>>>(const []);
+  Map<String, dynamic>? storage;
+
+  Future<void> loadStorage() async {
+    try {
+      final next = await channel.invokeMapMethod<String, dynamic>(
+        'storageStatus',
+      );
+      if (mounted) setState(() => storage = next);
+    } on PlatformException {
+      // Sizes are informative only; the rows still work without them.
+    } on MissingPluginException {
+      // Not running on Android.
+    }
+  }
+
+  void notify(String text) => ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(text)));
+
+  Future<void> clearCache() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(tr(context, '清除缓存？')),
+        content: Text(tr(context, '会删除已下载的更新安装包和临时文件。收到的文件、配对和授权不受影响。')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(tr(context, '取消')),
+          ),
+          FilledButton(
+            key: const Key('confirm-clear-cache'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(tr(context, '清除')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final freed = await channel.invokeMethod<int>('clearCache') ?? 0;
+      if (mounted) notify('${tr(context, '已清除')} ${fileSize(freed)}');
+    } on PlatformException catch (e) {
+      if (mounted) notify(tr(context, userError(e.code, e.message, '无法清除缓存')));
+    }
+    await loadStorage();
+  }
+
+  Future<int?> cleanupFiles(int? olderThanDays) async {
+    try {
+      final count = await channel.invokeMethod<int>('cleanupFiles', {
+        'olderThanDays': olderThanDays,
+      });
+      await refresh();
+      await loadStorage();
+      return count;
+    } on PlatformException catch (e) {
+      if (mounted) notify(tr(context, userError(e.code, e.message, '无法清理文件')));
+      return null;
+    }
+  }
+
   bool get connected => status['connected'] == true;
   bool get connecting => status['connecting'] == true;
   bool get enabled => status['accessibilityEnabled'] == true;
@@ -310,6 +372,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
               ..showSnackBar(SnackBar(content: Text(tr(context, message))));
           }
         },
+        onOpenFolder: () => perform('openFilesFolder'),
+        onCleanup: cleanupFiles,
       ),
     ),
   );
@@ -435,8 +499,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     if (!showPairing)
                       NavigationBar(
                         selectedIndex: tab,
-                        onDestinationSelected: (value) =>
-                            setState(() => tab = value),
+                        onDestinationSelected: (value) {
+                          setState(() => tab = value);
+                          if (value == 1) unawaited(loadStorage());
+                        },
                         destinations: [
                           NavigationDestination(
                             key: Key('nav-connection'),
@@ -712,6 +778,34 @@ class _ConnectionPageState extends State<ConnectionPage> {
               : computers.isNotEmpty || hasSavedPairing
               ? showComputer
               : openPairing,
+        ),
+      ],
+    ),
+    const SizedBox(height: 28),
+    sectionLabel('存储'),
+    SurfaceGroup(
+      children: [
+        SettingsRow(
+          key: const Key('open-files-folder'),
+          icon: Icons.folder_open_outlined,
+          title: '文件夹',
+          subtitle: storage == null
+              ? '下载/PhoneBridge'
+              : '${tr(context, '下载/PhoneBridge')} · ${storage!['files']} ${tr(context, '个文件')} · ${fileSize(storage!['bytes'] as num? ?? 0)}',
+          onTap: busy ? null : () => perform('openFilesFolder'),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Divider(),
+        ),
+        SettingsRow(
+          key: const Key('clear-cache'),
+          icon: Icons.cleaning_services_outlined,
+          title: '清除缓存',
+          subtitle: storage == null
+              ? '更新安装包和临时文件'
+              : '${tr(context, '更新安装包和临时文件')} · ${fileSize(storage!['cacheBytes'] as num? ?? 0)}',
+          onTap: busy ? null : clearCache,
         ),
       ],
     ),

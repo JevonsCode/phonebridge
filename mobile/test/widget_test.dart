@@ -91,6 +91,15 @@ void main() {
               'progress': 0.0,
             };
           }
+          if (call.method == 'storageStatus') {
+            return {
+              'folder': 'Download/PhoneBridge',
+              'files': 3,
+              'bytes': 1572864,
+              'cacheBytes': 12582912,
+            };
+          }
+          if (call.method == 'clearCache') return 12582912;
           if (call.method == 'disconnect') {
             connected = false;
             autoReconnect = false;
@@ -176,6 +185,31 @@ void main() {
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();
     expect(find.text('正在等待电脑，连接会自动恢复'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('settings show storage, open the folder and clear cache', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pumpAndSettle();
+    expect(find.text('下载/PhoneBridge · 3 个文件 · 1.5 MB'), findsOneWidget);
+    expect(find.text('更新安装包和临时文件 · 12.0 MB'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('open-files-folder')));
+    await tester.tap(find.byKey(const Key('open-files-folder')));
+    await tester.pump();
+    expect(calls.where((c) => c.method == 'openFilesFolder'), hasLength(1));
+    await tester.ensureVisible(find.byKey(const Key('clear-cache')));
+    await tester.tap(find.byKey(const Key('clear-cache')));
+    await tester.pumpAndSettle();
+    // Nothing is deleted before the owner confirms.
+    expect(calls.where((c) => c.method == 'clearCache'), isEmpty);
+    await tester.tap(find.byKey(const Key('confirm-clear-cache')));
+    await tester.pumpAndSettle();
+    expect(calls.where((c) => c.method == 'clearCache'), hasLength(1));
+    expect(find.text('已清除 12.0 MB'), findsOneWidget);
     await tester.pumpWidget(const SizedBox());
   });
 

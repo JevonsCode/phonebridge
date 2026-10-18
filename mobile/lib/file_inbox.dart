@@ -63,12 +63,18 @@ class FileInboxPage extends StatefulWidget {
     super.key,
     required this.files,
     required this.onAction,
+    this.onOpenFolder,
+    this.onCleanup,
     this.pageSize = 20,
   });
 
   /// Updated by the connection page's status polling.
   final ValueNotifier<List<Map<String, dynamic>>> files;
   final FileAction onAction;
+  final VoidCallback? onOpenFolder;
+
+  /// Deletes finished files older than the given days (null: all); returns the count.
+  final Future<int?> Function(int? olderThanDays)? onCleanup;
   final int pageSize;
 
   @override
@@ -78,6 +84,61 @@ class FileInboxPage extends StatefulWidget {
 class _FileInboxPageState extends State<FileInboxPage> {
   late int shown = widget.pageSize;
   final working = <String>{};
+
+  Future<void> cleanup() async {
+    final days = await showModalBottomSheet<int>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Text(
+                tr(context, '清理旧文件'),
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+              child: Text(
+                tr(context, '会从手机上删除这些文件。等待接收的文件不受影响。'),
+                style: const TextStyle(fontSize: 13, color: muted),
+              ),
+            ),
+            // 0 stands for every finished file; the sheet result cannot be null-valued.
+            for (final choice in const {
+              7: '7 天前的文件',
+              30: '30 天前的文件',
+              0: '全部文件',
+            }.entries)
+              ListTile(
+                key: Key('cleanup-${choice.key}'),
+                title: Text(tr(context, choice.value)),
+                onTap: () => Navigator.pop(sheetContext, choice.key),
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+    if (days == null || !mounted) return;
+    final count = await widget.onCleanup!(days == 0 ? null : days);
+    if (count == null || !mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(
+            count == 0
+                ? tr(context, '没有符合条件的文件')
+                : '${tr(context, '已清理')} $count ${tr(context, '个文件')}',
+          ),
+        ),
+      );
+  }
 
   Future<void> act(String method, String id) async {
     if (working.contains(id)) return;
@@ -91,7 +152,26 @@ class _FileInboxPageState extends State<FileInboxPage> {
 
   @override
   Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(title: Text(tr(context, '来自电脑的文件'))),
+    appBar: AppBar(
+      title: Text(tr(context, '来自电脑的文件')),
+      actions: [
+        if (widget.onOpenFolder != null)
+          IconButton(
+            key: const Key('file-inbox-folder'),
+            tooltip: tr(context, '打开文件夹'),
+            onPressed: widget.onOpenFolder,
+            icon: const Icon(Icons.folder_open_outlined),
+          ),
+        if (widget.onCleanup != null)
+          IconButton(
+            key: const Key('file-inbox-cleanup'),
+            tooltip: tr(context, '清理旧文件'),
+            onPressed: cleanup,
+            icon: const Icon(Icons.delete_sweep_outlined),
+          ),
+        const SizedBox(width: 8),
+      ],
+    ),
     body: SafeArea(
       child: ValueListenableBuilder(
         valueListenable: widget.files,
@@ -128,7 +208,8 @@ class _FileInboxPageState extends State<FileInboxPage> {
                     return Padding(
                       padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
                       child: Text(
-                        tr(context, '接收后点分享，选择微信、WhatsApp 或其他应用'),
+                        '${tr(context, '接收后点分享，选择微信、WhatsApp 或其他应用')}\n'
+                        '${tr(context, '文件保存在「下载/PhoneBridge」，也可以在系统文件管理里查看和删除。')}',
                         style: const TextStyle(fontSize: 12, color: muted),
                       ),
                     );
