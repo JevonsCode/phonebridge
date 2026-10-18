@@ -19,6 +19,11 @@ import java.util.concurrent.TimeUnit
 
 /** Called on the main thread; only bounded file IO happens on the worker. Secrets never persist. */
 class FileInbox(private val context: Context) {
+    companion object {
+        /** The phone lists files page by page; the byte budget stays the real bound. */
+        const val MAX_FILES = 100
+        const val MAX_BYTES = 200L * 1024 * 1024
+    }
     data class Source(val origin: String, val authorization: String, val name: String, val generation: Long)
     private data class Entry(val file: IncomingFile, val sourceName: String, var state: String, var time: String = Instant.now().toString(), var error: String = "", var source: Source? = null, val expires: Long = System.currentTimeMillis() + 600000)
     private val root = File(context.filesDir, "inbox").apply { mkdirs() }
@@ -34,7 +39,7 @@ class FileInbox(private val context: Context) {
         try {
             val data = JSONObject(index.openRead().use { String(it.readBytes()) })
             val records = data.optJSONArray("files") ?: JSONArray()
-            for (i in 0 until minOf(records.length(), 10)) {
+            for (i in 0 until minOf(records.length(), MAX_FILES)) {
                 val record = records.getJSONObject(i)
                 val file = IncomingFile.parse(record.getJSONObject("file"))
                 val entry = Entry(file, record.optString("sourceName").take(180), "received", record.getString("time"))
@@ -67,7 +72,7 @@ class FileInbox(private val context: Context) {
     fun history(): List<Map<String, Any>> = events.toList()
     fun status(): List<Map<String, Any>> {
         entries.filter { it.state == "pending" && System.currentTimeMillis() >= it.expires }.forEach { it.source = null; record(it, "expired") }
-        return entries.asReversed().map { mapOf("id" to it.file.id, "name" to it.file.name, "size" to it.file.size, "sourceName" to it.sourceName, "state" to it.state, "error" to it.error) }
+        return entries.asReversed().map { mapOf("id" to it.file.id, "name" to it.file.name, "size" to it.file.size, "sourceName" to it.sourceName, "state" to it.state, "error" to it.error, "time" to it.time) }
     }
     fun offer(value: JSONObject, source: Source) {
         val file = IncomingFile.parse(value)
@@ -75,7 +80,7 @@ class FileInbox(private val context: Context) {
         require(entries.none { it.state == "pending" || it.state == "receiving" }) { "Please handle the pending file first." }
         require(entries.none { it.file.id == file.id }) { "Duplicate file offer." }
         val retained = root.listFiles()?.filter { it.isDirectory }?.flatMap { it.listFiles()?.filter { child -> child.isFile } ?: emptyList() } ?: emptyList()
-        require(retained.size < 10 && retained.sumOf { it.length() } + file.size <= 200L * 1024 * 1024) { "Inbox full. Remove received files first." }
+        require(retained.size < MAX_FILES && retained.sumOf { it.length() } + file.size <= MAX_BYTES) { "Inbox full. Remove received files first." }
         entries.removeAll { it.state != "received" }
         val entry = Entry(file, source.name, "pending", source = source)
         entries.add(entry); record(entry, "pending")

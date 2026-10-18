@@ -14,6 +14,7 @@ void main() {
   var saved = false;
   var autoReconnect = false;
   var rememberedActions = false, connecting = false;
+  var accessibility = true, reconnecting = false;
   Completer<void>? desktopStart;
   PlatformException? desktopFailure;
   setUp(() {
@@ -25,6 +26,8 @@ void main() {
     autoReconnect = false;
     rememberedActions = false;
     connecting = false;
+    accessibility = true;
+    reconnecting = false;
     desktopStart = null;
     desktopFailure = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -51,7 +54,8 @@ void main() {
           calls.add(call);
           if (call.method == 'status') {
             return {
-              'accessibilityEnabled': true,
+              'accessibilityEnabled': accessibility,
+              'reconnecting': reconnecting,
               'connected': connected,
               'connecting': connecting,
               'rememberedActions': rememberedActions,
@@ -115,6 +119,60 @@ void main() {
     await tester.tap(find.byKey(const Key('manual-pairing')));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('disabled accessibility replaces the misleading waiting state', (
+    tester,
+  ) async {
+    saved = true;
+    autoReconnect = true;
+    accessibility = false;
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    expect(find.text('无障碍服务已关闭'), findsOneWidget);
+    expect(find.text('正在连接'), findsNothing);
+    expect(find.text('正在等待电脑，连接会自动恢复'), findsNothing);
+    expect(find.text('开启无障碍服务以继续'), findsNothing);
+    await tester.tap(find.byKey(const Key('enable-accessibility')));
+    await tester.pump();
+    expect(
+      calls.where((c) => c.method == 'openAccessibilitySettings'),
+      hasLength(1),
+    );
+    await tester.ensureVisible(find.text('我的电脑'));
+    await tester.tap(find.text('我的电脑'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('computer-sheet-accessibility')),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('failed reconnects tell the owner what to check', (tester) async {
+    saved = true;
+    autoReconnect = true;
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    expect(find.text('正在等待电脑，连接会自动恢复'), findsOneWidget);
+    reconnecting = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.textContaining('请确认电脑端 PhoneBridge 已打开'), findsOneWidget);
+    expect(find.byKey(const Key('enable-accessibility')), findsNothing);
+    // The next attempt is in flight; the hint must not flicker away.
+    reconnecting = false;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.textContaining('请确认电脑端 PhoneBridge 已打开'), findsOneWidget);
+    connected = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    connected = false;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.text('正在等待电脑，连接会自动恢复'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('desktop start only appears for paired disconnected phones', (
     tester,

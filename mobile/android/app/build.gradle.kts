@@ -39,7 +39,23 @@ android {
         resValue("string", "update_manifest_url", "https://xn--8ovp9s.xn--m8txu.com/phonebridge/update.json")
     }
 
+    signingConfigs {
+        // The preview signer keeps existing installs upgradable. Supply it explicitly from
+        // outside the repository; release builds never fall back to a key found on disk.
+        System.getenv("PHONEBRIDGE_SIGNING_STORE")?.takeIf { it.isNotBlank() }?.let { store ->
+            create("preview") {
+                storeFile = file(store)
+                storePassword = System.getenv("PHONEBRIDGE_SIGNING_STORE_PASSWORD")
+                keyAlias = System.getenv("PHONEBRIDGE_SIGNING_KEY_ALIAS")
+                keyPassword = System.getenv("PHONEBRIDGE_SIGNING_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
+        getByName("release") {
+            signingConfigs.findByName("preview")?.let { signingConfig = it }
+        }
         getByName("debug") {
             // Compile-time bootstrap fixture only. Release always uses the official resource.
             System.getenv("PHONEBRIDGE_TEST_UPDATE_MANIFEST")?.takeIf { it.isNotBlank() }?.let {
