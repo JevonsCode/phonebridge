@@ -162,6 +162,7 @@ void main() {
             'setLanguagePreference',
             'getUpdateStatus',
             'checkUpdate',
+            'storageStatus',
           }.contains(call.method),
         ),
         isEmpty,

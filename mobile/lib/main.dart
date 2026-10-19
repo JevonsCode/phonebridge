@@ -44,6 +44,14 @@ class ConnectionPage extends StatefulWidget {
   State<ConnectionPage> createState() => _ConnectionPageState();
 }
 
+const _retryNotices = {
+  'Connection was interrupted.',
+  'Connection lost. Reconnecting to the trusted computer.',
+  'Connection timed out. Reconnecting to the trusted computer.',
+  'Desktop disconnected. Reconnecting to the trusted computer.',
+  'Observation timed out. Reconnecting to the trusted computer.',
+};
+
 class _ConnectionPageState extends State<ConnectionPage> {
   static const channel = MethodChannel('dev.phonebridge/control');
   final endpoint = TextEditingController(text: 'ws://127.0.0.1:8765/device');
@@ -61,6 +69,71 @@ class _ConnectionPageState extends State<ConnectionPage> {
   bool pairingPrefilled = false;
   int tab = 0;
   bool showPairing = false, manual = false;
+  // Retries alternate between scheduled and in flight; keep the hint until connected.
+  bool reconnectFailed = false;
+  final files = ValueNotifier<List<Map<String, dynamic>>>(const []);
+  Map<String, dynamic>? storage;
+
+  Future<void> loadStorage() async {
+    try {
+      final next = await channel.invokeMapMethod<String, dynamic>(
+        'storageStatus',
+      );
+      if (mounted) setState(() => storage = next);
+    } on PlatformException {
+      // Sizes are informative only; the rows still work without them.
+    } on MissingPluginException {
+      // Not running on Android.
+    }
+  }
+
+  void notify(String text) => ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(content: Text(text)));
+
+  Future<void> clearCache() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(tr(context, '清除缓存？')),
+        content: Text(tr(context, '会删除已下载的更新安装包和临时文件。收到的文件、配对和授权不受影响。')),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(tr(context, '取消')),
+          ),
+          FilledButton(
+            key: const Key('confirm-clear-cache'),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(tr(context, '清除')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    try {
+      final freed = await channel.invokeMethod<int>('clearCache') ?? 0;
+      if (mounted) notify('${tr(context, '已清除')} ${fileSize(freed)}');
+    } on PlatformException catch (e) {
+      if (mounted) notify(tr(context, userError(e.code, e.message, '无法清除缓存')));
+    }
+    await loadStorage();
+  }
+
+  Future<int?> cleanupFiles(int? olderThanDays) async {
+    try {
+      final count = await channel.invokeMethod<int>('cleanupFiles', {
+        'olderThanDays': olderThanDays,
+      });
+      await refresh();
+      await loadStorage();
+      return count;
+    } on PlatformException catch (e) {
+      if (mounted) notify(tr(context, userError(e.code, e.message, '无法清理文件')));
+      return null;
+    }
+  }
+
   bool get connected => status['connected'] == true;
   bool get connecting => status['connecting'] == true;
   bool get enabled => status['accessibilityEnabled'] == true;
@@ -91,6 +164,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     endpoint.dispose();
     token.dispose();
     packages.dispose();
+    files.dispose();
     super.dispose();
   }
 
@@ -104,7 +178,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
         setState(() {
           status = next ?? {};
           if (connected) showPairing = false;
+          if (connected || !autoReconnect) {
+            reconnectFailed = false;
+          } else if (status['reconnecting'] == true) {
+            reconnectFailed = true;
+          }
         });
+        files.value = (status['files'] as List? ?? [])
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList();
         if (wasActive && !connected && !connecting) token.clear();
       }
     } on PlatformException catch (e) {
@@ -277,6 +359,25 @@ class _ConnectionPageState extends State<ConnectionPage> {
     return uri?.host.isNotEmpty == true ? uri!.host : '你的电脑';
   }
 
+  Future<void> openFiles() => Navigator.of(context).push(
+    MaterialPageRoute<void>(
+      builder: (_) => FileInboxPage(
+        files: files,
+        onAction: (method, id) async {
+          await perform(method, {'id': id});
+          final message = error;
+          if (message != null && mounted) {
+            ScaffoldMessenger.of(context)
+              ..hideCurrentSnackBar()
+              ..showSnackBar(SnackBar(content: Text(tr(context, message))));
+          }
+        },
+        onOpenFolder: () => perform('openFilesFolder'),
+        onCleanup: cleanupFiles,
+      ),
+    ),
+  );
+
   void openPairing() => setState(() {
     showPairing = true;
     manual = false;
@@ -313,9 +414,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   Widget build(BuildContext context) {
     final nativeError = status['lastError'] as String?;
+    // While retrying, the home subtitle already says so; a banner would
+    // repeat it and shift the page each time it appears.
+    final retrying =
+        autoReconnect && !connected && _retryNotices.contains(nativeError);
     final message =
         error ??
-        (nativeError?.isNotEmpty == true
+        (nativeError?.isNotEmpty == true && !retrying
             ? userError(null, nativeError, '操作失败，请检查手机状态')
             : null);
     return PopScope(
@@ -394,8 +499,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     if (!showPairing)
                       NavigationBar(
                         selectedIndex: tab,
-                        onDestinationSelected: (value) =>
-                            setState(() => tab = value),
+                        onDestinationSelected: (value) {
+                          setState(() => tab = value);
+                          if (value == 1) unawaited(loadStorage());
+                        },
                         destinations: [
                           NavigationDestination(
                             key: Key('nav-connection'),
@@ -478,14 +585,22 @@ class _ConnectionPageState extends State<ConnectionPage> {
     final granted = connected
         ? status['actionsEnabled'] == true
         : hasSavedPairing && status['rememberedActions'] == true;
+    // Without the service no transport can open, so "waiting" would mislead.
+    final needsAccessibility = !enabled && !connected && hasSavedPairing;
     final title = connected
         ? '已连接'
+        : needsAccessibility
+        ? '无障碍服务已关闭'
         : connecting || autoReconnect
         ? '正在连接'
         : hasSavedPairing
         ? '连接已暂停'
         : '连接你的电脑';
-    final subtitle = autoReconnect
+    final subtitle = needsAccessibility
+        ? '在最近任务里上滑清除 PhoneBridge 或强制停止后，系统会关闭它。开启后会自动连接已记住的电脑；在最近任务里锁定 PhoneBridge 可避免再次被关闭。'
+        : autoReconnect && reconnectFailed
+        ? '暂时连不上电脑。请确认电脑端 PhoneBridge 已打开，手机和电脑在同一网络。'
+        : autoReconnect
         ? '正在等待电脑，连接会自动恢复'
         : hasSavedPairing
         ? '电脑已记住，随时可以继续'
@@ -504,7 +619,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
         Text(
           tr(context, subtitle),
           textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 14, color: muted),
+          style: const TextStyle(fontSize: 14, color: muted, height: 1.6),
+        ),
+      ],
+      if (needsAccessibility) ...[
+        const SizedBox(height: 20),
+        FilledButton.icon(
+          key: const Key('enable-accessibility'),
+          onPressed: busy ? null : () => perform('openAccessibilitySettings'),
+          icon: const Icon(Icons.accessibility_new_rounded, size: 20),
+          label: Text(tr(context, '开启无障碍服务')),
         ),
       ],
       const SizedBox(height: 32),
@@ -548,16 +672,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
         ),
         const SizedBox(height: 20),
       ],
-      if ((status['files'] as List? ?? []).isNotEmpty) ...[
-        FileInboxCard(
-          files: (status['files'] as List)
-              .map((e) => Map<String, dynamic>.from(e as Map))
-              .toList(),
-          busy: busy,
-          onAction: (method, id) => perform(method, {'id': id}),
-        ),
-        const SizedBox(height: 16),
-      ],
       SurfaceGroup(
         children: [
           SwitchListTile(
@@ -585,6 +699,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
           ),
         ],
       ),
+      if (files.value.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        FileInboxEntry(files: files.value, onOpen: openFiles),
+      ],
       const SizedBox(height: 24),
       if (!active && hasSavedPairing)
         FilledButton.icon(
@@ -611,7 +729,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           label: Text(tr(context, startingDesktop ? '正在启动电脑服务…' : '启动电脑服务')),
         ),
       ],
-      if (!enabled) ...[
+      if (!enabled && !needsAccessibility) ...[
         const SizedBox(height: 16),
         TextButton(
           onPressed: busy ? null : () => perform('openAccessibilitySettings'),
@@ -660,6 +778,34 @@ class _ConnectionPageState extends State<ConnectionPage> {
               : computers.isNotEmpty || hasSavedPairing
               ? showComputer
               : openPairing,
+        ),
+      ],
+    ),
+    const SizedBox(height: 28),
+    sectionLabel('存储'),
+    SurfaceGroup(
+      children: [
+        SettingsRow(
+          key: const Key('open-files-folder'),
+          icon: Icons.folder_open_outlined,
+          title: '文件夹',
+          subtitle: storage == null
+              ? '下载/PhoneBridge'
+              : '${tr(context, '下载/PhoneBridge')} · ${storage!['files']} ${tr(context, '个文件')} · ${fileSize(storage!['bytes'] as num? ?? 0)}',
+          onTap: busy ? null : () => perform('openFilesFolder'),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Divider(),
+        ),
+        SettingsRow(
+          key: const Key('clear-cache'),
+          icon: Icons.cleaning_services_outlined,
+          title: '清除缓存',
+          subtitle: storage == null
+              ? '更新安装包和临时文件'
+              : '${tr(context, '更新安装包和临时文件')} · ${fileSize(storage!['cacheBytes'] as num? ?? 0)}',
+          onTap: busy ? null : clearCache,
         ),
       ],
     ),
@@ -962,6 +1108,14 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 16),
+                  if (!enabled) ...[
+                    Text(
+                      tr(context, '开启无障碍服务后才能切换电脑'),
+                      key: const Key('computer-sheet-accessibility'),
+                      style: const TextStyle(color: muted, fontSize: 13),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   if (error != null) ...[
                     Text(
                       tr(context, error!),

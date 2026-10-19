@@ -171,6 +171,39 @@ const _english = <String, String>{
   "\u62d2\u7edd": "Decline",
   "\u5206\u4eab": "Share",
   "\u79fb\u9664": "Remove",
+  '\u6709\u6587\u4ef6\u7b49\u5f85\u4f60\u63a5\u6536':
+      'A file is waiting for you',
+  '\u4e2a\u6587\u4ef6': 'files',
+  '\u8fd8\u6ca1\u6709\u6536\u5230\u6587\u4ef6': 'No files yet',
+  '\u5b58\u50a8': 'Storage',
+  '\u6587\u4ef6\u5939': 'Folder',
+  '\u4e0b\u8f7d/PhoneBridge': 'Download/PhoneBridge',
+  '\u6253\u5f00\u6587\u4ef6\u5939': 'Open folder',
+  '\u6587\u4ef6\u4fdd\u5b58\u5728\u300c\u4e0b\u8f7d/PhoneBridge\u300d\uff0c\u4e5f\u53ef\u4ee5\u5728\u7cfb\u7edf\u6587\u4ef6\u7ba1\u7406\u91cc\u67e5\u770b\u548c\u5220\u9664\u3002':
+      'Files are saved in Download/PhoneBridge. You can also view or delete them in your file manager.',
+  '\u66f4\u65b0\u5b89\u88c5\u5305\u548c\u4e34\u65f6\u6587\u4ef6':
+      'Update packages and temporary files',
+  '\u6e05\u9664\u7f13\u5b58': 'Clear cache',
+  '\u6e05\u9664\u7f13\u5b58\uff1f': 'Clear cache?',
+  '\u4f1a\u5220\u9664\u5df2\u4e0b\u8f7d\u7684\u66f4\u65b0\u5b89\u88c5\u5305\u548c\u4e34\u65f6\u6587\u4ef6\u3002\u6536\u5230\u7684\u6587\u4ef6\u3001\u914d\u5bf9\u548c\u6388\u6743\u4e0d\u53d7\u5f71\u54cd\u3002':
+      'Downloaded update packages and temporary files will be deleted. Received files, pairing and permissions are kept.',
+  '\u6e05\u9664': 'Clear',
+  '\u5df2\u6e05\u9664': 'Cleared',
+  '\u65e0\u6cd5\u6e05\u9664\u7f13\u5b58': 'Could not clear the cache',
+  '\u6e05\u7406\u65e7\u6587\u4ef6': 'Clean up old files',
+  '\u4f1a\u4ece\u624b\u673a\u4e0a\u5220\u9664\u8fd9\u4e9b\u6587\u4ef6\u3002\u7b49\u5f85\u63a5\u6536\u7684\u6587\u4ef6\u4e0d\u53d7\u5f71\u54cd\u3002':
+      'These files will be deleted from your phone. Files waiting to be received are kept.',
+  '7 \u5929\u524d\u7684\u6587\u4ef6': 'Older than 7 days',
+  '30 \u5929\u524d\u7684\u6587\u4ef6': 'Older than 30 days',
+  '\u5168\u90e8\u6587\u4ef6': 'All files',
+  '\u6ca1\u6709\u7b26\u5408\u6761\u4ef6\u7684\u6587\u4ef6':
+      'No files to clean up',
+  '\u5df2\u6e05\u7406': 'Removed',
+  '\u65e0\u6cd5\u6e05\u7406\u6587\u4ef6': 'Could not clean up files',
+  '\u6ca1\u6709\u53ef\u4ee5\u6253\u5f00\u6587\u4ef6\u5939\u7684\u6587\u4ef6\u7ba1\u7406\u5e94\u7528':
+      'No file manager can open this folder',
+  '\u663e\u793a\u66f4\u591a': 'Show more',
+  '\u66f4\u591a': 'More',
   "\u64cd\u4f5c\u65e5\u5fd7": "Operation history",
   "\u6309\u65f6\u95f4\u67e5\u770b\u64cd\u4f5c\u4e0e\u6587\u4ef6\u4f20\u8f93\u8bb0\u5f55":
       "Timeline of operations and file transfers",
@@ -273,6 +306,13 @@ const _english = <String, String>{
   '正在等待电脑，连接会自动恢复':
       'Waiting for your computer. Connection resumes automatically.',
   '电脑已记住，随时可以继续': 'Computer saved. Resume whenever you like.',
+  '暂时连不上电脑。请确认电脑端 PhoneBridge 已打开，手机和电脑在同一网络。':
+      "Can't reach your computer yet. Make sure PhoneBridge is open on it and both devices are on the same network.",
+  '无障碍服务已关闭': 'Accessibility is off',
+  '在最近任务里上滑清除 PhoneBridge 或强制停止后，系统会关闭它。开启后会自动连接已记住的电脑；在最近任务里锁定 PhoneBridge 可避免再次被关闭。':
+      'Android turns it off when PhoneBridge is swiped away in Recents or force stopped. Turn it on to reconnect to your saved computer, and lock PhoneBridge in Recents to keep it on.',
+  '开启无障碍服务': 'Enable accessibility',
+  '开启无障碍服务后才能切换电脑': 'Enable accessibility to switch computers',
   '连接电脑，让 AI 帮你处理手机上的事':
       'Connect your computer so AI can help with tasks on your phone',
   '我的电脑': 'My computer',
