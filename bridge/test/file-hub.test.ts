@@ -39,6 +39,13 @@ test('authenticated file handoff requires phone, offers metadata only, verifies 
   assert.equal((await fetch(`${url}/files/${oldId}`, { headers })).status, 409);
   await assert.rejects(sendLocalFile(new URL(url), token, dir), /regular file/);
   await assert.rejects(sendLocalFile(new URL(url), token, 'relative.png'), /absolute/);
-  await symlink(path, join(dir, 'link.png'));
+  try {
+    await symlink(path, join(dir, 'link.png'));
+  } catch (error) {
+    // Windows grants symlink creation only to elevated or Developer Mode sessions.
+    if ((error as NodeJS.ErrnoException).code !== 'EPERM') throw error;
+    t.diagnostic('symlink rejection not exercised: this session cannot create symlinks');
+    return;
+  }
   await assert.rejects(sendLocalFile(new URL(url), token, join(dir, 'link.png')), /cannot be opened/);
 });

@@ -14,6 +14,8 @@ void main() {
   var saved = false;
   var autoReconnect = false;
   var rememberedActions = false, connecting = false;
+  var accessibility = true, reconnecting = false;
+  var lastError = '';
   Completer<void>? desktopStart;
   PlatformException? desktopFailure;
   setUp(() {
@@ -25,6 +27,9 @@ void main() {
     autoReconnect = false;
     rememberedActions = false;
     connecting = false;
+    accessibility = true;
+    lastError = '';
+    reconnecting = false;
     desktopStart = null;
     desktopFailure = null;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -51,12 +56,13 @@ void main() {
           calls.add(call);
           if (call.method == 'status') {
             return {
-              'accessibilityEnabled': true,
+              'accessibilityEnabled': accessibility,
+              'reconnecting': reconnecting,
               'connected': connected,
               'connecting': connecting,
               'rememberedActions': rememberedActions,
               'actionsEnabled': false,
-              'lastError': '',
+              'lastError': lastError,
               'hasSavedPairing': saved,
               'savedEndpoint': saved ? 'ws://192.168.1.10:8765/device' : '',
               'autoReconnectEnabled': autoReconnect,
@@ -85,6 +91,15 @@ void main() {
               'progress': 0.0,
             };
           }
+          if (call.method == 'storageStatus') {
+            return {
+              'folder': 'Download/PhoneBridge',
+              'files': 3,
+              'bytes': 1572864,
+              'cacheBytes': 12582912,
+            };
+          }
+          if (call.method == 'clearCache') return 12582912;
           if (call.method == 'disconnect') {
             connected = false;
             autoReconnect = false;
@@ -115,6 +130,88 @@ void main() {
     await tester.tap(find.byKey(const Key('manual-pairing')));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('disabled accessibility replaces the misleading waiting state', (
+    tester,
+  ) async {
+    saved = true;
+    autoReconnect = true;
+    accessibility = false;
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    expect(find.text('无障碍服务已关闭'), findsOneWidget);
+    expect(find.text('正在连接'), findsNothing);
+    expect(find.text('正在等待电脑，连接会自动恢复'), findsNothing);
+    expect(find.text('开启无障碍服务以继续'), findsNothing);
+    await tester.tap(find.byKey(const Key('enable-accessibility')));
+    await tester.pump();
+    expect(
+      calls.where((c) => c.method == 'openAccessibilitySettings'),
+      hasLength(1),
+    );
+    await tester.ensureVisible(find.text('我的电脑'));
+    await tester.tap(find.text('我的电脑'));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('computer-sheet-accessibility')),
+      findsOneWidget,
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('failed reconnects tell the owner what to check', (tester) async {
+    saved = true;
+    autoReconnect = true;
+    lastError = 'Connection lost. Reconnecting to the trusted computer.';
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    expect(find.text('正在等待电脑，连接会自动恢复'), findsOneWidget);
+    reconnecting = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.textContaining('请确认电脑端 PhoneBridge 已打开'), findsOneWidget);
+    expect(find.byKey(const Key('enable-accessibility')), findsNothing);
+    // The retry notice is not repeated as an error banner.
+    expect(find.byKey(const Key('error')), findsNothing);
+    // The next attempt is in flight; the hint must not flicker away.
+    reconnecting = false;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.textContaining('请确认电脑端 PhoneBridge 已打开'), findsOneWidget);
+    connected = true;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    connected = false;
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(find.text('正在等待电脑，连接会自动恢复'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('settings show storage, open the folder and clear cache', (
+    tester,
+  ) async {
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pumpAndSettle();
+    expect(find.text('下载/PhoneBridge · 3 个文件 · 1.5 MB'), findsOneWidget);
+    expect(find.text('更新安装包和临时文件 · 12.0 MB'), findsOneWidget);
+    await tester.ensureVisible(find.byKey(const Key('open-files-folder')));
+    await tester.tap(find.byKey(const Key('open-files-folder')));
+    await tester.pump();
+    expect(calls.where((c) => c.method == 'openFilesFolder'), hasLength(1));
+    await tester.ensureVisible(find.byKey(const Key('clear-cache')));
+    await tester.tap(find.byKey(const Key('clear-cache')));
+    await tester.pumpAndSettle();
+    // Nothing is deleted before the owner confirms.
+    expect(calls.where((c) => c.method == 'clearCache'), isEmpty);
+    await tester.tap(find.byKey(const Key('confirm-clear-cache')));
+    await tester.pumpAndSettle();
+    expect(calls.where((c) => c.method == 'clearCache'), hasLength(1));
+    expect(find.text('已清除 12.0 MB'), findsOneWidget);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('desktop start only appears for paired disconnected phones', (
     tester,
