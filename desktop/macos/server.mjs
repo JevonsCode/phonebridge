@@ -24,7 +24,7 @@ export async function main(args = process.argv.slice(2)) {
   if(args.includes('--uninstall-service')) { if(!config)throw new Error('No owned Mac service configuration exists.');console.log(JSON.stringify(await uninstallService({config,configFile:path,uid})));return; }
   if (args.includes('--diagnose')) {
     const manifest=JSON.parse(await readFile(join(root,'package-manifest.json'),'utf8').catch(e=>{if(e.code==='ENOENT')return '{}';throw e;}));
-    const report=JSON.stringify({ product:'PhoneBridge', version:manifest.version??'0.6.1-preview', platform:`darwin-${process.arch}`, runtime:process.version, existingOwnedConfig:!!config, privateNetworks:macNetworks().length, dryRun:true });
+    const report=JSON.stringify({ product:'PhoneBridge', version:manifest.version??'0.6.2-preview', platform:`darwin-${process.arch}`, runtime:process.version, existingOwnedConfig:!!config, privateNetworks:macNetworks().length, dryRun:true });
     if (args.includes('--report-path')) { const destination=args[args.indexOf('--report-path')+1];if(!destination || resolve(destination)!==destination)throw new Error('Use an absolute report path.');const info=await lstat(destination).catch(e=>{if(e.code==='ENOENT')return undefined;throw e;});if(info && (!info.isFile()||info.isSymbolicLink()))throw new Error('Invalid diagnostic report file.');await writeFile(destination,report+'\n',{mode:0o600}); }
     console.log(report);return;
   }
