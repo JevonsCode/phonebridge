@@ -4,7 +4,7 @@ set -euo pipefail
 umask 022
 
 project="$(cd "$(dirname "$0")/.." && pwd -P)"
-version="0.6.1"
+version="0.6.2"
 arch="$(uname -m)"
 [ "$arch" != "x86_64" ] || arch="x64"
 output="$project/artifacts/macos"
