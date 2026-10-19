@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:window_manager/window_manager.dart';
 import 'app.dart';
 import 'backend.dart';
+import 'tray.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,22 +29,48 @@ Future<void> main() async {
   final languageFile = home == null
       ? null
       : File('$home/.phonebridge/desktop-language');
+  final trayPreference = TrayPreference(
+    home == null ? null : File('$home/.phonebridge/desktop-tray-icon'),
+  );
   var chinese = Platform.localeName.startsWith('zh');
   try {
     final saved = await languageFile?.readAsString();
     if (saved == 'zh' || saved == 'en') chinese = saved == 'zh';
   } catch (_) {}
-  windowManager.addListener(_CloseListener(controller));
+  final trayIcon = await trayPreference.load();
+  var quitting = false;
+  late final DesktopTray tray;
+  Future<void> quit() async {
+    if (quitting) return;
+    quitting = true;
+    await tray.setVisible(false);
+    await controller.shutdown();
+    await windowManager.destroy();
+  }
+
+  tray = DesktopTray(
+    controller: controller,
+    chinese: chinese,
+    showWindow: showMainWindow,
+    quit: quit,
+  );
+  windowManager.addListener(_CloseListener(tray, quit));
   await windowManager.setPreventClose(true);
   runApp(
     PhoneBridgeApp(
       controller: controller,
       initialChinese: chinese,
       onLanguageChanged: (zh) async {
+        tray.chinese = zh;
         try {
           await languageFile?.parent.create(recursive: true);
           await languageFile?.writeAsString(zh ? 'zh' : 'en', flush: true);
         } catch (_) {}
+      },
+      initialTrayIcon: trayIcon,
+      onTrayIconChanged: (enabled) {
+        unawaited(tray.setVisible(enabled));
+        unawaited(trayPreference.save(enabled));
       },
     ),
   );
@@ -61,18 +88,28 @@ Future<void> main() async {
       },
     ),
   );
+  if (trayIcon) unawaited(tray.setVisible(true));
   unawaited(controller.start());
 }
 
+Future<void> showMainWindow() async {
+  if (await windowManager.isMinimized()) await windowManager.restore();
+  await windowManager.show();
+  await windowManager.focus();
+}
+
+/// With the tray icon on, closing only hides the window; the dashboard keeps
+/// polling so the tray status stays current. Otherwise closing quits.
 class _CloseListener extends WindowListener {
-  _CloseListener(this.controller);
-  final DesktopController controller;
-  bool closing = false;
+  _CloseListener(this.tray, this.quit);
+  final DesktopTray tray;
+  final Future<void> Function() quit;
   @override
   void onWindowClose() async {
-    if (closing) return;
-    closing = true;
-    await controller.shutdown();
-    await windowManager.destroy();
+    if (tray.visible) {
+      await windowManager.hide();
+    } else {
+      await quit();
+    }
   }
 }

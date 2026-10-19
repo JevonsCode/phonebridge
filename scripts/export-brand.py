@@ -38,6 +38,9 @@ mark.resize((256, 256), Image.Resampling.LANCZOS).save(icon, sizes=[(s, s) for s
 runner_icon = ROOT / 'desktop_app/windows/runner/resources/app_icon.ico'
 if runner_icon.parent.exists():
     runner_icon.write_bytes(icon.read_bytes())
+tray_icon = ROOT / 'desktop_app/assets/brand/tray.ico'
+if tray_icon.parent.exists():
+    tray_icon.write_bytes(icon.read_bytes())
 
 entries = []
 for size in [16, 32, 128, 256, 512]:
