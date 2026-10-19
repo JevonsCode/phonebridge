@@ -1,6 +1,6 @@
 #requires -Version 5.1
 [CmdletBinding()]
-param([ValidatePattern('^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version='0.6.1', [string]$OutputDirectory, [string]$NodeVersion='22.23.3', [string]$FlutterBuildDirectory)
+param([ValidatePattern('^\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$')][string]$Version='0.6.2', [string]$OutputDirectory, [string]$NodeVersion='22.23.3', [string]$FlutterBuildDirectory)
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $project = Split-Path $PSScriptRoot -Parent
