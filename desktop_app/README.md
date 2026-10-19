@@ -22,11 +22,18 @@ Windows resources sit beside the executable (`runtime/node.exe`,
 (`runtime/node`, `desktop/macos/server.mjs`). Native runners handle diagnostic
 arguments before creating Flutter windows.
 
-The UI stores only its language choice in `~/.phonebridge/desktop-language`.
+The UI stores only its language choice in `~/.phonebridge/desktop-language` and
+its tray choice in `~/.phonebridge/desktop-tray-icon` (`on`/`off`, on by default).
 Private session URLs remain in memory. Requests reject redirects and use exact
-Origin and CSRF headers for mutations. Window close and macOS Quit clean up only
-the child dashboard process owned by this frontend; installed services remain
-independent.
+Origin and CSRF headers for mutations. Quitting (tray menu, macOS Quit, or window
+close with the tray icon off) cleans up only the child dashboard process owned by
+this frontend; installed services remain independent.
+
+The notification-area (Windows) or menu-bar (macOS) icon opens the window on
+click and its menu shows the connection status. While it is on, closing the
+window hides it there. On Windows a second launch shows the existing window
+instead of starting another copy, so quit the tray icon before running a
+development build. Building plugins on Windows needs Developer Mode (symlinks).
 
 Noto Sans SC is bundled under the SIL Open Font License in `assets/fonts/OFL.txt`.
 The brand image is exported from the repository's canonical generated source.

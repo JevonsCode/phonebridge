@@ -46,5 +46,10 @@ class AppDelegate: FlutterAppDelegate {
   }
 
   override func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+  // Closing hides the window while the menu bar icon is on; the Dock icon brings it back.
+  override func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+    if !flag { mainFlutterWindow?.makeKeyAndOrderFront(nil) }
+    return true
+  }
   override func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 }

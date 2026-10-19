@@ -16,6 +16,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   const int headless_result = RunHeadless();
   if (headless_result >= 0) return headless_result;
+  // The window may be hidden in the tray. Launching again brings it back
+  // instead of opening a second window with a second tray icon.
+  HANDLE single_instance =
+      ::CreateMutexW(nullptr, FALSE, L"Local\\PhoneBridgeDesktopWindow");
+  if (single_instance && ::GetLastError() == ERROR_ALREADY_EXISTS) {
+    HWND existing =
+        ::FindWindowW(L"FLUTTER_RUNNER_WIN32_WINDOW", L"PhoneBridge");
+    if (existing) {
+      ::ShowWindow(existing, ::IsIconic(existing) ? SW_RESTORE : SW_SHOW);
+      ::SetForegroundWindow(existing);
+    }
+    ::CloseHandle(single_instance);
+    return EXIT_SUCCESS;
+  }
   // Initialize COM, so that it is available for use in the library and/or
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);

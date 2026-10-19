@@ -7,6 +7,7 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  tray_manager: ^0.5.3
   window_manager: ^0.5.1
 dev_dependencies:
   flutter_test:
@@ -16,6 +17,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/brand/logo.png
+    - assets/brand/tray.ico
     - assets/fonts/OFL.txt
   fonts:
     - family: NotoSansSC
