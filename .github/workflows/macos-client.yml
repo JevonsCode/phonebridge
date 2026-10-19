@@ -76,11 +76,11 @@ jobs:
           set -euo pipefail
           output="$RUNNER_TEMP/phonebridge-packages"
           cd "$output"
-          shasum -a 256 -c "phonebridge-0.6.1-macos-$PACKAGE_ARCH.dmg.sha256"
-          shasum -a 256 -c "phonebridge-0.6.1-macos-$PACKAGE_ARCH.zip.sha256"
+          shasum -a 256 -c "phonebridge-0.6.2-macos-$PACKAGE_ARCH.dmg.sha256"
+          shasum -a 256 -c "phonebridge-0.6.2-macos-$PACKAGE_ARCH.zip.sha256"
           mount="$RUNNER_TEMP/phonebridge-dmg"
           mkdir -p "$mount"
-          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "phonebridge-0.6.1-macos-$PACKAGE_ARCH.dmg"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" "phonebridge-0.6.2-macos-$PACKAGE_ARCH.dmg"
           trap 'hdiutil detach "$mount"' EXIT
           test -d "$mount/PhoneBridge.app"
           test -L "$mount/Applications"
@@ -151,21 +151,21 @@ jobs:
         run: node --test desktop/test/client-reuse.test.mjs
       - name: Test stable MCP bootstrap
         run: node --test desktop/test/stable-mcp.test.mjs
-      - name: Package Windows 0.6.1 preview
+      - name: Package Windows 0.6.2 preview
         run: |
-          ./scripts/package-desktop.ps1 -Version 0.6.1 -OutputDirectory (Join-Path $env:RUNNER_TEMP 'phonebridge-windows')
+          ./scripts/package-desktop.ps1 -Version 0.6.2 -OutputDirectory (Join-Path $env:RUNNER_TEMP 'phonebridge-windows')
           if ($LASTEXITCODE -ne 0) { throw 'Windows preview packaging failed.' }
       - name: Verify package, headless launcher and isolated lifecycle
         run: |
-          ./scripts/test-desktop-client.ps1 -Version 0.6.1 -PackageDirectory (Join-Path $env:RUNNER_TEMP 'phonebridge-windows\stage-0.6.1')
+          ./scripts/test-desktop-client.ps1 -Version 0.6.2 -PackageDirectory (Join-Path $env:RUNNER_TEMP 'phonebridge-windows\stage-0.6.2')
           if ($LASTEXITCODE -ne 0) { throw 'Windows packaged desktop regression failed.' }
       - name: Upload Windows preview packages
         uses: actions/upload-artifact@v4
         with:
           name: phonebridge-windows-x64-preview
           path: |
-            ${{ runner.temp }}/phonebridge-windows/phonebridge-0.6.1-windows-setup.exe
-            ${{ runner.temp }}/phonebridge-windows/phonebridge-0.6.1-windows-x64.zip
+            ${{ runner.temp }}/phonebridge-windows/phonebridge-0.6.2-windows-setup.exe
+            ${{ runner.temp }}/phonebridge-windows/phonebridge-0.6.2-windows-x64.zip
             ${{ runner.temp }}/phonebridge-windows/*.sha256
           if-no-files-found: error
           retention-days: 14
