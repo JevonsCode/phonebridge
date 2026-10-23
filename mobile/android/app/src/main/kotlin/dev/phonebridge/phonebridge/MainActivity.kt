@@ -94,6 +94,18 @@ class MainActivity : FlutterActivity() {
                             BridgeSession.setComputerResumeAllowed(call.argument<String>("id") ?: "", call.argument<Boolean>("enabled") == true)
                             result.success(BridgeSession.status())
                         }
+                        "getAppAccess" -> result.success(BridgeSession.getAppAccess(
+                            call.argument<Boolean>("draft") == true,
+                            call.argument<String>("endpoint") ?: "", call.argument<String>("token") ?: ""))
+                        "closeAppAccess" -> { BridgeSession.closeAppAccess(); result.success(null) }
+                        "setAllowedPackages" -> {
+                            cancelDesktopRecovery()
+                            result.success(BridgeSession.setAllowedPackages(
+                                call.argument<String>("computerId") ?: "",
+                                call.argument<Number>("permissionRevision")?.toLong() ?: -1L,
+                                call.argument<List<String>>("expectedPackages") ?: emptyList(),
+                                call.argument<List<String>>("packages") ?: emptyList()))
+                        }
                         "listComputers" -> result.success(BridgeSession.computerList())
                         "selectComputer" -> {
                             cancelDesktopRecovery()
@@ -138,6 +150,7 @@ class MainActivity : FlutterActivity() {
                                 call.argument<Boolean>("allowInsecureLocal") == true,
                                 call.argument<List<String>>("packages") ?: listOf(packageName, "com.tencent.mm"),
                                 call.argument<Boolean>("remember") ?: true,
+                                call.argument<Boolean>("replaceAllowedPackages") == true,
                             )
                             result.success(BridgeSession.status())
                         }
@@ -314,6 +327,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        BridgeSession.closeAppAccess()
         cancelPendingPermission()
         cancelDesktopRecovery()
         cleanUpUpdater()
