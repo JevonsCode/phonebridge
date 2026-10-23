@@ -18,12 +18,15 @@ object OperationPolicy {
     }
 
     fun requireSession(connected: Boolean, generationMatches: Boolean, serviceAttached: Boolean,
-                       unlocked: Boolean, actionsEnabled: Boolean, mutation: Boolean) {
+                       unlocked: Boolean, actionsEnabled: Boolean, mutation: Boolean, ownerAuthorizationOpen: Boolean = false) {
         if (!connected || !generationMatches || !serviceAttached) {
             throw BridgeFailure("NO_SESSION", "The session has ended.")
         }
         if (!unlocked) {
             throw BridgeFailure("DEVICE_LOCKED", "Unlock the phone before using PhoneBridge.")
+        }
+        if (ownerAuthorizationOpen) {
+            throw BridgeFailure("OWNER_AUTHORIZATION", "Complete app authorization locally on the phone.")
         }
         if (mutation && !actionsEnabled) {
             throw BridgeFailure("READ_ONLY", "Enable actions on the phone.")

@@ -124,6 +124,9 @@ String userError(String? code, String? message, String fallback) =>
         : fallback);
 
 const _errors = <String, String>{
+  'POLICY_CHANGED': '连接或授权已变化，请返回后重新打开应用列表',
+  'APP_ACCESS_UNAVAILABLE': '无法读取应用授权，请重试',
+  'OWNER_AUTHORIZATION': '请先在手机完成应用授权',
   'ACCESSIBILITY_DISABLED': '请先开启 PhoneBridge 无障碍服务',
   'DEVICE_LOCKED': '请先解锁手机，再继续',
   'NOTIFICATIONS_DISABLED': '请允许 PhoneBridge 的连接通知后再试',
@@ -169,6 +172,33 @@ const _english = <String, String>{
   '正在控制': 'Controlling',
   '连接异常，请检查电脑服务或网络': 'Connection issue. Check the computer service or network.',
   '恢复连接': 'Resume connection',
+  "允许访问的应用": "Allowed apps",
+  "请选择 1–64 个应用": "Select 1–64 apps.",
+  "无法保存应用授权，请重试": "Could not save app access. Please try again.",
+  "无法读取应用授权，请重试": "Could not load app access. Please try again.",
+  "连接或授权已变化，请返回后重新打开应用列表":
+      "Connection or access changed. Go back and reopen the app list.",
+  "请先在手机完成应用授权": "Complete app authorization on your phone first.",
+  "仅允许电脑读取所选应用；开启“允许操作”后，也可以点击、滑动和输入。":
+      "The computer can read only selected apps. Enable actions to allow taps, swipes and typing.",
+  "编辑期间暂停远程操作，返回后恢复。":
+      "Remote access is paused while editing and resumes when you return.",
+  "搜索应用名称或包名": "Search app name or package",
+  "已选择": "Selected",
+  "全选": "Select all",
+  "全选搜索结果": "Select all results",
+  "最多允许 64 个应用，请取消部分勾选":
+      "Up to 64 apps are allowed. Deselect some apps to continue.",
+  "未找到应用，试试其他名称": "No apps found. Try another name.",
+  "系统授权页面仅能在手机操作": "System permission screens require local interaction.",
+  "当前未安装": "Not installed",
+  "保存中…": "Saving…",
+  "个应用 · 点击修改": "apps · Tap to change",
+  "AI 可以操作下方已授权的应用": "AI can control the apps allowed below",
+  "AI 只能查看下方已授权的应用": "AI can only view the apps allowed below",
+  "点击查看或修改；重新配对会保留原授权":
+      "View or change access. Pairing again preserves existing grants.",
+
   "\u6765\u81ea\u7535\u8111\u7684\u6587\u4ef6": "Files from your computer",
   "\u63a5\u6536\u540e\u70b9\u5206\u4eab\uff0c\u9009\u62e9\u5fae\u4fe1\u3001WhatsApp \u6216\u5176\u4ed6\u5e94\u7528":
       "Receive, then share to WeChat, WhatsApp or another app.",
