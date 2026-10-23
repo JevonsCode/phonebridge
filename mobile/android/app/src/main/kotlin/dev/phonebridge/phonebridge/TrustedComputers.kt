@@ -13,6 +13,13 @@ data class TrustedComputer(val id: String, val name: String, val pairing: Truste
 data class TrustedComputers(val entries: List<TrustedComputer> = emptyList(), val activeId: String? = null) {
     val active: TrustedComputer? get() = entries.find { it.id == activeId }
 
+    /** Scanning the same identity is not an instruction to replace its grants. */
+    fun forConnection(requested: TrustedPairing, replaceAllowedPackages: Boolean = false): TrustedPairing {
+        val previous = entries.find { it.pairing.endpoint == requested.endpoint && it.pairing.token == requested.token }
+        return if (!replaceAllowedPackages && previous != null) requested.copy(packages = previous.pairing.packages)
+            else requested
+    }
+
     fun remember(pairing: TrustedPairing): TrustedComputers {
         val previous = entries.find { it.pairing.endpoint == pairing.endpoint && it.pairing.token == pairing.token }
         val entry = previous?.copy(pairing = pairing)

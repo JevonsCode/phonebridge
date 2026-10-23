@@ -1,6 +1,8 @@
 package dev.phonebridge.phonebridge
 
 import android.app.Notification
+import android.app.KeyguardManager
+import android.os.PowerManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -53,6 +55,10 @@ object BridgeSession {
     private var store: TrustedPairingStore? = null
     private var loaded = false
     private var computers = TrustedComputers()
+    var appAccessOpen = false
+        private set
+    // Local editor lifetime, independent of AI operations and control handoffs.
+    private var appAccessRevision = 0L
     private var globalError = ""
     private var awake: ScreenAwakeController? = null
     private var deviceId = ""
@@ -132,6 +138,9 @@ object BridgeSession {
             "hasSavedPairing" to (saved != null), "savedEndpoint" to (saved?.endpoint ?: ""),
             "activeComputerId" to (computers.activeId ?: ""), "computerName" to (computers.active?.name ?: ""),
             "computers" to computerList(), "files" to (fileInbox?.status() ?: emptyList<Map<String, Any>>()),
+            "allowedPackages" to (saved ?: selected?.record)?.packages.orEmpty(),
+            "effectiveAllowedPackages" to (if (selected?.connected == true) selected.record.packages else emptyList<String>()),
+            "permissionRevision" to appAccessRevision,
             "autoReconnectEnabled" to (saved?.resumeAllowed == true), "rememberedActions" to (saved?.actionsEnabled == true),
             "reconnecting" to transports.values.any { it.retry != null },
             "controlOwnerId" to (owner?.computerId ?: ""), "controlOwnerName" to (owner?.name ?: ""),
@@ -208,9 +217,11 @@ object BridgeSession {
         requireNotifications(native)
         return native
     }
-    fun connect(url: String, token: String, allowInsecureLocal: Boolean, allowed: List<String>, remember: Boolean = true) {
+    fun connect(url: String, token: String, allowInsecureLocal: Boolean, allowed: List<String>, remember: Boolean = true,
+                replaceAllowedPackages: Boolean = false) {
         val native = requireReady(); initialize(native)
-        val record = TrustedPairing(EndpointPolicy.validate(url, allowInsecureLocal), token, allowInsecureLocal, allowed.distinct(), false, true)
+        val record = computers.forConnection(TrustedPairing(EndpointPolicy.validate(url, allowInsecureLocal), token,
+            allowInsecureLocal, allowed.distinct(), false, true), replaceAllowedPackages)
         validatePairing(record)
         transports.remove("temporary")?.let { close(it) }
         if (remember) {
@@ -224,6 +235,70 @@ object BridgeSession {
             control.select("temporary"); authorityChanged(); ensureTransport("temporary", record)
         }
         tryAutoResume()
+    }
+
+    private fun requireOwnerUnlocked() {
+        val value = context ?: throw BridgeFailure("ACTIVITY_CLOSED", "Reopen PhoneBridge.")
+        val keyguard = value.getSystemService(KeyguardManager::class.java)
+        if (keyguard.isKeyguardLocked || keyguard.isDeviceLocked ||
+            !value.getSystemService(PowerManager::class.java).isInteractive) {
+            throw BridgeFailure("DEVICE_LOCKED", "Unlock the phone before editing app access.")
+        }
+        if (!loaded) throw BridgeFailure("PAIRING_STORAGE_FAILED", "Saved trust is unavailable. Reopen PhoneBridge.")
+    }
+
+    /** Local MethodChannel only. AI control handoffs never change the editor's target. */
+    fun getAppAccess(draft: Boolean, url: String, token: String): Map<String, Any> {
+        requireOwnerUnlocked()
+        val record = if (draft) {
+            val requested = TrustedPairing(EndpointPolicy.validate(url, true), token, true,
+                listOf(context!!.packageName, "com.tencent.mm"), false, true)
+            validatePairing(requested)
+            computers.forConnection(requested)
+        } else computers.active?.pairing ?: selectedTransport()?.record
+            ?: throw BridgeFailure("NO_SAVED_PAIRING", "Pair with your computer first.")
+        val apps = AppAccessCatalog.list(context!!, record.packages)
+        appAccessOpen = true
+        appAccessRevision++
+        execution?.let { it.invalidated = true; operationScope.invalidate() }
+        service?.invalidateNodes()
+        service?.clearOperationTrail()
+        val computer = computers.entries.find { it.pairing.endpoint == record.endpoint && it.pairing.token == record.token }
+        return status() + mapOf("allowedPackages" to record.packages, "apps" to apps,
+            "computerName" to (computer?.name ?: TrustedComputers.hostName(record.endpoint)))
+    }
+
+    fun closeAppAccess() {
+        appAccessOpen = false
+        appAccessRevision++
+        service?.invalidateNodes()
+    }
+
+    fun setAllowedPackages(id: String, revision: Long, expected: List<String>, allowed: List<String>): Map<String, Any> {
+        requireOwnerUnlocked()
+        if (!appAccessOpen) throw BridgeFailure("OWNER_AUTHORIZATION", "Open app access locally first.")
+        val selectedId = computers.activeId ?: "temporary"
+        val transport = transports[selectedId]
+        val saved = computers.active
+        val current = saved?.pairing ?: transport?.record
+            ?: throw BridgeFailure("NO_SAVED_PAIRING", "Pair with your computer first.")
+        AppAccessPolicy.requireSnapshot(id, revision, expected, computers.activeId ?: "", appAccessRevision, current.packages)
+        val record = current.copy(packages = allowed.distinct())
+        validatePairing(record)
+        if (record.packages.toSet() == current.packages.toSet()) return status()
+        val reconnect = transport?.let { it.connected || it.connecting || it.retry != null } == true
+        // Only this computer loses its old operation snapshot and connection. Other peers stay online.
+        transport?.let { close(it) }
+        if (saved != null) {
+            updateTrust { store!!.update(selectedId, record) }
+            if (entry(selectedId)?.pairing != record) storageFailure()
+        }
+        transport?.record = record
+        if (reconnect) {
+            try { ensureTransport(selectedId, record) }
+            catch (failure: BridgeFailure) { transports[selectedId]?.error = failure.message ?: "Connection unavailable." }
+        }
+        return status()
     }
     fun selectComputer(id: String) {
         requireReady()
@@ -449,6 +524,7 @@ object BridgeSession {
             if (method !in setOf("file_offer", "state", "screenshot", "tap", "long_press", "swipe", "set_text",
                     "node_action", "commit_text", "global_action", "launch_app"))
                 throw BridgeFailure("UNKNOWN_METHOD", "Unknown Android method.")
+            if (appAccessOpen) throw BridgeFailure("OWNER_AUTHORIZATION", "Complete app authorization locally on the phone.")
             // Invalid explicit tasks must report terminal expiry even while another operation is running.
             if (execution != null) {
                 if (task != null) control.requireExistingControl(t.id, t.serial, task)

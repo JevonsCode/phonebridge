@@ -46,6 +46,30 @@ class TrustedComputersTest {
         assertEquals(migrated, TrustedComputers.decode(migrated.encode()))
     }
 
+    @Test fun implicitRepairOfSameComputerPreservesChromeGrant() {
+        val original = pairing().copy(packages = listOf("dev.phonebridge.phonebridge", "com.android.chrome"))
+        val computers = TrustedComputers().remember(original)
+        val scannedDefaults = pairing().copy(packages = listOf("dev.phonebridge.phonebridge", "com.tencent.mm"))
+        assertEquals(original.packages, computers.forConnection(scannedDefaults).packages)
+    }
+
+    @Test fun explicitGrantEditReplacesRatherThanMergesAndDoesNotAffectOtherComputer() {
+        val original = pairing().copy(packages = listOf("dev.phonebridge.phonebridge", "com.android.chrome"))
+        val computers = TrustedComputers().remember(original).remember(pairing("b".repeat(32)))
+        val revoked = original.copy(packages = listOf("dev.phonebridge.phonebridge"))
+        assertEquals(revoked.packages, computers.forConnection(revoked, true).packages)
+        assertEquals(pairing("b".repeat(32)).packages, computers.active!!.pairing.packages)
+    }
+
+    @Test fun differentComputerNeverInheritsChromeGrant() {
+        val original = pairing().copy(packages = listOf("com.android.chrome"))
+        val computers = TrustedComputers().remember(original)
+        val other = pairing("b".repeat(32))
+        assertEquals(other.packages, computers.forConnection(other).packages)
+        val moved = other.copy(token = original.token, endpoint = "ws://192.168.1.11:8765/device")
+        assertEquals(moved.packages, computers.forConnection(moved).packages)
+    }
+
     private fun pairing(token: String = "a".repeat(32), actions: Boolean = true, resume: Boolean = true) =
         TrustedPairing("ws://192.168.1.10:8765/device", token, true, listOf("com.tencent.mm"), actions, resume)
 
