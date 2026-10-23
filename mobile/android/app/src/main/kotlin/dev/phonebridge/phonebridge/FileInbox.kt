@@ -171,9 +171,11 @@ class FileInbox(private val context: Context) {
         val entry = Entry(file, source.name, "pending", source = source)
         entries.add(entry); record(entry, "pending")
     }
-    fun disconnected() {
-        call?.cancel(); call = null; receiving = null
-        entries.filter { it.state == "pending" || it.state == "receiving" }.forEach { it.source = null; record(it, "cancelled") }
+    fun disconnected(sourceGeneration: Long? = null) {
+        val affected = entries.filter { (it.state == "pending" || it.state == "receiving") &&
+            (sourceGeneration == null || it.source?.generation == sourceGeneration) }
+        if (affected.any { it.file.id == receiving }) { call?.cancel(); call = null; receiving = null }
+        affected.forEach { it.source = null; record(it, "cancelled") }
     }
     private fun entry(id: String) = entries.find { it.file.id == id } ?: throw IllegalArgumentException("File unavailable.")
     private fun request(source: Source, path: String) = Request.Builder().url(source.origin + path).header("Authorization", source.authorization)
@@ -198,7 +200,7 @@ class FileInbox(private val context: Context) {
             } catch (_: Exception) { }
             partial.delete()
             BridgeSession.main.post {
-                if (receiving != id || entry.source !== source || !BridgeSession.connected || BridgeSession.generation != source.generation) {
+                if (receiving != id || entry.source !== source || !BridgeSession.isFileSourceCurrent(source.generation)) {
                     published?.let(::delete); return@post
                 }
                 call = null; receiving = null
@@ -284,7 +286,7 @@ class FileInbox(private val context: Context) {
                 }
             } catch (_: Exception) { null }
             BridgeSession.main.post {
-                if (source.generation != BridgeSession.generation) complete(null, "连接已切换，请刷新日志")
+                if (!BridgeSession.isFileSourceCurrent(source.generation)) complete(null, "连接已切换，请刷新日志")
                 else complete(result, if (result == null) "无法读取电脑日志，请检查连接后刷新" else null)
             }
         }

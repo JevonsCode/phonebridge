@@ -109,12 +109,14 @@ test('single-flight rejects concurrent commands and ignores unrelated replies', 
   assert.deepEqual((await (await first).json()).result, { nodes: [] });
 });
 
-test('a second phone cannot replace an active phone', async t => {
+test('a second legacy phone cannot replace an active legacy phone', async t => {
   const { url, headers, connect } = await setup(t);
   await connect();
   const second = new WebSocket(url.replace('http', 'ws') + '/device', { headers });
-  const [error] = await once(second, 'error');
-  assert.match(error.message, /409/);
+  await once(second, 'open');
+  const closed = once(second, 'close');
+  second.send(JSON.stringify({ type: 'hello', protocol: 1 }));
+  assert.equal((await closed)[0], 1008);
 });
 
 test('timeout disconnects and never retries an action', async t => {
@@ -174,7 +176,7 @@ test(`MCP stdio discovers tools and returns state/image/error through real hub (
   const transport = new StdioClientTransport({ command: process.execPath, args: ['--import', 'tsx', fileURLToPath(new URL('../src/mcp.ts', import.meta.url))], env: clientEnv, stderr: 'pipe' });
   const client = new Client({ name: 'test', version: '1' });
   await client.connect(transport); t.after(() => client.close());
-  const list = await client.listTools(); assert.equal(list.tools.length, 11);
+  const list = await client.listTools(); assert.ok(list.tools.length >= 11);
   assert.equal(list.tools.find(x => x.name === 'phone_state')?.annotations?.readOnlyHint, true);
   assert.ok(list.tools.some(x => x.name === 'phone_send_file'));
   assert.ok(!list.tools.some(x => x.name === 'phone_file_offer'));

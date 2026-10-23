@@ -105,16 +105,19 @@ export async function createDashboard({ config, token, status, startService, cha
       if (req.method === 'GET' && req.url === `${base}/ping`) { send(200, { client: 'phonebridge-desktop', pid: process.pid, clientIdentity }); return; }
       if (req.method === 'GET' && req.url === `${base}/status`) {
         let current; try { current = await status(); } catch { current = { connected: false, unavailable: true }; }
-        send(200, { connected: current.connected, transfer: current.transfer, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? hostname(), error: startupError?.() }); return;
+        const devices = Array.isArray(current.devices) ? current.devices.map(({ id, name, connected, protocol, capabilities, busy, readOnly, connectionId, controlling, controlOwnerName, waitingCount, transfer }) => ({ id, name, connected, protocol, capabilities, busy, readOnly, connectionId, controlling, controlOwnerName, ...(Number.isInteger(waitingCount) && waitingCount >= 0 && waitingCount <= 64 ? { waitingCount } : {}), ...(transfer ? { transfer: { name: transfer.name, state: transfer.state, size: transfer.size, mimeType: transfer.mimeType } } : {}) })) : [];
+        send(200, { connected: current.connected, devices, transfer: current.transfer, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? hostname(), error: startupError?.() }); return;
       }
       if (req.method === 'POST' && req.url === `${base}/start`) { req.resume(); await startService(); send(200, { ok: true }); return; }
       if (allowLan && req.method === 'POST' && req.url === `${base}/allow-lan`) { req.resume(); await allowLan(); send(200, { ok: true }); return; }
       if (testShutdown && req.method === 'POST' && req.url === `${base}/shutdown`) { req.resume(); send(200,{ok:true}); setImmediate(testShutdown); return; }
       if (req.method === 'POST' && req.url === `${base}/send-file`) {
         let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 8192) throw new Error('Request too large'); }
-        const { path } = JSON.parse(body);
+        const { path, deviceId, connectionId } = JSON.parse(body);
+        if (deviceId !== undefined && (typeof deviceId !== 'string' || !deviceId || deviceId.length > 256)) throw new Error('Invalid device target');
+        if (connectionId !== undefined && (typeof connectionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(connectionId))) throw new Error('Invalid connection identity');
         const { sendLocalFile } = await import('../bridge/dist/send-file.js');
-        send(200, await sendLocalFile(new URL(`http://${config.hostAddress}:${config.port}`), token, path)); return;
+        send(200, await sendLocalFile(new URL(`http://${config.hostAddress}:${config.port}`), token, path, { deviceId, connectionId })); return;
       }
       if (req.method === 'POST' && req.url === `${base}/network`) {
         let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 1024) throw new Error('Request too large'); }

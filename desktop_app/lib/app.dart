@@ -57,7 +57,21 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
   int page = 0;
   bool choosingFile = false;
   String? fileError;
+  String? fileDeviceId;
   Future<void> sendFile() async {
+    // Capture the user's target before the native chooser opens. Polling may
+    // change the online list, but must never redirect an in-flight choice.
+    final target = fileDeviceId;
+    final targetDevice = c.status?.devices
+        .where((d) => d.id == target)
+        .firstOrNull;
+    if (target == null ||
+        targetDevice == null ||
+        !targetDevice.connected ||
+        targetDevice.busy) {
+      return;
+    }
+    final connectionId = targetDevice.connectionId;
     setState(() {
       choosingFile = true;
       fileError = null;
@@ -69,7 +83,25 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                 'dev.phonebridge/files',
               ).invokeMethod<String>('chooseFile'));
       if (path != null && mounted) {
-        await c.mutate('send-file', {'path': path});
+        final current = c.status?.devices
+            .where((d) => d.id == target)
+            .firstOrNull;
+        if (connectionId != null &&
+            (current?.connectionId != connectionId ||
+                current?.connected != true)) {
+          setState(
+            () => fileError = t(
+              '手机连接已变化，请确认接收手机后重试',
+              'The phone connection changed. Check the receiving phone and try again.',
+            ),
+          );
+          return;
+        }
+        await c.mutate('send-file', {
+          'path': path,
+          'deviceId': target,
+          'connectionId': ?connectionId,
+        });
       }
     } catch (_) {
       if (mounted) {
@@ -345,6 +377,23 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
     final connected =
         s?.connected == true && s?.unavailable != true && !c.connectionFailed;
     final title = connectionTitle(c, zh);
+    final devices = s?.devices ?? <DesktopDevice>[];
+    final selectedDevice = devices
+        .where((d) => d.id == fileDeviceId)
+        .firstOrNull;
+    final transfer =
+        selectedDevice?.transfer ??
+        (selectedDevice?.connected == true &&
+                devices.where((d) => d.connected).length == 1
+            ? s?.transfer
+            : null);
+    String deviceLabel(DesktopDevice device) =>
+        devices.where((d) => d.displayName == device.displayName).length > 1
+        ? '${device.displayName} (${device.id.length > 8 ? device.id.substring(0, 8) : device.id})'
+        : device.displayName;
+    final targetReady = devices.any(
+      (d) => d.id == fileDeviceId && d.connected && !d.busy,
+    );
     return [
       card(
         SizedBox(
@@ -425,6 +474,82 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
         ),
       ),
       const SizedBox(height: 20),
+      if (devices.isNotEmpty) ...[
+        card(
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              label(t('手机设备', 'Phones')),
+              const SizedBox(height: 12),
+              for (final device in devices)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.smartphone_rounded,
+                        color: device.connected ? blue : muted,
+                        size: 22,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              device.displayName,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            Text(
+                              device.id.length > 12
+                                  ? device.id.substring(0, 12)
+                                  : device.id,
+                              style: const TextStyle(
+                                color: muted,
+                                fontSize: 11,
+                              ),
+                            ),
+                            Text(
+                              !device.connected
+                                  ? t('离线', 'Offline')
+                                  : device.busy
+                                  ? t('使用中', 'Busy')
+                                  : t('在线', 'Online'),
+                              key: Key('device-state-${device.id}'),
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                            if (device.readOnly)
+                              Text(
+                                t('仅观察', 'Read only'),
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            if (device.controlOwnerName?.isNotEmpty == true)
+                              Text(
+                                t(
+                                  '由${device.controlOwnerName}控制',
+                                  'Controlled by ${device.controlOwnerName}',
+                                ),
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                            if (device.waitingCount > 0)
+                              Text(
+                                '${t('等待控制', 'Waiting for control')} · ${device.waitingCount}',
+                                key: Key('device-waiting-${device.id}'),
+                                style: const TextStyle(fontSize: 12),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 20),
+      ],
       if (Platform.isMacOS || widget.chooseFile != null) ...[
         card(
           Column(
@@ -439,10 +564,47 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                 ),
               ),
               const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                key: const Key('file-device-target'),
+                initialValue: fileDeviceId,
+                isExpanded: true,
+                borderRadius: BorderRadius.circular(14),
+                decoration: InputDecoration(
+                  labelText: t('接收手机', 'Receiving phone'),
+                ),
+                hint: Text(t('请选择接收手机', 'Choose a receiving phone')),
+                items: [
+                  if (fileDeviceId != null &&
+                      !devices.any((d) => d.id == fileDeviceId))
+                    DropdownMenuItem(
+                      value: fileDeviceId,
+                      child: Text('$fileDeviceId · ${t('离线', 'Offline')}'),
+                    ),
+                  for (final device in devices)
+                    DropdownMenuItem(
+                      value: device.id,
+                      child: Text(
+                        '${deviceLabel(device)} · ${!device.connected
+                            ? t('离线', 'Offline')
+                            : device.busy
+                            ? t('使用中', 'Busy')
+                            : device.readOnly
+                            ? t('仅观察', 'Read only')
+                            : t('在线', 'Online')}',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                ],
+                onChanged: choosingFile || c.mutating
+                    ? null
+                    : (id) => setState(() => fileDeviceId = id),
+              ),
+              const SizedBox(height: 16),
               FilledButton.icon(
                 key: const Key('send-file'),
                 onPressed:
                     !connected ||
+                        !targetReady ||
                         !c.ready ||
                         c.mutating ||
                         choosingFile ||
@@ -450,7 +612,7 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                           'uploading',
                           'pending',
                           'receiving',
-                        ].contains(s?.transfer?['state'])
+                        ].contains(transfer?['state'])
                     ? null
                     : sendFile,
                 icon: const Icon(Icons.upload_file_rounded, size: 18),
@@ -465,10 +627,10 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                   t('连接手机后即可发送', 'Connect your phone to send files'),
                   style: const TextStyle(fontSize: 12),
                 ),
-              if (s?.transfer != null) ...[
+              if (transfer != null) ...[
                 const SizedBox(height: 12),
-                Text(s!.transfer!['name'] as String? ?? ''),
-                Text(switch (s.transfer!['state']) {
+                Text(transfer['name'] as String? ?? ''),
+                Text(switch (transfer['state']) {
                   'pending' => t(
                     '等待手机接收 · 请打开手机 PhoneBridge',
                     'Waiting for receipt · Open PhoneBridge on your phone',

@@ -38,6 +38,8 @@ void main() {
           return preference;
         case 'getShowOperationTrails':
           return true;
+        case 'getScreenAwakeMode':
+          return 'controlling';
         case 'setLanguagePreference':
           if (languageWriteFailure != null) throw languageWriteFailure!;
           preference = (call.arguments as Map)['language'] as String;
@@ -159,6 +161,7 @@ void main() {
             'status',
             'getLanguagePreference',
             'getShowOperationTrails',
+            'getScreenAwakeMode',
             'setLanguagePreference',
             'getUpdateStatus',
             'checkUpdate',
