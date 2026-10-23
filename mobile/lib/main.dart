@@ -8,6 +8,7 @@ import 'pairing_scanner.dart';
 import 'app_updates.dart';
 import 'app_language.dart';
 import 'operation_trails.dart';
+import 'screen_awake.dart';
 import 'file_inbox.dart';
 import 'operation_history.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
@@ -71,6 +72,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   bool showPairing = false, manual = false;
   // Retries alternate between scheduled and in flight; keep the hint until connected.
   bool reconnectFailed = false;
+  VoidCallback? refreshComputerSheet;
   final files = ValueNotifier<List<Map<String, dynamic>>>(const []);
   Map<String, dynamic>? storage;
 
@@ -147,6 +149,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
       ? status['computerName'] as String
       : '我的电脑';
   bool get autoReconnect => status['autoReconnectEnabled'] == true;
+  int get waitingCount {
+    final value = status['waitingCount'];
+    return value is int && value >= 0 && value <= 64 ? value : 0;
+  }
 
   @override
   void initState() {
@@ -188,6 +194,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
         if (wasActive && !connected && !connecting) token.clear();
+        refreshComputerSheet?.call();
       }
     } on PlatformException catch (e) {
       if (mounted) {
@@ -614,6 +621,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.displaySmall,
       ),
+      if (waitingCount > 0) ...[
+        const SizedBox(height: 10),
+        Text(
+          '${tr(context, '等待控制')} · $waitingCount',
+          key: const Key('control-waiting-count'),
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: muted, fontSize: 13),
+        ),
+      ],
       if (!connected) ...[
         const SizedBox(height: 10),
         Text(
@@ -753,6 +769,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
   List<Widget> settingsView() => [
     const SizedBox(height: 12),
     const SurfaceGroup(children: [OperationTrailSetting()]),
+    const SizedBox(height: 12),
+    const SurfaceGroup(children: [ScreenAwakeSetting()]),
     const SizedBox(height: 28),
     sectionLabel('连接与权限'),
     SurfaceGroup(
@@ -1085,6 +1103,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
       backgroundColor: Colors.white,
       builder: (sheetContext) => StatefulBuilder(
         builder: (sheetContext, updateSheet) {
+          refreshComputerSheet = () {
+            if (sheetContext.mounted) updateSheet(() {});
+          };
           Future<void> edit(Future<void> Function() action) async {
             if (editing || busy || startingDesktop) return;
             updateSheet(() => editing = true);
@@ -1108,6 +1129,26 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   const SizedBox(height: 16),
+                  Text(
+                    '${status['connectedComputerCount'] ?? computers.where((c) => c['connected'] == true || c['state'] == 'connected').length} ${tr(context, '台电脑在线')}',
+                    key: const Key('connected-computer-count'),
+                  ),
+                  if ((status['controlOwnerName'] as String? ?? '').isNotEmpty)
+                    Text(
+                      '${tr(context, '当前控制方')} · ${status['controlOwnerName']}',
+                      key: const Key('control-owner'),
+                    ),
+                  if (waitingCount > 0)
+                    Text(
+                      '${tr(context, '等待控制')} · $waitingCount',
+                      key: const Key('computer-sheet-waiting-count'),
+                      style: const TextStyle(color: muted, fontSize: 12),
+                    ),
+                  Text(
+                    tr(context, '点击电脑可将控制权交给它，其他电脑保持连接。'),
+                    style: const TextStyle(color: muted, fontSize: 12),
+                  ),
+                  const SizedBox(height: 12),
                   if (!enabled) ...[
                     Text(
                       tr(context, '开启无障碍服务后才能切换电脑'),
@@ -1125,80 +1166,163 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     const SizedBox(height: 12),
                   ],
                   for (final computer in computers) ...[
-                    InkWell(
-                      key: Key('computer-${computer['id']}'),
+                    Material(
+                      color: Colors.transparent,
                       borderRadius: BorderRadius.circular(12),
-                      onTap: disabled || !enabled
-                          ? null
-                          : () {
-                              Navigator.pop(sheetContext);
-                              perform('selectComputer', {'id': computer['id']});
-                            },
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    computer['name'] as String? ?? '',
-                                    style: Theme.of(
-                                      context,
-                                    ).textTheme.titleMedium,
+                      clipBehavior: Clip.antiAlias,
+                      child: InkWell(
+                        key: Key('computer-${computer['id']}'),
+                        borderRadius: BorderRadius.circular(12),
+                        onTap: disabled || !enabled
+                            ? null
+                            : () {
+                                Navigator.pop(sheetContext);
+                                perform('selectComputer', {
+                                  'id': computer['id'],
+                                });
+                              },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      computer['name'] as String? ?? '',
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.titleMedium,
+                                    ),
                                   ),
-                                ),
-                                IconButton(
-                                  key: Key('rename-${computer['id']}'),
-                                  tooltip: tr(context, '修改名称'),
-                                  icon: const Icon(
-                                    Icons.edit_outlined,
-                                    size: 20,
+                                  IconButton(
+                                    key: Key('rename-${computer['id']}'),
+                                    tooltip: tr(context, '修改名称'),
+                                    icon: const Icon(
+                                      Icons.edit_outlined,
+                                      size: 20,
+                                    ),
+                                    onPressed: disabled
+                                        ? null
+                                        : () => edit(
+                                            () => renameComputer(computer),
+                                          ),
                                   ),
-                                  onPressed: disabled
-                                      ? null
-                                      : () => edit(
-                                          () => renameComputer(computer),
-                                        ),
-                                ),
-                                IconButton(
-                                  key: Key('forget-${computer['id']}'),
-                                  tooltip: tr(context, '删除电脑'),
-                                  color: const Color(0xFFB13B31),
-                                  icon: const Icon(
-                                    Icons.delete_outline_rounded,
-                                    size: 20,
+                                  IconButton(
+                                    key: Key('forget-${computer['id']}'),
+                                    tooltip: tr(context, '删除电脑'),
+                                    color: const Color(0xFFB13B31),
+                                    icon: const Icon(
+                                      Icons.delete_outline_rounded,
+                                      size: 20,
+                                    ),
+                                    onPressed: disabled
+                                        ? null
+                                        : () => edit(
+                                            () => forgetComputer(computer),
+                                          ),
                                   ),
-                                  onPressed: disabled
-                                      ? null
-                                      : () => edit(
-                                          () => forgetComputer(computer),
-                                        ),
-                                ),
-                              ],
-                            ),
-                            Text(
-                              computer['endpoint'] as String? ?? '',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: muted,
+                                ],
                               ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${tr(context, switch (computer['state']) {
-                                'connected' => '已连接',
-                                'connecting' => '正在连接',
-                                'paused' => '连接已暂停',
-                                _ => '已记住',
-                              })}${computer['active'] == true ? ' · ${tr(context, '当前电脑')}' : ''}',
-                              style: const TextStyle(
-                                fontSize: 12,
-                                color: muted,
+                              Text(
+                                computer['endpoint'] as String? ?? '',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: muted,
+                                ),
                               ),
-                            ),
-                          ],
+                              const SizedBox(height: 4),
+                              Text(
+                                '${tr(context, switch (computer['state']) {
+                                  'controlling' => '正在控制',
+                                  'connected' => '已连接',
+                                  'connecting' => '正在连接',
+                                  'paused' => '连接已暂停',
+                                  _ => '已记住',
+                                })}${computer['active'] == true ? ' · ${tr(context, '当前电脑')}' : ''}',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  color: muted,
+                                ),
+                              ),
+                              if (computer['controlling'] == true)
+                                Text(
+                                  tr(context, '正在控制'),
+                                  style: const TextStyle(
+                                    color: blue,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              if ((computer['lastError'] as String? ?? '')
+                                  .isNotEmpty)
+                                Text(
+                                  tr(context, '连接异常，请检查电脑服务或网络'),
+                                  style: const TextStyle(
+                                    color: Color(0xFFB13B31),
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              Wrap(
+                                spacing: 8,
+                                children: [
+                                  TextButton(
+                                    key: Key('resume-${computer['id']}'),
+                                    onPressed: disabled || !enabled
+                                        ? null
+                                        : () => edit(
+                                            () => perform(
+                                              'setComputerResumeAllowed',
+                                              {
+                                                'id': computer['id'],
+                                                'enabled':
+                                                    computer['resumeAllowed'] !=
+                                                    true,
+                                              },
+                                            ),
+                                          ),
+                                    child: Text(
+                                      tr(
+                                        context,
+                                        computer['resumeAllowed'] == true
+                                            ? '暂停连接'
+                                            : '恢复连接',
+                                      ),
+                                    ),
+                                  ),
+                                  TextButton(
+                                    key: Key('start-service-${computer['id']}'),
+                                    onPressed: disabled || !enabled
+                                        ? null
+                                        : () => edit(
+                                            () => perform(
+                                              'startDesktopService',
+                                              {'id': computer['id']},
+                                            ),
+                                          ),
+                                    child: Text(tr(context, '启动电脑服务')),
+                                  ),
+                                ],
+                              ),
+                              SwitchListTile(
+                                key: Key('actions-${computer['id']}'),
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(
+                                  tr(context, '允许操作'),
+                                  style: const TextStyle(fontSize: 14),
+                                ),
+                                value: computer['actionsEnabled'] == true,
+                                onChanged: disabled
+                                    ? null
+                                    : (value) => edit(
+                                        () => perform('setActionsEnabled', {
+                                          'id': computer['id'],
+                                          'enabled': value,
+                                        }),
+                                      ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
@@ -1233,6 +1357,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         },
       ),
     );
+    refreshComputerSheet = null;
   }
 
   List<Widget> pairingView() => [

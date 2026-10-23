@@ -85,6 +85,15 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                         "status" -> result.success(BridgeSession.status())
+                        "getScreenAwakeMode" -> result.success(BridgeSession.getScreenAwakeMode())
+                        "setScreenAwakeMode" -> {
+                            BridgeSession.setScreenAwakeMode(call.argument<String>("mode") ?: "")
+                            result.success(BridgeSession.status())
+                        }
+                        "setComputerResumeAllowed" -> {
+                            BridgeSession.setComputerResumeAllowed(call.argument<String>("id") ?: "", call.argument<Boolean>("enabled") == true)
+                            result.success(BridgeSession.status())
+                        }
                         "listComputers" -> result.success(BridgeSession.computerList())
                         "selectComputer" -> {
                             cancelDesktopRecovery()
@@ -133,7 +142,7 @@ class MainActivity : FlutterActivity() {
                             result.success(BridgeSession.status())
                         }
                         "setActionsEnabled" -> {
-                            BridgeSession.setActionsEnabled(call.argument<Boolean>("enabled") == true)
+                            BridgeSession.setActionsEnabled(call.argument<Boolean>("enabled") == true, call.argument<String>("id"))
                             result.success(BridgeSession.status())
                         }
                         "disconnect" -> {
@@ -142,10 +151,10 @@ class MainActivity : FlutterActivity() {
                             result.success(BridgeSession.status())
                         }
                         "resumeSavedConnection" -> {
-                            BridgeSession.resumeSavedConnection()
+                            BridgeSession.resumeSavedConnection(call.argument<String>("id"))
                             result.success(BridgeSession.status())
                         }
-                        "startDesktopService" -> startDesktopService(result)
+                        "startDesktopService" -> startDesktopService(result, call.argument<String>("id"))
                         "forgetSavedConnection" -> {
                             cancelDesktopRecovery()
                             BridgeSession.forgetSavedConnection()
@@ -239,12 +248,12 @@ class MainActivity : FlutterActivity() {
         result.error("ACTIVITY_CLOSED", "The permission request was interrupted. Open PhoneBridge and try again.", null)
     }
 
-    private fun startDesktopService(result: MethodChannel.Result) {
+    private fun startDesktopService(result: MethodChannel.Result, computerId: String? = null) {
         if (recoveryResult != null) {
             result.error("BUSY", "正在启动电脑服务，请稍候", null)
             return
         }
-        val record = BridgeSession.prepareDesktopRecovery()
+        val record = BridgeSession.prepareDesktopRecovery(computerId)
         val ownerService = BridgeSession.service
         val transport = DesktopServiceRecovery()
         recovery = transport

@@ -10,12 +10,14 @@ void main() {
   late List<Map<String, dynamic>> entries;
   String? active;
   var connected = true;
+  var queuedTasks = 0;
 
   setUp(() {
     TestWidgetsFlutterBinding.instance.platformDispatcher.localeTestValue =
         const Locale('zh');
     calls.clear();
     connected = true;
+    queuedTasks = 0;
     active = 'first';
     entries = [
       {
@@ -45,6 +47,17 @@ void main() {
                 call.arguments['name'];
           }
           if (call.method == 'disconnect') connected = false;
+          if (call.method == 'setComputerResumeAllowed') {
+            final entry = entries.firstWhere(
+              (e) => e['id'] == call.arguments['id'],
+            );
+            entry['resumeAllowed'] = call.arguments['enabled'];
+          }
+          if (call.method == 'setActionsEnabled') {
+            final id = call.arguments['id'] ?? active;
+            entries.firstWhere((e) => e['id'] == id)['actionsEnabled'] =
+                call.arguments['enabled'];
+          }
           if (call.method == 'forgetComputer') {
             final id = call.arguments['id'];
             entries.removeWhere((e) => e['id'] == id);
@@ -70,16 +83,22 @@ void main() {
               'activeComputerId': active ?? '',
               'autoReconnectEnabled': false,
               'lastError': '',
+              'waitingCount': queuedTasks,
+              'controlOwnerName': entries.any((e) => e['controlling'] == true)
+                  ? '工作电脑'
+                  : '',
               'computers': entries
                   .map(
                     (e) => {
                       ...e,
                       'active': e['id'] == active,
-                      'state': e['id'] == active
-                          ? connected
-                                ? 'connected'
-                                : 'paused'
-                          : 'saved',
+                      'state':
+                          e['state'] ??
+                          (e['id'] == active
+                              ? connected
+                                    ? 'connected'
+                                    : 'paused'
+                              : 'saved'),
                     },
                   )
                   .toList(),
@@ -241,6 +260,9 @@ void main() {
     'pairing another pauses the current computer while retaining every entry',
     (tester) async {
       await open(tester);
+      await tester.ensureVisible(
+        find.byKey(const Key('pair-another-computer')),
+      );
       await tester.tap(find.byKey(const Key('pair-another-computer')));
       await tester.pumpAndSettle();
       expect(calls.where((c) => c.method == 'disconnect'), hasLength(1));
@@ -275,4 +297,72 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets(
+    'simultaneous computers show owner and targeted pause and consent',
+    (tester) async {
+      for (final entry in entries) {
+        entry['connected'] = true;
+        entry['state'] = 'connected';
+        entry['resumeAllowed'] = true;
+      }
+      entries.first['controlling'] = true;
+      await open(tester);
+      expect(find.text('2 台电脑在线'), findsOneWidget);
+      expect(find.text('当前控制方 · 工作电脑'), findsOneWidget);
+      await tester.ensureVisible(find.byKey(const Key('resume-second')));
+      await tester.tap(find.byKey(const Key('resume-second')));
+      await tester.pumpAndSettle();
+      expect(
+        calls
+            .where((c) => c.method == 'setComputerResumeAllowed')
+            .single
+            .arguments,
+        {'id': 'second', 'enabled': false},
+      );
+      expect(active, 'first');
+      expect(entries.first['resumeAllowed'], isTrue);
+      await tester.ensureVisible(find.byKey(const Key('actions-second')));
+      await tester.tap(find.byKey(const Key('actions-second')));
+      await tester.pumpAndSettle();
+      expect(
+        calls.where((c) => c.method == 'setActionsEnabled').single.arguments,
+        {'id': 'second', 'enabled': true},
+      );
+      expect(find.byKey(const Key('consent')), findsNothing);
+      expect(calls.where((c) => c.method == 'disconnect'), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+  for (final locale in ['zh', 'en']) {
+    testWidgets(
+      'waiting queue count updates without switching or new buttons in $locale',
+      (tester) async {
+        TestWidgetsFlutterBinding.instance.platformDispatcher.localeTestValue =
+            Locale(locale);
+        queuedTasks = 2;
+        await tester.pumpWidget(const PhoneBridgeApp());
+        await tester.pumpAndSettle();
+        final label = locale == 'zh' ? '等待控制' : 'Waiting for control';
+        expect(find.text('$label · 2'), findsOneWidget);
+        await tester.tap(find.text('工作电脑'));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(const Key('computer-sheet-waiting-count')),
+          findsOneWidget,
+        );
+        queuedTasks = 1;
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+        expect(find.text('$label · 1'), findsWidgets);
+        expect(
+          calls.where(
+            (c) => c.method == 'selectComputer' || c.method == 'connect',
+          ),
+          isEmpty,
+        );
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+  }
 }

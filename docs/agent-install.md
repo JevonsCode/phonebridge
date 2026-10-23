@@ -1,6 +1,6 @@
 # Install PhoneBridge with an AI assistant
 
-PhoneBridge 0.6.0 provides a Windows installer with its own Node.js runtime. The owner does not need Node.js, npm, a terminal, or a manual IP lookup. One phone can remember several paired computers; it connects to one selected computer at a time.
+PhoneBridge provides a Windows installer with its own Node.js runtime. The owner does not need Node.js, npm, a terminal, or a manual IP lookup. One phone can remember several paired computers, with separate action consent and allowed Apps for each. The current source supports concurrent computer connections and phone-side control arbitration; use the published release instructions matching the package actually installed.
 
 ## Windows
 
@@ -62,7 +62,7 @@ The owner enables PhoneBridge in Android's Accessibility settings and chooses al
 
 With explicit owner authorization for USB debugging and APK installation, an Agent can verify `adb devices`, compare the APK hash, run `adb install -r <verified-apk>`, and launch the app. The owner must approve the device's USB debugging prompt and any installation/security prompts. Do not use an unapproved device or silently grant accessibility.
 
-To remember another computer, scan that computer once. Later, select it from the phone's remembered computer list. Switching closes the previous connection; only one computer remains active. Keep action consent and allowed Apps scoped to each computer.
+To remember another computer, scan that computer once. Current source keeps saved enabled computers connected independently. An AI can request the phone itself; the owner does not need to switch computers for each task. Tapping a computer in the phone list remains an explicit local handoff and leaves other transports connected. Global Stop pauses all connections; per-computer pause/forget affects its target. Keep action consent and allowed Apps scoped to each computer. Older released packages can have different connection behavior; do not claim a feature from the current branch was installed merely because pairing succeeded.
 
 ## Connect an AI client
 
@@ -94,6 +94,17 @@ On an installed Mac preview, the server entry uses `"command": "/bin/sh"` and `"
 Portable or development use without an installed fixed entry still copies an explicit Node path, MCP script and environment. That fallback is version-specific and must be copied again when its paths or endpoint change. Merely unpacking a portable update does not migrate the owned installation. The public 0.6.0 release retains its previous behavior; these fixed entries are part of the current preview.
 
 Keep the desktop service running and confirm the phone is connected before requesting an observation. The phone's allowlist and action consent remain enforced for every operation.
+
+For the current multi-device/control tools, teach the AI this convention:
+
+1. Call `phone_list_devices` and choose a paired online phone. With several online phones, specify its `deviceId`; never guess or silently switch after disconnect.
+2. Call `phone_acquire_control`. Retain the returned opaque `taskHandle` whether state is active or queued. If queued, call `phone_wait_for_control` (at most 25s per call); only an active grant permits observations, actions and files.
+3. Pass that handle to every observation/action/file call. Observe, do one action, then observe again. `phone_wait_for` checks a screen condition for at most 10s; it is different from waiting for control.
+4. Release with `phone_release_control` in `finally`, including cancellation or failure. Release also cancels queued tickets. Do not reuse expired handles, reacquire silently or replay uncertain actions after reconnect.
+
+Waiting is FIFO, at most 64 tasks. Live waiting checks renew only that ticket's 120s lifetime. An active task expires after 60s without valid observations/actions; status reads and heartbeats do not keep it active. An open waiting tool call receives a grant through push notification, rather than repeated screenshots. PhoneBridge does not relaunch a closed AI client, contain a model, or schedule the business steps of the task. Phone and desktop show the current owner and waiting count. See the [protocol](protocol.md) for exact compatibility and errors.
+
+These capabilities require the matching phone and Hub; unsupported methods return `UNSUPPORTED`. Preserve the installed fixed MCP entry and reconnect the AI client after upgrading; the entry is version-independent. The physical single-phone/two-computer queue test is pending and must be reported separately from simulated socket/widget checks. Do not replace public download URLs with an unpublished source version or claim that all current-source features are in the older download above.
 
 For an Agent, use the copied command/arguments/environment as the local MCP connection specification. Verify a real connection and an owner-authorized read-only observation before reporting AI integration successful. Different AI clients store stdio server settings in different formats; convert this server entry to the client's supported format without transferring the pairing key or changing other servers.
 

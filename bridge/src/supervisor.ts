@@ -92,10 +92,10 @@ export class DesktopSupervisor {
     let endpoint: URL;
     try { endpoint = new URL(req.url ?? '/', 'http://localhost'); }
     catch { req.resume(); this.respond(res, 400, { error: { code: 'INVALID_URL' } }); return; }
-    const fileRoute = (req.method === 'POST' && req.url === '/files') ||
-      (['GET', 'DELETE'].includes(req.method ?? '') && /^\/files\/[a-f0-9-]{36}$/.test(req.url ?? '')) ||
-      (req.method === 'POST' && /^\/files\/[a-f0-9-]{36}\/received$/.test(req.url ?? ''));
-    if (!(fileRoute || (req.method === 'GET' && (req.url === '/status' || endpoint.pathname === '/operations')) || (req.method === 'POST' && req.url === '/rpc'))) {
+    const fileRoute = (req.method === 'POST' && endpoint.pathname === '/files') ||
+      (['GET', 'DELETE'].includes(req.method ?? '') && /^\/files\/[a-f0-9-]{36}$/.test(endpoint.pathname)) ||
+      (req.method === 'POST' && /^\/files\/[a-f0-9-]{36}\/received$/.test(endpoint.pathname));
+    if (!(fileRoute || (req.method === 'GET' && (req.url === '/status' || req.url === '/devices' || endpoint.pathname === '/operations' || endpoint.pathname === '/control-events')) || (req.method === 'POST' && req.url === '/rpc'))) {
       req.resume(); this.respond(res, 404, { error: { code: 'NOT_FOUND' } }); return;
     }
     const target = this.hubUrl;
