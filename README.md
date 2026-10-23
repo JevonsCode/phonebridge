@@ -2,7 +2,7 @@
 
 让现有 AI 助手通过你授权的安卓应用，看界面、点击、滑动和输入。
 
-[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [English website](https://xn--8ovp9s.xn--m8txu.com/phonebridge/en/) · [下载 Windows 客户端](https://github.com/JevonsCode/phonebridge/releases/download/v0.6.1/phonebridge-0.6.1-windows-setup.exe) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.6.1/phonebridge-0.6.1-arm64.apk) · [用 Obtainium 跟踪更新](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.phonebridge.phonebridge%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FJevonsCode%2Fphonebridge%22%2C%22author%22%3A%22JevonsCode%22%2C%22name%22%3A%22PhoneBridge%22%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Atrue%7D%22%7D) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
+[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [English website](https://xn--8ovp9s.xn--m8txu.com/phonebridge/en/) · [下载 Windows 客户端](https://github.com/JevonsCode/phonebridge/releases/download/v0.6.2/phonebridge-0.6.2-windows-setup.exe) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.6.2/phonebridge-0.6.2-arm64.apk) · [用 Obtainium 跟踪更新](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.phonebridge.phonebridge%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FJevonsCode%2Fphonebridge%22%2C%22author%22%3A%22JevonsCode%22%2C%22name%22%3A%22PhoneBridge%22%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Atrue%7D%22%7D) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
 
 这是一个早期开发者预览版。它提供手机执行工具，不内置大模型，也不承诺“完全控制手机”。无障碍权限需要机主在系统设置中亲自开启。微信功能基于可见界面，不读取私有聊天数据库。真机兼容性与验证范围见 [验证记录](docs/verification.md)。
 
@@ -33,11 +33,11 @@ PhoneBridge MCP → 本机 Hub ← 经过配对的 Android 手机
 
 ### 手机扫码下载
 
-用手机浏览器扫码，下载 **PhoneBridge <!-- android-qr-version -->0.6.1<!-- /android-qr-version -->**（Android 11+ · ARM64）。
+用手机浏览器扫码，下载 **PhoneBridge <!-- android-qr-version -->0.6.2<!-- /android-qr-version -->**（Android 11+ · ARM64）。
 
-<a href="https://github.com/JevonsCode/phonebridge/releases/download/v0.6.1/phonebridge-0.6.1-arm64.apk"><img src="website/dist/android-download-qr.png" width="240" height="240" alt="PhoneBridge 安卓 APK 下载二维码"></a>
+<a href="https://github.com/JevonsCode/phonebridge/releases/download/v0.6.2/phonebridge-0.6.2-arm64.apk"><img src="website/dist/android-download-qr.png" width="240" height="240" alt="PhoneBridge 安卓 APK 下载二维码"></a>
 
-[手机上直接下载 APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.6.1/phonebridge-0.6.1-arm64.apk) · 安装后，再用 App 的「扫一扫」扫描电脑上的配对码。
+[手机上直接下载 APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.6.2/phonebridge-0.6.2-arm64.apk) · 安装后，再用 App 的「扫一扫」扫描电脑上的配对码。
 
 ## 快速开始：配对一次，自动连接
 
