@@ -144,18 +144,45 @@ void main() {
     },
   );
 
-  testWidgets('current release still offers the latest APK', (tester) async {
-    checkPhase = 'current';
+  for (final current in [2008, 2009]) {
+    testWidgets('current or newer install $current hides APK actions', (
+      tester,
+    ) async {
+      checkPhase = 'current';
+      status['currentVersion'] = current == 2008 ? '0.2.4' : '0.2.5';
+      status['currentVersionCode'] = current;
+      status['updateAvailable'] = false;
+      await show(tester);
+      expect(find.text('已是最新版本'), findsOneWidget);
+      expect(find.byKey(const Key('check-update')), findsOneWidget);
+      expect(find.byKey(const Key('download-update')), findsNothing);
+      expect(find.byKey(const Key('install-update')), findsNothing);
+      expect(find.text('下载 APK'), findsNothing);
+      expect(calls.any((c) => c.method == 'downloadUpdate'), false);
+    });
+  }
+
+  testWidgets('cached APK is not offered after version is already installed', (
+    tester,
+  ) async {
+    status['phase'] = 'ready';
     status['currentVersion'] = '0.2.4';
     status['currentVersionCode'] = 2008;
     status['updateAvailable'] = false;
     await show(tester);
     expect(find.text('已是最新版本'), findsOneWidget);
-    expect(find.text('下载 APK'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('download-update')));
-    await tester.pump();
-    expect(calls.where((c) => c.method == 'downloadUpdate'), hasLength(1));
-    await tester.pumpWidget(const SizedBox());
+    expect(find.byKey(const Key('check-update')), findsOneWidget);
+    expect(find.byKey(const Key('download-update')), findsNothing);
+    expect(find.byKey(const Key('install-update')), findsNothing);
+  });
+
+  testWidgets('unknown update availability does not offer APK download', (
+    tester,
+  ) async {
+    status.remove('updateAvailable');
+    await show(tester);
+    expect(find.byKey(const Key('check-update')), findsOneWidget);
+    expect(find.byKey(const Key('download-update')), findsNothing);
   });
 
   testWidgets('check failure is retryable and never claims current', (
