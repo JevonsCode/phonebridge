@@ -189,6 +189,11 @@ class _AppUpdateCardState extends State<AppUpdateCard>
     if (_checking || _pendingAction == 'checkUpdate') return '正在检查更新…';
     if (_pendingAction == 'downloadUpdate') return '正在开始下载…';
     if (_pendingAction == 'installUpdate') return '正在打开系统安装界面…';
+    if (_status['updateAvailable'] == false &&
+        _latestVersion.isNotEmpty &&
+        !_downloading) {
+      return '已是最新版本';
+    }
     return switch (_phase) {
       'current' => '已是最新版本',
       'available' => '新版本已就绪，下载后按提示安装',
@@ -197,7 +202,7 @@ class _AppUpdateCardState extends State<AppUpdateCard>
       'permissionRequired' => '请允许 PhoneBridge 安装应用，然后继续安装',
       'installerOpened' => '请在系统安装界面确认；取消后可再次安装',
       'error' => '更新失败，请重试',
-      _ => '检查新版本或下载最新 APK',
+      _ => '检查更新',
     };
   }
 
@@ -208,6 +213,7 @@ class _AppUpdateCardState extends State<AppUpdateCard>
   Widget build(BuildContext context) {
     final canInstall = _phase == 'ready' || _phase == 'permissionRequired';
     final hasRelease = _latestVersion.isNotEmpty;
+    final hasUpdate = hasRelease && _status['updateAvailable'] == true;
     final progress = (_status['progress'] as num?)?.toDouble();
     final downloaded = _status['downloadedBytes'] as num? ?? 0;
     final total = _status['totalBytes'] as num? ?? 0;
@@ -304,7 +310,7 @@ class _AppUpdateCardState extends State<AppUpdateCard>
                       tr(context, isError && !hasRelease ? '重试检查' : '检查更新'),
                     ),
                   ),
-                  if (canInstall)
+                  if (hasUpdate && canInstall)
                     FilledButton(
                       key: const Key('install-update'),
                       onPressed: _busy ? null : () => _action('installUpdate'),
@@ -315,7 +321,7 @@ class _AppUpdateCardState extends State<AppUpdateCard>
                         ),
                       ),
                     )
-                  else if (hasRelease && _phase != 'installerOpened')
+                  else if (hasUpdate && _phase != 'installerOpened')
                     FilledButton(
                       key: const Key('download-update'),
                       onPressed: _busy ? null : () => _action('downloadUpdate'),
@@ -326,9 +332,7 @@ class _AppUpdateCardState extends State<AppUpdateCard>
                               ? '正在下载…'
                               : isError
                               ? '重试下载'
-                              : _status['updateAvailable'] == true
-                              ? '下载更新'
-                              : '下载 APK',
+                              : '下载更新',
                         ),
                       ),
                     ),
