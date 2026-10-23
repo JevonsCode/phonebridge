@@ -34,7 +34,7 @@ test('authenticated file handoff requires phone, offers metadata only, verifies 
   assert.equal((await fetch(`${url}/files/${offer.id}/received`, { method: 'POST', headers })).status, 200);
   assert.equal((await fetch(`${url}/files/${offer.id}/received`, { method: 'POST', headers })).status, 200);
   assert.equal((await fetch(`${url}/files/${offer.id}`, { headers })).status, 409);
-  await sendLocalFile(new URL(url), token, path); const oldId = offer.id;
+  await sendLocalFile(new URL(url), token, path, { deviceId: 'legacy' }); const oldId = offer.id;
   ws.close(); await once(ws, 'close');
   assert.equal((await fetch(`${url}/files/${oldId}`, { headers })).status, 409);
   await assert.rejects(sendLocalFile(new URL(url), token, dir), /regular file/);

@@ -105,7 +105,10 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     private fun requireSession(generation: Long, mutation: Boolean = false) {
         BridgeSession.requireNotifications(this)
-        OperationPolicy.requireSession(BridgeSession.connected, BridgeSession.generation == generation,
+        if (!BridgeSession.isOperationCurrent(generation)) {
+            throw BridgeFailure("CONTROL_EXPIRED", "The control task has ended. Acquire control and observe again.")
+        }
+        OperationPolicy.requireSession(BridgeSession.connected, BridgeSession.isOperationCurrent(generation),
             BridgeSession.service === this, isUnlocked(), BridgeSession.actionsEnabled, mutation)
     }
 
@@ -237,7 +240,7 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     private fun executeReady(method: String, params: JSONObject, generation: Long,
                              complete: (JSONObject?, BridgeFailure?) -> Unit) {
-        val mutation = method in setOf("tap", "long_press", "swipe", "set_text", "commit_text", "global_action", "launch_app")
+        val mutation = method in setOf("tap", "long_press", "swipe", "set_text", "node_action", "commit_text", "global_action", "launch_app")
         requireSession(generation, mutation)
         when (method) {
             "file_offer" -> {
@@ -257,6 +260,11 @@ class PhoneAccessibilityService : AccessibilityService() {
             "set_text" -> {
                 validateKeys(params, setOf("nodeId", "text"))
                 setText(params, generation)
+                complete(completed(), null)
+            }
+            "node_action" -> {
+                validateKeys(params, setOf("nodeId", "action"))
+                nodeAction(params, generation)
                 complete(completed(), null)
             }
             "commit_text" -> {
@@ -328,6 +336,7 @@ class PhoneAccessibilityService : AccessibilityService() {
         val root = rootInActiveWindow ?: throw BridgeFailure("NO_WINDOW", "No accessible application window.")
         val result = JSONArray()
         val observationId = UUID.randomUUID().toString()
+        val observedAt = System.currentTimeMillis()
         var visited = 0
         var truncated = false
         fun walk(node: AccessibilityNodeInfo, depth: Int, inheritedPassword: Boolean) {
@@ -345,10 +354,17 @@ class PhoneAccessibilityService : AccessibilityService() {
                     .put("text", if (password) "" else node.text?.toString()?.take(512) ?: "")
                     .put("description", if (password) "" else node.contentDescription?.toString()?.take(256) ?: "")
                     .put("className", node.className?.toString()?.take(128) ?: "")
+                    .put("resourceId", node.viewIdResourceName?.take(256) ?: "")
                     .put("bounds", rectJson(area))
                     .put("clickable", node.isClickable)
                     .put("editable", node.isEditable)
                     .put("scrollable", node.isScrollable)
+                    .put("enabled", node.isEnabled)
+                    .put("selected", node.isSelected)
+                    .put("checked", node.isChecked)
+                    .put("checkable", node.isCheckable)
+                    .put("focused", node.isFocused)
+                    .put("supportedActions", JSONArray(supportedNodeActions(node).toList()))
                     .put("password", password))
             }
             for (i in 0 until node.childCount) {
@@ -366,8 +382,85 @@ class PhoneAccessibilityService : AccessibilityService() {
             throw e
         } finally { root.recycle() }
         return JSONObject().put("packageName", scope.packageName)
+            .put("snapshotId", observationId).put("observedAt", observedAt)
             .put("width", scope.screenWidth).put("height", scope.screenHeight)
             .put("nodes", result).put("truncated", truncated)
+    }
+
+    private fun nodeAction(params: JSONObject, generation: Long) {
+        val id = params.opt("nodeId") as? String
+            ?: throw BridgeFailure("INVALID_ARGUMENT", "nodeId must be a string.")
+        val action = params.opt("action") as? String
+            ?: throw BridgeFailure("INVALID_ARGUMENT", "action must be a string.")
+        if (action !in NodeActionPolicy.actions) throw BridgeFailure("INVALID_ARGUMENT", "Unsupported node action.")
+        val cached = nodes[id] ?: throw BridgeFailure("STALE_NODE", "Node ID expired. Request state again.")
+        val observed = nodeTarget(cached)
+        val node = AccessibilityNodeInfo.obtain(cached)
+        try {
+            val scope = windowScope()
+            if (!node.refresh() || node.windowId != scope.windowId ||
+                node.packageName?.toString() != scope.packageName) {
+                throw BridgeFailure("STALE_NODE", "The target is no longer in the active window. Request state again.")
+            }
+            NodeActionPolicy.requireUnchanged(observed, nodeTarget(node))
+            NodeActionPolicy.requireAction(action, supportedNodeActions(node), node.isVisibleToUser,
+                node.isEnabled, hasPasswordAncestry(node, scope))
+            val area = nodeTarget(node).bounds
+            NodeActionPolicy.safeActionBounds(action, area, geometry(scope.bounds),
+                WindowGeometry.Bounds(0, 0, scope.screenWidth, scope.screenHeight), scope.foreign.map(::geometry))
+            requireSession(generation, true)
+            val recheck = windowScope()
+            requireSameWindow(scope, recheck)
+            if (!node.refresh()) throw BridgeFailure("STALE_NODE", "The target expired. Request state again.")
+            NodeActionPolicy.requireUnchanged(observed, nodeTarget(node))
+            NodeActionPolicy.requireAction(action, supportedNodeActions(node), node.isVisibleToUser,
+                node.isEnabled, hasPasswordAncestry(node, recheck))
+            NodeActionPolicy.safeActionBounds(action, area, geometry(recheck.bounds),
+                WindowGeometry.Bounds(0, 0, recheck.screenWidth, recheck.screenHeight), recheck.foreign.map(::geometry))
+            requireSession(generation, true)
+            // Every attempted dispatch consumes the snapshot, including a negative Android response.
+            invalidateNodes()
+            if (!node.performAction(nodeActionId(action))) {
+                throw BridgeFailure("ACTION_REJECTED", "The application rejected the node action.")
+            }
+        } finally { node.recycle() }
+    }
+
+    private fun nodeTarget(node: AccessibilityNodeInfo): NodeActionPolicy.Target {
+        val area = Rect().also { node.getBoundsInScreen(it) }
+        return NodeActionPolicy.Target(node.windowId, node.packageName?.toString(), geometry(area),
+            node.className?.toString(), node.viewIdResourceName, node.text?.toString(), node.contentDescription?.toString(),
+            node.isSelected, node.isChecked, node.isCheckable, node.isFocused)
+    }
+
+    private fun hasPasswordAncestry(node: AccessibilityNodeInfo, scope: WindowScope): Boolean {
+        var ancestor: AccessibilityNodeInfo? = AccessibilityNodeInfo.obtain(node)
+        var depth = 0
+        try {
+            while (ancestor != null && depth++ <= 30) {
+                if (ancestor.isPassword || ancestor.windowId != scope.windowId ||
+                    ancestor.packageName?.toString()?.let { it != scope.packageName } == true) return true
+                val parent = ancestor.parent
+                ancestor.recycle()
+                ancestor = parent
+            }
+            return ancestor != null // Cannot prove the ancestry safe.
+        } finally { ancestor?.recycle() }
+    }
+
+    private fun nodeActionId(action: String): Int = when (action) {
+        "click" -> AccessibilityNodeInfo.ACTION_CLICK
+        "long_click" -> AccessibilityNodeInfo.ACTION_LONG_CLICK
+        "scroll_forward" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
+        "scroll_backward" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
+        "focus" -> AccessibilityNodeInfo.ACTION_FOCUS
+        "set_text" -> AccessibilityNodeInfo.ACTION_SET_TEXT
+        else -> throw BridgeFailure("INVALID_ARGUMENT", "Unsupported node action.")
+    }
+
+    private fun supportedNodeActions(node: AccessibilityNodeInfo): Set<String> {
+        val ids = node.actionList.map { it.id }.toSet()
+        return (NodeActionPolicy.actions + "set_text").filter { nodeActionId(it) in ids }.toSet()
     }
 
     private fun setText(params: JSONObject, generation: Long) {
@@ -455,20 +548,19 @@ class PhoneAccessibilityService : AccessibilityService() {
         invalidateNodes()
         val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
             override fun onCompleted(gestureDescription: GestureDescription?) {
-                if (generation == BridgeSession.generation) {
-                    invalidateNodes()
-                    complete(completed(), null)
-                }
+                if (BridgeSession.isOperationCurrent(generation)) { invalidateNodes(); complete(completed(), null) }
+                else complete(null, BridgeFailure("CONTROL_EXPIRED", "The control task ended during the gesture."))
             }
             override fun onCancelled(gestureDescription: GestureDescription?) {
-                if (generation == BridgeSession.generation) {
+                if (BridgeSession.isOperationCurrent(generation)) {
                     clearOperationTrail()
                     invalidateNodes()
                     complete(null, BridgeFailure("GESTURE_CANCELLED", "Android cancelled the gesture; observe before retrying."))
-                }
+                } else complete(null, BridgeFailure("CONTROL_EXPIRED", "The control task ended during the gesture."))
             }
         }, BridgeSession.main)
         if (!accepted) throw BridgeFailure("ACTION_REJECTED", "Android rejected gesture dispatch.")
+        BridgeSession.recordGestureDispatch(generation, duration)
         operationTrail.show(TrailMotion(method, x1, y1, x2, y2, duration))
     }
 
@@ -497,7 +589,6 @@ class PhoneAccessibilityService : AccessibilityService() {
                         val encoded = try { encodeScreenshot(bitmap, scope) } catch (_: Exception) { null }
                         finally { bitmap.recycle() }
                         BridgeSession.main.post {
-                            if (generation != BridgeSession.generation) return@post
                             try {
                                 requireSession(generation)
                                 if (epoch != uiEpoch) throw BridgeFailure("WINDOW_CHANGED", "Screen changed during capture. Observe again.")
@@ -521,7 +612,9 @@ class PhoneAccessibilityService : AccessibilityService() {
             }
 
             override fun onFailure(errorCode: Int) {
-                complete(null, BridgeFailure("SCREENSHOT_UNAVAILABLE",
+                if (!BridgeSession.isOperationCurrent(generation)) {
+                    complete(null, BridgeFailure("CONTROL_EXPIRED", "The control task ended during capture."))
+                } else complete(null, BridgeFailure("SCREENSHOT_UNAVAILABLE",
                     "Android refused capture (secure content, capture rate, or display restriction)."))
             }
         })

@@ -52,6 +52,13 @@ class TrustedPairingStore(context: Context) : TrustedComputerPersistence {
     fun select(id: String): TrustedPairing = repository.mutate { it.select(id) }.active!!.pairing
     fun rename(id: String, name: String) { repository.mutate { it.rename(id, name) } }
     fun forget(id: String) { repository.mutate { it.forget(id) } }
+    fun update(id: String, record: TrustedPairing) { repository.mutate { computers ->
+        require(computers.entries.any { it.id == id }) { "Unknown computer." }
+        computers.copy(entries = computers.entries.map { if (it.id == id) it.copy(pairing = record) else it })
+    } }
+    fun pauseAll() { repository.mutate { computers -> computers.copy(entries = computers.entries.map {
+        it.copy(pairing = it.pairing.copy(resumeAllowed = false))
+    }) } }
     fun deactivate() { repository.mutate { it.copy(activeId = null) } }
 
     override fun read(): TrustedComputers {

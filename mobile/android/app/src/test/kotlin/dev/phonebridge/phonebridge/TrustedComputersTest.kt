@@ -101,7 +101,7 @@ class TrustedComputersTest {
         backend.markPaused()
         val loaded = TrustedComputerRepository(backend).list()
         assertFalse(loaded.active!!.pairing.resumeAllowed)
-        assertTrue(loaded.entries.first().pairing.resumeAllowed)
+        assertFalse(loaded.entries.first().pairing.resumeAllowed)
         val selected = TrustedComputerRepository(backend).mutate { it.select(it.entries.first().id) }
         assertTrue(selected.active!!.pairing.resumeAllowed)
         assertFalse(selected.entries.last().pairing.resumeAllowed)
@@ -120,10 +120,10 @@ class TrustedComputersTest {
         assertFalse(TrustedComputerRepository(backend).list().active!!.pairing.resumeAllowed)
         assertFalse(TrustedComputerRepository(backend).list().active!!.pairing.actionsEnabled)
         assertEquals(2, TrustedComputerRepository(backend).list().entries.size)
-        assertTrue(TrustedComputerRepository(backend).list().entries.first().pairing.actionsEnabled)
+        assertFalse(TrustedComputerRepository(backend).list().entries.first().pairing.actionsEnabled)
         backend.failWrite = false
         val afterSwitch = TrustedComputerRepository(backend).mutate { it.select(it.entries.first().id) }
-        assertTrue(afterSwitch.active!!.pairing.actionsEnabled)
+        assertFalse(afterSwitch.active!!.pairing.actionsEnabled)
         assertFalse(afterSwitch.entries.last().pairing.actionsEnabled)
     }
 
@@ -139,15 +139,16 @@ class TrustedComputersTest {
         }
     }
 
-    @Test fun switchingCancelsInFlightOperationAndCannotReplayOrCompleteIntoNextComputer() {
+    @Test fun switchingInvalidatesAuthorityButRetainsFenceUntilActualCompletion() {
         val scope = SessionOperationScope()
-        val firstGeneration = scope.generation
         assertTrue(scope.begin("request-1"))
+        val firstGeneration = scope.generation
         assertFalse(scope.begin("request-2"))
         scope.invalidate()
-        assertNull(scope.pending)
-        assertFalse(scope.complete("request-1", firstGeneration))
-        // Identical RPC IDs on the new computer cannot admit a completion from the old session.
+        assertEquals("request-1", scope.pending)
+        assertFalse(scope.isCurrent(firstGeneration))
+        assertFalse(scope.begin("request-1"))
+        assertTrue(scope.complete("request-1", firstGeneration))
         assertTrue(scope.begin("request-1"))
         assertFalse(scope.complete("request-1", firstGeneration))
         assertEquals("request-1", scope.pending)

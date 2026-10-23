@@ -193,6 +193,55 @@ class DashboardApi {
   }
 }
 
+class DesktopDevice {
+  DesktopDevice(Map data) {
+    if (data['id'] is! String ||
+        (data['id'] as String).isEmpty ||
+        data['name'] is! String ||
+        data['connected'] is! bool ||
+        data['busy'] is! bool ||
+        data['readOnly'] is! bool) {
+      throw const BackendFailure('response');
+    }
+    id = data['id'];
+    name = data['name'];
+    connected = data['connected'];
+    busy = data['busy'];
+    readOnly = data['readOnly'];
+    if ((data['connectionId'] != null && data['connectionId'] is! String) ||
+        (data['controlling'] != null && data['controlling'] is! bool) ||
+        (data['controlOwnerName'] != null &&
+            data['controlOwnerName'] is! String)) {
+      throw const BackendFailure('response');
+    }
+    connectionId = data['connectionId'] as String?;
+    controlling = data['controlling'] == true;
+    controlOwnerName = data['controlOwnerName'] as String?;
+    final count = data['waitingCount'];
+    if (count != null && (count is! int || count < 0 || count > 64)) {
+      throw const BackendFailure('response');
+    }
+    waitingCount = count as int? ?? 0;
+    final rawTransfer = data['transfer'];
+    if (rawTransfer != null &&
+        (rawTransfer is! Map ||
+            rawTransfer['name'] is! String ||
+            rawTransfer['state'] is! String)) {
+      throw const BackendFailure('response');
+    }
+    transfer = data['transfer'] is Map
+        ? Map<String, dynamic>.from(data['transfer'])
+        : null;
+  }
+  late final String id, name;
+  late final bool connected, busy, readOnly;
+  late final String? connectionId, controlOwnerName;
+  late final bool controlling;
+  late final int waitingCount;
+  late final Map<String, dynamic>? transfer;
+  String get displayName => name.isEmpty ? id : name;
+}
+
 class DesktopStatus {
   DesktopStatus(Map<String, dynamic> data) {
     if (data['connected'] is! bool ||
@@ -201,6 +250,16 @@ class DesktopStatus {
       throw const BackendFailure('response');
     }
     connected = data['connected'];
+    if (data['devices'] != null && data['devices'] is! List) {
+      throw const BackendFailure('response');
+    }
+    devices = (data['devices'] as List? ?? []).map((value) {
+      if (value is! Map) throw const BackendFailure('response');
+      return DesktopDevice(value);
+    }).toList();
+    if (devices.map((d) => d.id).toSet().length != devices.length) {
+      throw const BackendFailure('response');
+    }
     unavailable = data['unavailable'] == true;
     address = data['address'];
     port = data['port'];
@@ -235,6 +294,7 @@ class DesktopStatus {
   late final int port;
   late final String? error;
   late final Map<String, dynamic>? transfer;
+  late final List<DesktopDevice> devices;
   late final List<({String address, String name})> networks;
   late final Map<String, dynamic>? mcpConfiguration;
   Uint8List? qr;

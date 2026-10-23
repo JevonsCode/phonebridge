@@ -168,12 +168,22 @@ test('RPC history is authenticated, bounded and records actual errors without re
 });
 
 test('busy admission, timeout and disconnect report uncertainty without retry', async t => {
-  const journal = new MemoryOperationJournal();
+  const memory = new MemoryOperationJournal();
+  let markStarted!: () => void; let releaseStart!: () => void;
+  const started = new Promise<void>(resolve => { markStarted = resolve; });
+  const release = new Promise<void>(resolve => { releaseStart = resolve; });
+  let firstStart = true;
+  const journal: OperationJournal = { read: q => memory.read(q), append: async row => {
+    if (row.status === 'started' && firstStart) { firstStart = false; markStarted(); await release; }
+    await memory.append(row);
+  } };
   const { rpc, connect } = await hubSetup(t, journal, 100);
   const phone = await connect(); let count = 0;
   phone.on('message', () => count++);
-  const incoming = once(phone, 'message'); const first = rpc('tap', { x: 1, y: 2 }); await incoming;
+  const incoming = once(phone, 'message'); const first = rpc('tap', { x: 1, y: 2 }); await started;
+  // Assert admission while journal dispatch is fenced, before any timeout starts.
   assert.equal((await rpc('state')).status, 409);
+  releaseStart(); await incoming;
   assert.equal((await first).status, 504);
   const rows = (await journal.read()).operations;
   const busy = rows.find(r => r.method === 'state')!;

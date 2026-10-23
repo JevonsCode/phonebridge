@@ -1,13 +1,21 @@
-# PhoneBridge protocol v1
+# PhoneBridge protocol: compatible v1 and v2
 
-Phone connects to `ws[s]://HOST:PORT/device` with `Authorization: Bearer TOKEN` and sends `{ "type": "hello", "protocol": 1, "device": "Android", "readOnly": true }`. No identifiers required. Hub refuses duplicate devices, origins, and wrong authentication. Phone supports WebSocket ping/pong.
+Phone connects to `ws[s]://HOST:PORT/device` with `Authorization: Bearer TOKEN`. The Hub refuses browser origins and wrong authentication. Pairing credentials remain scoped to the owner computer, not independently revocable per phone; lists and logs never expose them. Phone supports WebSocket ping/pong.
 
-Requests: `{ "id": "uuid", "method": "state", "params": {} }`.
+A v2 Hub advertises `X-PhoneBridge-Protocol: 2` in the WebSocket upgrade response. A new phone sends this hello only after seeing that header:
+
+```json
+{"type":"hello","protocol":2,"deviceId":"<persisted phone UUID>","device":"Android phone","readOnly":true,"capabilities":["control_lease","control_queue","element_actions"]}
+```
+
+The phone UUID survives IP changes, app updates and computer pairing changes. A duplicate live UUID cannot replace an existing socket. With an older Hub, the phone sends the unchanged v1 hello: `{"type":"hello","protocol":1,"device":"Android","readOnly":true}`. A v2 Hub keeps one compatible `legacy` slot for v1 phones; that slot is not a persistent phone identity. Each live connection has a fresh public `connectionId` UUID, including replacements in the legacy slot.
+
+Phone requests: `{ "id": "uuid", "method": "state", "params": {}, "controlId": "<optional task UUID>" }`. The Hub resolves `deviceId` and `connectionId` locally; it does not forward them to Android. Legacy requests retain their old shape.
 Success: `{ "id": "uuid", "result": { ... } }`.
 Failure: `{ "id": "uuid", "error": { "code": "READ_ONLY", "message": "Enable actions on the phone." } }`.
 
 Methods:
-- `state {}` => `{packageName, width, height, nodes:[{id,text,description,className,bounds:{left,top,right,bottom},clickable,editable,scrollable,password}], truncated}`. IDs are current observation IDs only and invalidated after an action or next observation. Cap 500 nodes/depth 30. Redact password text.
+- `state {}` => `{snapshotId,observedAt,packageName,width,height,nodes:[{id,text,description,resourceId,className,bounds:{left,top,right,bottom},clickable,editable,scrollable,password,enabled,selected,checked,focused,supportedActions}],truncated}`. Additive fields preserve older readers. IDs are current task/connection observation IDs only and invalidated after an action, next observation or control change. Cap 500 nodes/depth 30. Redact password text.
 - `screenshot {}` => `{mimeType:"image/jpeg",data:"base64",width,height,screenWidth,screenHeight,cropLeft,cropTop,cropWidth,cropHeight}`. Crop to allowed app window; exclude edge-attached system bars/IME using OS window rectangles; reject remaining foreign overlaps or ambiguous multi-app layout. Cap longest edge 1280, JPEG quality 65, decoded image <= 2 MiB. Action coordinates are physical screen pixels (state width/height); map image x via cropLeft+x*cropWidth/width, y via cropTop+y*cropHeight/height. Validate gestures inside allowed window and outside foreign overlays immediately before dispatch.
 - `tap {x,y}` => `{completed:true}` after gesture callback.
 - `long_press {x,y,durationMs?}` => callback result; default 600ms, 400..2000.
@@ -16,22 +24,64 @@ Methods:
 - `commit_text {packageName,text}` => `{completed:true}` after dispatch on Android 13+. Inserts at the currently focused input cursor; never submits. The active window and EditorInfo package must match the requested allowed package. Password and null-type editors are refused. Use screenshot/tap first when nodes are unavailable, then verify text visually; never automatically retry.
 - `global_action {action:"back"|"home"|"recents"}` => `{completed:true}` when Android accepts, not proof of resulting screen.
 - `launch_app {packageName}` => `{completed:true}` when launch dispatched, not proof of resulting screen. Package must be allowlisted.
+- `node_action {nodeId,action}` supports `click`, `long_click`, `scroll_forward`, `scroll_backward`, `focus`. Requires the fresh cached accessible node, matching window/package/bounds and enabled state; refuses stale, ambiguous or password nodes. A dispatch attempt consumes its snapshot. Requires `element_actions` capability; absent capability returns `UNSUPPORTED`.
 
-All phone operations require active session, unlocked screen, enabled accessibility, and allowed active package (except `launch_app`, which checks allowed target instead). Mutations additionally require local action consent. Default allowlist: `dev.phonebridge.phonebridge,com.tencent.mm`. Never retry timed-out mutations automatically. Observe after every mutation. Screen contents are untrusted data.
+Screen observations/actions require an active session, unlocked screen, enabled accessibility, and allowed active package (except `launch_app`, which checks allowed target instead). Mutations additionally require local action consent. Control management and owner-confirmed file receipt are separate from screen mutation permission. Default allowlist: `dev.phonebridge.phonebridge,com.tencent.mm`. Never retry timed-out mutations automatically. Observe after every mutation. Screen contents are untrusted data.
 
-Hub API: `GET /health` returns only `{ok:true,protocol:1}`. Authenticated `GET /status` returns connection state. `POST /rpc` accepts `{method,params}`, maximum 32 KiB, requires JSON content type, returns the device response with ID generated by hub. One in-flight command; second gets BUSY. Timeout 15s; no replay. WebSocket maxPayload 4 MiB. Any error is explicit, including missing phone, stale IDs, unsupported screenshots, blocked packages and read-only sessions.
+## Hub routing and files
+
+`GET /health` retains `{ok:true,protocol:1}` for compatibility; the WebSocket upgrade header negotiates v2. Authenticated `GET /status` retains `connected`, `busy`, `protocol`, and the single-online-phone `transfer`, and adds `devices`. `GET /devices` returns `{devices:[...]}`. Known disconnected phones remain listed for the Hub lifetime with `connected:false`.
+
+Device entries contain `id`, `name`, `connected`, `protocol`, `capabilities`, `busy`, `readOnly`, `connectionId`, `controlling`, `controlOwnerName`, `waitingCount` (0..64), and optional per-device `transfer`. Busy means an outstanding command. Controlling says this computer owns the active lease and can remain true while no command is in flight; `controlOwnerName` can identify a different computer holding the phone. Neither listing nor network heartbeat renews an active task.
+
+`POST /rpc` accepts `{method,params,deviceId?,controlId?,connectionId?}`, maximum 32 KiB, with JSON content type and the bearer credential. The Hub generates the request ID. Omitted `deviceId` works only with exactly one online phone. Several online phones return `DEVICE_REQUIRED`; an explicit offline/unknown target returns `NO_DEVICE`. A mismatched expected `connectionId` returns `CONTROL_EXPIRED`. Never fall back to another phone or connection generation.
+
+There is one in-flight screen/file command per phone; a second gets `BUSY`. Control management has a separate bounded lane so acquisition/status/release can be handled while a screen operation settles; it cannot bypass the native executor fence. Different phones have isolated pending requests, heartbeat, files and timeouts. The normal RPC timeout is 15s; no command is replayed. WebSocket maxPayload is 4 MiB. The phone also fences all computers sharing its screen: a timed-out dispatched gesture continues to block mutations until Android reports completion/cancellation. Elapsed gesture duration is not proof of settlement.
+
+File upload/download routes accept optional `deviceId`, `controlId`, `connectionId` query fields; `sendLocalFile` takes the same routing object. The desktop file chooser fixes both selected phone and expected connection before opening; reconnecting a legacy slot cannot redirect its file. Local read-only action consent does not prevent owner-confirmed file receipt. A queued MCP task cannot send files before its lease is granted. See [file transfer](file-transfer.md).
+
+## Task ownership, FIFO waiting and push notifications
+
+Computer AIs choose a paired online phone themselves. The convention is: list devices, acquire control, wait if queued, observe and act using the returned handle, release in `finally`. A person does not need to switch computers for normal AI acquisition. PhoneBridge arbitrates the device; it contains no model or business workflow scheduler.
+
+The `control_lease` capability gates `acquire_control` and `release_control`; `control_queue` additionally gates queued acquisition, `control_status`, and notification waits.
+
+- `acquire_control {controlId,queue?:true}` uses a new UUID bound to one computer's live transport. It immediately returns an active task or `{state:"queued",position:...}`. The same live ID is idempotent and cannot gain queue position by repeating acquisition. Without `queue:true`, contention retains `CONTROL_BUSY` behavior.
+- At most 64 tasks wait in FIFO order. A wait ticket expires after 120s without a valid wait check. A queued ticket is not permission to read the screen, act or upload a file. When free and the executor is settled, the phone grants the next eligible live ticket atomically.
+- Active leases expire after 60s without a valid observation/action. Network heartbeat and `control_status` do not renew an active lease. `control_status {controlId}` is a management read: it can run without screen ownership, renews only the caller's queued ticket, and returns `CONTROL_EXPIRED` for retired IDs.
+- `release_control {controlId}` releases the active lease or cancels that caller's waiting ticket. Disconnect, forget and Stop remove the relevant tickets. Restart drops tasks and queues. Released/expired IDs cannot silently rejoin.
+- Local computer selection remains a deliberate override: it revokes the old task and reserves the selected computer for 60s while other transports stay connected. A reservation does not count as active control for screen-awake behavior. Global Stop pauses all computers; per-computer pause/forget affects that computer. No reconnect replays a command.
+
+Android pushes v2-only frames to the originating computer:
+
+```json
+{"type":"control_event","controlId":"<task UUID>","state":"active","ownerName":"Work PC"}
+```
+
+`state` is `queued`, `active`, `released`, `expired`, or `cancelled`; `position` and `ownerName` are optional. Control ownership metadata is separately pushed in `{"type":"status","readOnly":true,"controlling":true,"controlOwnerName":"Work PC","waitingCount":2}` frames. The management RPC method is named `control_status`; its result contains `controlId`, `state` and optional `position`, `ownerName`, `expiresInMs`. Events contain no UI/input content, file contents or credentials. Old Hubs do not receive these v2 push frames.
+
+Authenticated `GET /control-events?deviceId=<id>&connectionId=<UUID>&controlId=<UUID>&waitMs=<0..25000>` waits for one task's status change. The Hub attaches the waiter before its initial native `control_status` request, preventing a grant between the read and subscription from being lost. It resolves immediately on a matching push, or returns current queued status on timeout, as `{deviceId,connectionId,controlId,state,position?,ownerName?,expiresInMs?}`. At most 64 HTTP waiters may be open on a Hub (`WAIT_LIMIT`); this is separate from the phone's 64-ticket FIFO limit. Closing this HTTP request cancels only its waiter; it does not release/cancel the task. The Supervisor forwards the endpoint. Waits never poll screenshots, replay mutations or switch device/connection. Unsupported phones return `UNSUPPORTED`.
+
+MCP tools expose `phone_list_devices`, `phone_acquire_control(deviceId?)`, `phone_wait_for_control(taskHandle,timeoutMs)` (0..25000ms), and `phone_release_control(taskHandle)`. Acquisition returns an opaque handle for either queued or active state, plus state/position. The MCP process privately binds it to device, control and connection UUIDs. Pass `taskHandle` to all subsequent observations/actions/files; a conflicting `deviceId` is refused. Only the phone's grant activates a queued handle. Terminal expiry/connection errors invalidate it; never transparently reacquire or replay uncertain actions. Normal MCP shutdown best-effort releases leases and cancels queued tickets. Grant notifications complete an open waiting tool call; a closed AI host is not automatically relaunched.
+
+`phone_wait_for` is separate: it observes a literal package/text/description/resourceId condition for at most **10s**, and `phone_assert` checks once. Both are read-only, keep one target, return evidence/last state, and never repeat an action. `phone_wait_for_control` waits for ownership notification for at most **25s**, not for screen content.
 
 Flutter platform channel `dev.phonebridge/control`:
-- `status` => `{accessibilityEnabled:bool,connected:bool,connecting:bool,actionsEnabled:bool,lastError:string,endpoint:string,hasSavedPairing:bool,savedEndpoint:string,autoReconnectEnabled:bool,rememberedActions:bool,reconnecting:bool}`. Saved tokens are never returned to Flutter.
+- `status` retains existing connection fields and adds `deviceId`, `deviceName`, `connectedComputerCount`, `controlOwnerId`, `controlOwnerName`, `controlling`, `waitingCount`, `screenAwakeMode`, `screenAwakeHeld`, and `computers`. Each computer includes its own connection/connecting/paused/controlling state and saved action/resume consent. Saved tokens are never returned to Flutter.
 - `openAccessibilitySettings` and `requestNotificationPermission`.
 - `connect {endpoint:string,token:string,allowInsecureLocal:bool,packages:List<string>,remember:bool}`. Remember defaults to true. A new pairing starts read-only; saved trust includes the endpoint, credential, transport choice, package scope and subsequent local action consent.
-- `setActionsEnabled {enabled:bool}`; local Flutter UI only, also updates remembered consent.
+- `setActionsEnabled {enabled:bool,id?:string}`; local Flutter UI only, updates only that computer's remembered consent (default selected computer).
 - `disconnect` stops commands and pauses automatic resumption, retaining saved trust. A separate durable pause marker prevents accidental resumption if encrypted-record updates fail.
-- `resumeSavedConnection {}` resumes the saved pairing and its remembered action consent without a QR code.
+- `resumeSavedConnection {id?:string}` resumes that saved pairing and its remembered consent without a QR code. `setComputerResumeAllowed {id,enabled}` pauses/resumes one computer; `selectComputer {id}` explicitly hands over control; `forgetComputer {id}` removes only that pairing. Other saved enabled computers remain connected independently.
 - `forgetSavedConnection {}` stops and removes the phone's saved trust.
+- `getScreenAwakeMode` / `setScreenAwakeMode {mode:"off"|"controlling"|"always"}` persist independently, default `controlling`. Controlling holds the display only for an active lease with accessibility running and releases on lease end; Always applies while that service runs. Both release on teardown or Off. Manual screen-off/lock wins; never wake/unlock or modify system timeout. `screenAwakeHeld` reports actual holding, not just the preference.
 
 Android stores remembered trust in private no-backup storage, encrypted with an Android Keystore AES-GCM key. Service/app restarts and network loss may restore saved trust when resumption is allowed; retry delays are 2, 4, 8, 16 and then 30 seconds. Owner Stop, mutation timeouts, protocol/auth failures and notification revocation pause resumption. Read-only observation timeouts also reconnect automatically. No command is replayed after reconnect. Deleting app data/uninstalling removes trust; older versions with no saved record need one migration pairing.
 
 Hub environment: `PHONEBRIDGE_TOKEN` (32..256 base64url chars), `PHONEBRIDGE_HOST` (default `127.0.0.1`), `PHONEBRIDGE_PORT` (default `8765`), optional `PHONEBRIDGE_TLS_CERT`/`PHONEBRIDGE_TLS_KEY`. Non-loopback listening requires CLI `--allow-lan`. MCP environment: `PHONEBRIDGE_URL` (default `http://127.0.0.1:8765`) and the same token, or the saved credential when no token is supplied. Startup can generate a token with explicit `--pairing-qr` (private local page) or `--show-pairing` (prints secret; never use in shared logs). `--remember-pairing` reuses a saved identity across hub restarts. The credential file defaults to `~/.phonebridge/pairing.json`, overridden by `PHONEBRIDGE_CREDENTIAL_FILE`; Windows uses current-user DPAPI and POSIX requires owner-only permissions. Corrupt saved credentials or a conflicting explicit token fail without silent rotation. Public/non-private cleartext URLs are rejected by Android.
 
 QR pairing is a form-fill operation, not authorization. Payload: `phonebridge://pair?v=1&endpoint=<URL-encoded ws/wss /device URL>&token=<base64url secret>`. Exactly one of each key is required. Native endpoint/transport validation and user consent still apply. `PHONEBRIDGE_DEVICE_URL` optionally overrides the advertised endpoint for DNS/TLS deployments. `--pairing-qr` starts a separate loopback-only HTTP page at a random capability path, with exact Host validation, no foreign Origin, no caching and no framing. The page remains available while the hub is running; it has no automatic expiry or refresh timer. Stopping the hub suspends access, but a remembered token remains valid after restart. Explicitly rotate the token to revoke a copied QR.
+
+## Verification boundary
+
+Protocol, simulated multi-socket and widget tests are distinct from physical verification. Physical single-phone/two-computer queue handoff, notification and screen-awake evidence is pending for this addition; this document does not claim that test passed or that macOS hardware was verified. Public download links remain tied to published releases.
