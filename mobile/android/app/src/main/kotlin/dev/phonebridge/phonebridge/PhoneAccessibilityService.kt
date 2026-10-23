@@ -109,22 +109,12 @@ class PhoneAccessibilityService : AccessibilityService() {
             throw BridgeFailure("CONTROL_EXPIRED", "The control task has ended. Acquire control and observe again.")
         }
         OperationPolicy.requireSession(BridgeSession.connected, BridgeSession.isOperationCurrent(generation),
-            BridgeSession.service === this, isUnlocked(), BridgeSession.actionsEnabled, mutation)
+            BridgeSession.service === this, isUnlocked(), BridgeSession.actionsEnabled, mutation, BridgeSession.appAccessOpen)
     }
 
     /** Never operate Android's authorization/settings surfaces, even if allowlisted. */
     private fun requireOrdinaryApp(packageName: String) {
-        val protected = setOf("android", "com.android.systemui", "com.android.settings",
-            "com.android.permissioncontroller", "com.google.android.permissioncontroller",
-            "com.android.packageinstaller", "com.google.android.packageinstaller")
-        val settingsOwner = packageManager.resolveActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS), 0)
-            ?.activityInfo?.packageName
-        val generalSettingsOwner = packageManager.resolveActivity(Intent(Settings.ACTION_SETTINGS), 0)
-            ?.activityInfo?.packageName
-        val permissionOwner = packageManager.resolveActivity(Intent("android.intent.action.MANAGE_PERMISSIONS"), 0)
-            ?.activityInfo?.packageName
-        if (packageName in protected || packageName == settingsOwner || packageName == generalSettingsOwner ||
-            packageName == permissionOwner) {
+        if (packageName in AppAccessCatalog.protectedPackages(this)) {
             throw BridgeFailure("PROTECTED_APP", "Android permission and settings screens must be operated locally.")
         }
     }

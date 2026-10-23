@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'pairing.dart';
 import 'pairing_scanner.dart';
 import 'app_updates.dart';
+import 'app_access.dart';
 import 'app_language.dart';
 import 'operation_trails.dart';
 import 'screen_awake.dart';
@@ -64,6 +65,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   Map<String, dynamic> status = {};
   bool consent = false, insecureLocal = false, busy = false, polling = false;
   bool remember = true;
+  bool packagesEdited = false;
   bool startingDesktop = false;
   bool openingScanner = false;
   String? error;
@@ -258,6 +260,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       'token': token.text.trim(),
       'allowInsecureLocal': insecureLocal,
       'remember': remember,
+      'replaceAllowedPackages': packagesEdited,
       'packages': packages.text
           .split(RegExp(r'[\s,;]+'))
           .where((s) => s.isNotEmpty)
@@ -265,6 +268,65 @@ class _ConnectionPageState extends State<ConnectionPage> {
           .toList(),
     });
   }
+
+  Future<void> openAppAccess({bool draft = false}) async {
+    if (busy) return;
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    try {
+      final snapshot = await channel
+          .invokeMapMethod<String, dynamic>('getAppAccess', {
+            'draft': draft,
+            if (draft) 'endpoint': endpoint.text.trim(),
+            if (draft) 'token': token.text.trim(),
+          });
+      if (snapshot == null) {
+        throw PlatformException(code: 'APP_ACCESS_UNAVAILABLE');
+      }
+      if (draft && packagesEdited) {
+        snapshot['allowedPackages'] = packages.text.split('\n');
+      }
+      if (!mounted) return;
+      final result = await Navigator.of(context).push<List<String>>(
+        MaterialPageRoute(
+          builder: (_) => AppAccessPage(snapshot: snapshot, draft: draft),
+        ),
+      );
+      if (mounted && draft && result != null) {
+        setState(() {
+          packages.text = result.join('\n');
+          packagesEdited = true;
+        });
+      }
+    } on PlatformException catch (e) {
+      if (mounted) {
+        setState(() => error = userError(e.code, e.message, '无法读取应用授权，请重试'));
+      }
+    } on MissingPluginException {
+      if (mounted) setState(() => error = '请更新安卓端 PhoneBridge 后再试');
+    } finally {
+      try {
+        await channel.invokeMethod<void>('closeAppAccess');
+      } on PlatformException {
+        // The native activity also clears its local editor guard when destroyed.
+      } on MissingPluginException {
+        // Non-Android widget tests do not have a native editor guard.
+      }
+      await refresh();
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Widget appAccessEntry(String key) => SettingsRow(
+    key: Key(key),
+    icon: Icons.apps_rounded,
+    title: '允许访问的应用',
+    subtitle:
+        '${(status['allowedPackages'] as List? ?? []).length} ${tr(context, '个应用 · 点击修改')}',
+    onTap: busy ? null : () => openAppAccess(),
+  );
 
   Future<void> startDesktopService() async {
     if (startingDesktop || busy || !hasSavedPairing || connected) return;
@@ -319,6 +381,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         consent = false;
         insecureLocal = false;
         pairingPrefilled = true;
+        packagesEdited = false;
       });
     } finally {
       if (mounted) setState(() => busy = false);
@@ -707,14 +770,18 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 !connected && granted
                     ? '操作授权已保留，重连后恢复'
                     : granted
-                    ? 'AI 可以点击、滑动和输入'
-                    : '关闭时，AI 只能查看界面',
+                    ? 'AI 可以操作下方已授权的应用'
+                    : 'AI 只能查看下方已授权的应用',
               ),
               style: const TextStyle(fontSize: 12, color: muted, height: 1.6),
             ),
           ),
         ],
       ),
+      if (hasSavedPairing || connected || connecting) ...[
+        const SizedBox(height: 12),
+        SurfaceGroup(children: [appAccessEntry('home-app-access')]),
+      ],
       if (files.value.isNotEmpty) ...[
         const SizedBox(height: 16),
         FileInboxEntry(files: files.value, onOpen: openFiles),
@@ -797,6 +864,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
               ? showComputer
               : openPairing,
         ),
+        if (hasSavedPairing || connected || connecting) ...[
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20),
+            child: Divider(),
+          ),
+          appAccessEntry('settings-app-access'),
+        ],
       ],
     ),
     const SizedBox(height: 28),
@@ -1041,6 +1115,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     insecureLocal = false;
     pairingPrefilled = false;
     packages.text = 'dev.phonebridge.phonebridge\ncom.tencent.mm';
+    packagesEdited = false;
     remember = true;
     openPairing();
   }
@@ -1423,6 +1498,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       const SizedBox(height: 16),
       TextField(
         controller: endpoint,
+        onChanged: (_) => setState(() => packagesEdited = false),
         enabled: !connected && !connecting,
         autocorrect: false,
         decoration: InputDecoration(labelText: tr(context, '设备连接地址')),
@@ -1431,26 +1507,29 @@ class _ConnectionPageState extends State<ConnectionPage> {
       const SizedBox(height: 16),
       TextField(
         controller: token,
+        onChanged: (_) => setState(() => packagesEdited = false),
         enabled: !connected && !connecting,
         obscureText: true,
         enableSuggestions: false,
         autocorrect: false,
         decoration: InputDecoration(labelText: tr(context, '配对密钥')),
       ),
-      const SizedBox(height: 16),
-      TextField(
-        controller: packages,
-        enabled: !connected && !connecting,
-        minLines: 2,
-        maxLines: 5,
-        autocorrect: false,
-        decoration: InputDecoration(
-          labelText: tr(context, '允许访问的应用包名'),
-          helperText: tr(context, '每行一个；默认此应用和微信'),
-        ),
-      ),
     ],
     if (manual || pairingPrefilled) ...[
+      const SizedBox(height: 16),
+      SurfaceGroup(
+        children: [
+          SettingsRow(
+            key: const Key('pairing-app-access'),
+            icon: Icons.apps_rounded,
+            title: '允许访问的应用',
+            subtitle: packagesEdited
+                ? '${packages.text.split('\n').length} ${tr(context, '个应用 · 点击修改')}'
+                : '点击查看或修改；重新配对会保留原授权',
+            onTap: busy ? null : () => openAppAccess(draft: true),
+          ),
+        ],
+      ),
       const SizedBox(height: 24),
       SurfaceGroup(
         children: [
