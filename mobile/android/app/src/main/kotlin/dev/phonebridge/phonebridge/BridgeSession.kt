@@ -7,580 +7,557 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ApplicationInfo
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.util.Log
+import android.os.SystemClock
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
-/** Main-thread state; encrypted owner trust is separate from the disposable transport. */
+/** Main-thread connection manager. Selection, transport life and executing authority are independent. */
 object BridgeSession {
     val main = Handler(Looper.getMainLooper())
     var service: PhoneAccessibilityService? = null
         private set
+    private data class Transport(val id: String, var record: TrustedPairing, val serial: Long,
+        var socket: WebSocket? = null, var client: OkHttpClient? = null,
+        var connected: Boolean = false, var connecting: Boolean = false,
+        var negotiatedV2: Boolean = false,
+        var error: String = "", var retryAttempt: Int = 0, var retry: Runnable? = null,
+        var connectTimeout: Runnable? = null)
+    private data class Operation(val id: String, val method: String, val transport: Transport,
+        val lease: ControlLeaseManager.Lease, val record: TrustedPairing, val generation: Long,
+        var timeout: Runnable? = null, var replied: Boolean = false, var invalidated: Boolean = false,
+        val socket: WebSocket? = transport.socket)
+    private val transports = linkedMapOf<String, Transport>()
+    private val control = ControlLeaseManager(SystemClock::elapsedRealtime)
     private val operationScope = SessionOperationScope()
+    private var lastAuthority: ControlLeaseManager.Lease? = null
+    private var lastWaitingCount = 0
+    private var execution: Operation? = null
+    private var serial = 0L
+    /** Remains bound to the dispatched operation until its completion settles the executor fence. */
     val generation: Long get() = operationScope.generation
-    var connected = false
-        private set
-    var actionsEnabled = false
-        private set
-    private var connecting = false
-    private var lastError = ""
-    private var endpoint = ""
-    private var socket: WebSocket? = null
-    private var client: OkHttpClient? = null
-    private var packages = emptySet<String>()
-    private var desiredActions = false
-    private val pending: String? get() = operationScope.pending
-    private var timeout: Runnable? = null
-    private var connectTimeout: Runnable? = null
-    private var retryTask: Runnable? = null
-    private var retryAttempt = 0
-    private var appContext: Context? = null
+    val connected: Boolean get() = transports.values.any { it.connected }
+    val actionsEnabled: Boolean get() = execution?.let { !it.invalidated && it.record.actionsEnabled }
+        ?: (selectedTransport()?.let { it.record.actionsEnabled && it.connected } == true)
+    private var context: Context? = null
     private var store: TrustedPairingStore? = null
-    private var saved: TrustedPairing? = null
-    var fileInbox: FileInbox? = null
-        private set
     private var loaded = false
     private var computers = TrustedComputers()
+    private var globalError = ""
+    private var awake: ScreenAwakeController? = null
+    private var deviceId = ""
+    var fileInbox: FileInbox? = null
+        private set
     private const val CHANNEL = "phonebridge_session"
     private const val NOTIFICATION_ID = 8721
     const val STOP_ACTION = "dev.phonebridge.phonebridge.STOP_SESSION"
+    private val leaseTimer = object : Runnable {
+        override fun run() {
+            authorityChanged()
+            if (service != null) main.postDelayed(this, 1000)
+        }
+    }
 
-    fun initialize(context: Context) {
-        appContext = context.applicationContext
-        if (fileInbox == null) fileInbox = FileInbox(context.applicationContext)
+    fun initialize(value: Context) {
+        context = value.applicationContext
+        if (fileInbox == null) fileInbox = FileInbox(value.applicationContext)
+        if (awake == null) awake = ScreenAwakeController(value.applicationContext, main)
+        if (deviceId.isEmpty()) {
+            val prefs = value.getSharedPreferences("phone_identity", Context.MODE_PRIVATE)
+            deviceId = prefs.getString("deviceId", null) ?: UUID.randomUUID().toString().also {
+                check(prefs.edit().putString("deviceId", it).commit()) { "Could not persist device identity." }
+            }
+        }
         if (loaded) return
         try {
-            val storage = store ?: TrustedPairingStore(context.applicationContext).also { store = it }
-            computers = storage.list()
+            store = store ?: TrustedPairingStore(value.applicationContext)
+            computers = store!!.list()
             computers.entries.forEach { validatePairing(it.pairing) }
-            saved = computers.active?.pairing
             loaded = true
         } catch (_: Exception) {
-            // Do not erase an unreadable record; the Keystore may temporarily be unavailable.
-            saved = null
-            lastError = "Saved pairing is unavailable. Unlock the phone and reopen PhoneBridge."
+            globalError = "Saved pairing is unavailable. Unlock the phone and reopen PhoneBridge."
         }
     }
 
     fun attach(value: PhoneAccessibilityService) {
         service = value
         initialize(value)
-        if (lastError == "Accessibility service stopped.") lastError = ""
+        main.removeCallbacks(leaseTimer)
+        main.post(leaseTimer)
+        updateAwake()
         tryAutoResume()
     }
-
     fun detach(value: PhoneAccessibilityService) {
-        if (service === value) {
-            closeTransport("Accessibility service stopped.")
-            service = null
-        }
+        if (service !== value) return
+        control.clear()
+        authorityChanged()
+        transports.values.toList().forEach { close(it, "Accessibility service stopped.") }
+        service = null
+        main.removeCallbacks(leaseTimer)
+        updateAwake()
     }
-
     fun serviceInterrupted() {
-        closeTransport("Accessibility was interrupted.")
-        scheduleReconnect()
+        control.clear()
+        authorityChanged()
+        transports.values.toList().forEach { close(it, "Accessibility was interrupted."); scheduleReconnect(it) }
     }
+    fun onOwnerActivityResumed(value: Context) { initialize(value); updateAwake(); tryAutoResume() }
+    fun getScreenAwakeMode(): String = awake?.mode ?: "controlling"
+    fun setScreenAwakeMode(mode: String) { awake!!.select(mode); updateAwake() }
+    private fun updateAwake() { awake?.update(service != null, control.lease != null) }
+    private fun selectedTransport() = computers.activeId?.let { transports[it] } ?: transports["temporary"]
+    private fun entry(id: String) = computers.entries.find { it.id == id }
+    private fun transportEnabled(t: Transport) = entry(t.id)?.pairing?.resumeAllowed ?: (t.id == "temporary")
 
-    fun onOwnerActivityResumed(context: Context) {
-        initialize(context)
-        tryAutoResume()
+    fun status(): Map<String, Any> {
+        authorityChanged()
+        val selected = selectedTransport()
+        val saved = computers.active?.pairing
+        val owner = control.lease
+        return mapOf("accessibilityEnabled" to (service != null), "connected" to connected,
+            "connectedComputerCount" to transports.values.count { it.connected },
+            "waitingCount" to control.waitingCount,
+            "connecting" to transports.values.any { it.connecting }, "actionsEnabled" to actionsEnabled,
+            "lastError" to (selected?.error?.ifEmpty { null } ?: globalError), "endpoint" to (selected?.record?.endpoint ?: ""),
+            "hasSavedPairing" to (saved != null), "savedEndpoint" to (saved?.endpoint ?: ""),
+            "activeComputerId" to (computers.activeId ?: ""), "computerName" to (computers.active?.name ?: ""),
+            "computers" to computerList(), "files" to (fileInbox?.status() ?: emptyList<Map<String, Any>>()),
+            "autoReconnectEnabled" to (saved?.resumeAllowed == true), "rememberedActions" to (saved?.actionsEnabled == true),
+            "reconnecting" to transports.values.any { it.retry != null },
+            "controlOwnerId" to (owner?.computerId ?: ""), "controlOwnerName" to (owner?.name ?: ""),
+            "awaitingGestureSettlement" to operationScope.awaitingGestureSettlement,
+            "executorDiagnostic" to (if (operationScope.awaitingGestureSettlement) OperationTimeoutPolicy.awaitingGestureMessage else ""),
+            "controlEvents" to control.events().map { mapOf("event" to it.event, "computerId" to it.computerId, "elapsedMillis" to it.elapsedMillis) },
+            "controlling" to (owner != null), "screenAwakeMode" to getScreenAwakeMode(), "screenAwakeHeld" to (awake?.held == true),
+            "deviceId" to deviceId, "deviceName" to Build.MODEL)
     }
-
-    fun status(): Map<String, Any> = mapOf(
-        "accessibilityEnabled" to (service != null),
-        "connected" to connected,
-        "connecting" to connecting,
-        "actionsEnabled" to actionsEnabled,
-        "lastError" to lastError,
-        "endpoint" to endpoint,
-        "hasSavedPairing" to (saved != null),
-        "savedEndpoint" to (saved?.endpoint ?: ""),
-        "activeComputerId" to (computers.activeId ?: ""),
-        "computerName" to (computers.active?.name ?: ""),
-        "computers" to computerList(),
-        "files" to (fileInbox?.status() ?: emptyList<Map<String, Any>>()),
-        "autoReconnectEnabled" to (saved?.resumeAllowed == true),
-        "rememberedActions" to (saved?.actionsEnabled == true),
-        "reconnecting" to (retryTask != null),
-    )
-
-    fun fileSource(): FileInbox.Source {
-        require(connected && socket != null) { "请先连接电脑" }
-        val request = socket!!.request()
+    fun computerList(): List<Map<String, Any>> = computers.entries.map { c ->
+        val t = transports[c.id]
+        mapOf("id" to c.id, "name" to c.name, "endpoint" to c.pairing.endpoint,
+            "active" to (c.id == computers.activeId), "connected" to (t?.connected == true),
+            "connecting" to (t?.connecting == true || t?.retry != null),
+            "controlling" to (control.lease?.computerId == c.id), "lastError" to (t?.error ?: ""),
+            "state" to (if (control.lease?.computerId == c.id) "controlling" else if (t?.connected == true) "connected"
+                else if (t?.connecting == true || t?.retry != null) "connecting" else "paused"),
+            "actionsEnabled" to c.pairing.actionsEnabled, "resumeAllowed" to c.pairing.resumeAllowed)
+    }
+    fun isOperationCurrent(expected: Long): Boolean {
+        val op = execution ?: return false
+        val leaseValid = control.valid(op.lease)
+        if (lastAuthority !== control.lease) authorityChanged()
+        return operationScope.isCurrent(expected) && op.generation == expected && !op.invalidated && op.transport.connected &&
+            current(op.transport, op.socket) && leaseValid
+    }
+    /** Acceptance may precede injection by an unbounded queue delay; duration is not settlement. */
+    fun recordGestureDispatch(expected: Long, @Suppress("UNUSED_PARAMETER") durationMillis: Long) {
+        operationScope.markGestureDispatched(expected)
+    }
+    fun isAllowed(packageName: String): Boolean = packageName in (execution?.record?.packages ?: computers.active?.pairing?.packages ?: emptyList())
+    fun fileSource(): FileInbox.Source = sourceFor(selectedTransport())
+    private fun sourceFor(t: Transport?): FileInbox.Source {
+        require(t?.connected == true && t.socket != null) { "请先连接电脑" }
+        val request = t!!.socket!!.request()
         val url = request.url.newBuilder().encodedPath("/").query(null).fragment(null).build()
         return FileInbox.Source(url.toString().trimEnd('/'), request.header("Authorization")!!,
-            computers.active?.name?.ifBlank { null } ?: url.host, generation)
+            entry(t.id)?.name ?: url.host, t.serial)
     }
-
-    fun offerFile(params: JSONObject) {
-        fileInbox!!.offer(params, fileSource())
-    }
-
-    fun computerList(): List<Map<String, Any>> = computers.entries.map { computer ->
-        mapOf("id" to computer.id, "name" to computer.name, "endpoint" to computer.pairing.endpoint,
-            "active" to (computer.id == computers.activeId),
-            "state" to (if (computer.id != computers.activeId) "saved" else if (connected) "connected"
-                else if (connecting || retryTask != null) "connecting" else "paused"),
-            "actionsEnabled" to computer.pairing.actionsEnabled,
-            "resumeAllowed" to computer.pairing.resumeAllowed)
-    }
-
-    fun renameComputer(id: String, name: String) {
-        require(computers.entries.any { it.id == id })
-        require(name.trim().isNotEmpty() && name.trim().length <= 80 && name.none { it.isISOControl() })
-        try {
-            store!!.rename(id, name)
-            computers = store!!.list()
-        } catch (_: Exception) { storageFailure() }
-    }
-
-    fun selectComputer(id: String) {
-        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Enable PhoneBridge in Accessibility settings.")
-        initialize(native)
-        val record = computers.entries.find { it.id == id }?.pairing
-            ?: throw BridgeFailure("NO_SAVED_PAIRING", "Pair with your computer first.")
-        validatePairing(record)
-        native.requireUnlocked()
-        requireNotifications(native)
-        closeTransport()
-        retryAttempt = 0
-        try {
-            saved = store!!.select(id)
-            computers = store!!.list()
-        } catch (_: Exception) { storageFailure() }
-        openTransport(saved!!)
-    }
-
-    fun isAllowed(packageName: String) = packageName in packages
+    fun isFileSourceCurrent(sourceGeneration: Long): Boolean = transports.values.any { it.serial == sourceGeneration && it.connected }
+    fun offerFile(params: JSONObject) { fileInbox!!.offer(params, sourceFor(execution?.transport)) }
 
     private fun validatePairing(record: TrustedPairing) {
         EndpointPolicy.validate(record.endpoint, record.allowInsecureLocal)
         EndpointPolicy.validateToken(record.token)
-        require(record.packages.isNotEmpty() && record.packages.size <= 64 &&
-            record.packages.all { it.length <= 255 && it.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")) }) {
+        require(record.packages.isNotEmpty() && record.packages.size <= 64 && record.packages.all {
+            it.length <= 255 && it.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")) }) {
             "Enter 1–64 valid allowed package names."
         }
     }
-
-    private fun persist(record: TrustedPairing) {
-        try {
-            (store ?: throw IllegalStateException()).save(record)
-            computers = store!!.list()
-            saved = computers.active?.pairing
-            loaded = true
-        } catch (_: Exception) {
-            storageFailure()
-        }
+    private fun updateTrust(update: () -> Unit) {
+        try { update(); computers = store!!.list(); loaded = true }
+        catch (_: Exception) { storageFailure() }
     }
-
     private fun storageFailure(): Nothing {
-        // Preserve every trusted computer; a separate stop marker blocks boot/retry after failed writes.
-        try { store?.pauseAutomaticResume() } catch (_: Exception) { }
-        try { store?.markActionsPaused() } catch (_: Exception) { }
-        saved = saved?.copy(resumeAllowed = false, actionsEnabled = false)
-        computers = computers.copy(entries = computers.entries.map {
-            if (it.id == computers.activeId) it.copy(pairing = it.pairing.copy(resumeAllowed = false, actionsEnabled = false)) else it
-        })
+        try { store?.pauseAutomaticResume(); store?.markActionsPaused() } catch (_: Exception) { }
+        computers = computers.copy(entries = computers.entries.map { it.copy(pairing = it.pairing.copy(resumeAllowed = false, actionsEnabled = false)) })
         loaded = false
-        closeTransport("Could not safely save pairing. Please pair again.")
+        control.clear(); authorityChanged()
+        transports.values.toList().forEach { close(it, "Could not safely save pairing. Please pair again.") }
         throw BridgeFailure("PAIRING_STORAGE_FAILED", "Could not safely save pairing. Please pair again.")
     }
-
-    fun requireNotifications(context: Context) {
-        val manager = context.getSystemService(NotificationManager::class.java)
-        try {
-            OperationPolicy.requireNotifications(manager.areNotificationsEnabled(),
-                manager.getNotificationChannel(CHANNEL)?.importance)
-        } catch (error: BridgeFailure) {
-            pause("PhoneBridge session notifications were disabled.", ReconnectPolicy.EndReason.NOTIFICATIONS)
-            throw error
-        }
+    fun requireNotifications(value: Context) {
+        val manager = value.getSystemService(NotificationManager::class.java)
+        try { OperationPolicy.requireNotifications(manager.areNotificationsEnabled(), manager.getNotificationChannel(CHANNEL)?.importance) }
+        catch (error: BridgeFailure) { disconnect("PhoneBridge session notifications were disabled."); throw error }
     }
-
+    private fun requireReady(): PhoneAccessibilityService {
+        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Enable PhoneBridge in Accessibility settings.")
+        native.requireUnlocked()
+        val strings = AppLanguage.resources(native)
+        native.getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(CHANNEL, strings.getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW))
+        requireNotifications(native)
+        return native
+    }
     fun connect(url: String, token: String, allowInsecureLocal: Boolean, allowed: List<String>, remember: Boolean = true) {
-        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Enable PhoneBridge in Accessibility settings.")
-        initialize(native)
-        val record = TrustedPairing(EndpointPolicy.validate(url, allowInsecureLocal), token,
-            allowInsecureLocal, allowed.distinct(), false, true)
+        val native = requireReady(); initialize(native)
+        val record = TrustedPairing(EndpointPolicy.validate(url, allowInsecureLocal), token, allowInsecureLocal, allowed.distinct(), false, true)
         validatePairing(record)
-        native.requireUnlocked()
-        val manager = native.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, AppLanguage.resources(native).getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW))
-        requireNotifications(native)
-        closeTransport()
-        retryAttempt = 0
-        if (remember) persist(record) else {
-            try {
-                store!!.deactivate()
-                computers = store!!.list()
-                saved = null
-            } catch (_: Exception) { storageFailure() }
+        transports.remove("temporary")?.let { close(it) }
+        if (remember) {
+            updateTrust { store!!.save(record) }
+            val id = computers.activeId!!
+            // Updating a remembered identity must also replace its live consent/allowlist snapshot.
+            transports.remove(id)?.let { close(it) }
+            control.select(id); authorityChanged(); ensureTransport(id, record)
+        } else {
+            updateTrust { store!!.deactivate() }
+            control.select("temporary"); authorityChanged(); ensureTransport("temporary", record)
         }
-        openTransport(record)
+        tryAutoResume()
     }
-
-    fun resumeSavedConnection() {
-        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Enable PhoneBridge in Accessibility settings.")
-        initialize(native)
-        val record = saved ?: throw BridgeFailure("NO_SAVED_PAIRING", "Pair with your computer first.")
-        validatePairing(record)
-        native.requireUnlocked()
-        requireNotifications(native)
-        closeTransport()
-        retryAttempt = 0
-        val resumed = record.copy(resumeAllowed = true)
-        persist(resumed)
-        openTransport(resumed)
+    fun selectComputer(id: String) {
+        requireReady()
+        val c = entry(id) ?: throw BridgeFailure("NO_SAVED_PAIRING", "Pair with your computer first.")
+        validatePairing(c.pairing)
+        transports.remove("temporary")?.let { close(it) }
+        updateTrust { store!!.select(id) }
+        control.select(id); authorityChanged()
+        ensureTransport(id, entry(id)!!.pairing)
     }
-
-    /** Capture native trust; normal network retries do not invalidate the owner's request. */
-    fun prepareDesktopRecovery(): TrustedPairing {
-        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "请先开启 PhoneBridge 无障碍服务")
-        initialize(native)
-        val record = saved ?: throw BridgeFailure("NO_SAVED_PAIRING", "请先与电脑配对")
+    fun renameComputer(id: String, name: String) { updateTrust { store!!.rename(id, name) } }
+    fun setActionsEnabled(enabled: Boolean, computerId: String? = null) {
+        val id = computerId ?: computers.activeId ?: "temporary"
+        val t = transports[id]
+        require(entry(id) != null || t != null) { "Unknown computer." }
+        if (enabled) { requireReady(); if (t?.connected != true) throw BridgeFailure("NO_SESSION", "Connect before enabling actions.") }
+        if (!enabled && execution?.transport?.id == id) {
+            execution?.invalidated = true; operationScope.invalidate(); service?.clearOperationTrail()
+        }
+        val c = entry(id)
+        if (c != null) updateTrust { store!!.update(id, c.pairing.copy(actionsEnabled = enabled)) }
+        if (t != null) t.record = (entry(id)?.pairing ?: t.record).copy(actionsEnabled = enabled)
+        service?.invalidateNodes(); broadcastStatus(); showNotification()
+    }
+    fun setComputerResumeAllowed(id: String, enabled: Boolean) {
+        val c = entry(id) ?: throw IllegalArgumentException("Unknown computer.")
+        if (enabled) requireReady()
+        updateTrust { store!!.update(id, c.pairing.copy(resumeAllowed = enabled)) }
+        if (enabled) ensureTransport(id, entry(id)!!.pairing) else {
+            control.revoke(id); authorityChanged()
+            transports[id]?.let { close(it) }
+        }
+    }
+    fun resumeSavedConnection(computerId: String? = null) {
+        val id = computerId ?: computers.activeId ?: throw BridgeFailure("NO_SAVED_PAIRING", "Pair with your computer first.")
+        setComputerResumeAllowed(id, true)
+    }
+    fun prepareDesktopRecovery(computerId: String? = null): TrustedPairing {
+        requireReady()
+        val id = computerId ?: computers.activeId ?: throw BridgeFailure("NO_SAVED_PAIRING", "请先与电脑配对")
+        val record = entry(id)?.pairing ?: throw BridgeFailure("NO_SAVED_PAIRING", "请先与电脑配对")
         validatePairing(record)
-        native.requireUnlocked()
-        requireNotifications(native)
-        if (connected) throw BridgeFailure("BUSY", "手机已连接电脑")
+        if (transports[id]?.connected == true) throw BridgeFailure("BUSY", "手机已连接电脑")
         return record
     }
-
     fun resumeAfterDesktopRecovery(record: TrustedPairing, ownerService: PhoneAccessibilityService?) {
-        // Pause, forget, changed consent/pairing, or a replaced accessibility service invalidates it.
-        if (saved !== record || service !== ownerService || ownerService == null) {
+        val c = computers.entries.find { it.pairing === record }
+        if (c == null || service !== ownerService || ownerService == null)
             throw BridgeFailure("RECOVERY_CANCELLED", "连接状态已改变，启动请求已取消，请重新确认后操作")
-        }
-        ownerService.requireUnlocked()
-        requireNotifications(ownerService)
-        // An automatic reconnect may have succeeded while the HTTP request was pending.
-        if (connected) return
-        resumeSavedConnection()
+        requireReady()
+        if (transports[c.id]?.connected != true) resumeSavedConnection(c.id)
     }
-
     fun forgetComputer(id: String) {
-        require(computers.entries.any { it.id == id }) { "Unknown computer." }
-        val removingActive = computers.activeId == id
-        if (removingActive) closeTransport()
-        try {
-            store!!.forget(id)
-            computers = store!!.list()
-            if (removingActive) saved = null
-            loaded = true
-        } catch (_: Exception) { storageFailure() }
+        require(entry(id) != null) { "Unknown computer." }
+        transports[id]?.let { close(it); transports.remove(id) }
+        control.revoke(id); authorityChanged()
+        updateTrust { store!!.forget(id) }
     }
-
-    fun forgetSavedConnection() {
-        closeTransport()
+    fun forgetSavedConnection() { computers.activeId?.let { forgetComputer(it) } }
+    /** Global owner Stop preserves every credential and pauses every independent transport. */
+    fun disconnect(error: String = "") {
+        control.clear(); authorityChanged()
+        transports.values.toList().forEach { close(it, error) }
         try {
             store?.pauseAutomaticResume()
-            store?.clear()
-            computers = store?.list() ?: TrustedComputers()
-            saved = null
-            loaded = true
-        } catch (_: Exception) {
-            saved = null
-            loaded = false
-            lastError = "Saved pairing could not be removed. Try again."
-            throw BridgeFailure("PAIRING_STORAGE_FAILED", lastError)
-        }
+            updateTrust { store!!.pauseAll() }
+        } catch (_: Exception) { globalError = "Could not persist Stop. Forget this computer before closing PhoneBridge." }
     }
-
     private fun tryAutoResume() {
-        if (connected || connecting || retryTask != null) return
-        val record = saved ?: return
-        if (!ReconnectPolicy.shouldReconnect(true, record.resumeAllowed, service != null)) return
-        try {
-            validatePairing(record)
-            requireNotifications(service!!)
-            service!!.requireUnlocked()
-            openTransport(record)
-        } catch (error: BridgeFailure) {
-            if (error.code == "DEVICE_LOCKED") {
-                lastError = "Waiting for the phone to be unlocked."
-                scheduleReconnect()
-            } else if (error.code != "NOTIFICATIONS_DISABLED") {
-                pause("Saved connection needs local attention.", ReconnectPolicy.EndReason.PROTOCOL)
-            }
-        } catch (_: Exception) {
-            pause("Saved pairing is invalid. Pair with your computer again.", ReconnectPolicy.EndReason.PROTOCOL)
-        }
-    }
-
-    private fun scheduleReconnect() {
-        if (!ReconnectPolicy.shouldReconnect(saved != null, saved?.resumeAllowed == true, service != null) ||
-            retryTask != null || connected || connecting) return
-        val delay = ReconnectPolicy.delayMillis(retryAttempt++)
-        retryTask = Runnable {
-            retryTask = null
-            tryAutoResume()
-        }.also { main.postDelayed(it, delay) }
-        showNotification()
-    }
-
-    private fun transportLost(message: String) {
-        closeTransport(message)
-        scheduleReconnect()
-    }
-
-    private fun pause(message: String, reason: ReconnectPolicy.EndReason) {
-        closeTransport(message)
-        if (!ReconnectPolicy.permitsAutomaticResume(reason)) {
-            try { store?.pauseAutomaticResume() } catch (_: Exception) {
-                lastError = "Could not persist Stop. Forget this computer before closing PhoneBridge."
-            }
-            saved?.let {
-                try {
-                    persist(it.copy(resumeAllowed = ReconnectPolicy.resumeAllowedAfterEnd(it.resumeAllowed, reason)))
-                } catch (_: BridgeFailure) { }
+        if (service == null || !loaded) return
+        computers.entries.filter { it.pairing.resumeAllowed }.forEach { c ->
+            try { requireReady(); ensureTransport(c.id, c.pairing) }
+            catch (e: BridgeFailure) {
+                if (e.code == "DEVICE_LOCKED") {
+                    val t = transports.getOrPut(c.id) { Transport(c.id, c.pairing, ++serial) }
+                    t.error = "Waiting for the phone to be unlocked."; scheduleReconnect(t)
+                }
             }
         }
     }
-
-    private fun openTransport(record: TrustedPairing) {
-        // This is a new connection only. Pending RPC IDs and messages are never replayed.
-        val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Accessibility is unavailable.")
-        native.requireUnlocked()
-        requireNotifications(native)
-        endpoint = record.endpoint
-        packages = record.packages.toSet()
-        desiredActions = record.actionsEnabled
-        connecting = true
-        val current = generation
+    private fun ensureTransport(id: String, record: TrustedPairing) {
+        val old = transports[id]
+        if (old?.connected == true || old?.connecting == true || old?.retry != null) return
+        // Fail before replacing the retry owner, so a newly locked phone keeps its retry timer.
+        requireReady()
+        old?.let { close(it) }
+        val t = Transport(id, record, ++serial, retryAttempt = old?.retryAttempt ?: 0)
+        transports[id] = t
+        open(t)
+    }
+    private fun current(t: Transport, expectedSocket: WebSocket? = t.socket): Boolean {
+        val active = transports[t.id]
+        return active === t && TransportLifecyclePolicy.isCurrent(t.serial, active?.serial, expectedSocket, active?.socket)
+    }
+    private fun open(t: Transport) {
+        val native = requireReady()
+        t.connecting = true
         showNotification()
-        val transport = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.SECONDS)
-            .pingInterval(20, TimeUnit.SECONDS)
-            .retryOnConnectionFailure(false)
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .build()
-        client = transport
-        val request = Request.Builder().url(record.endpoint)
-            .header("Authorization", "Bearer " + record.token).build()
-        socket = transport.newWebSocket(request, object : WebSocketListener() {
-            override fun onOpen(webSocket: WebSocket, response: Response) {
-                main.post {
-                    if (generation != current || socket !== webSocket) {
-                        webSocket.cancel()
-                        return@post
-                    }
-                    try {
-                        native.requireUnlocked()
-                        requireNotifications(native)
-                    } catch (error: BridgeFailure) {
-                        if (error.code == "DEVICE_LOCKED") transportLost("Waiting for the phone to be unlocked.")
-                        return@post
-                    }
-                    connectTimeout?.let { main.removeCallbacks(it) }
-                    connectTimeout = null
-                    connecting = false
-                    connected = true
-                    actionsEnabled = desiredActions
-                    retryAttempt = 0
-                    lastError = ""
-                    if (!webSocket.send(JSONObject().put("type", "hello").put("protocol", 1)
-                            .put("device", "Android").put("readOnly", !actionsEnabled).toString())) {
-                        transportLost("Connection was interrupted.")
-                        return@post
-                    }
-                    showNotification()
-                }
-            }
-
-            override fun onMessage(webSocket: WebSocket, text: String) {
-                if (text.length > 32768 || text.toByteArray(Charsets.UTF_8).size > 32768) {
-                    main.post { if (generation == current) pause("Command exceeded the size limit.", ReconnectPolicy.EndReason.PROTOCOL) }
-                    return
-                }
-                main.post { if (generation == current && socket === webSocket) receive(text, current) }
-            }
-
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                main.post { if (generation == current) pause("Binary commands are not supported.", ReconnectPolicy.EndReason.PROTOCOL) }
-            }
-
-            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-                main.post {
-                    if (generation != current) return@post
-                    if (code == 1002 || code == 1003 || code == 1007 || code == 1008 || code == 1009) {
-                        pause("Desktop rejected this session. Resume locally after checking pairing.", ReconnectPolicy.EndReason.PROTOCOL)
-                    } else transportLost("Desktop disconnected. Reconnecting to the trusted computer.")
-                }
-            }
-
-            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                main.post { if (generation == current) transportLost("Desktop disconnected. Reconnecting to the trusted computer.") }
-            }
-
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                main.post {
-                    if (generation != current) return@post
-                    if ((appContext?.applicationInfo?.flags ?: 0) and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-                        Log.d("PhoneBridgeConnection", "webSocketFailure type=${t.javaClass.simpleName} http=${response?.code ?: "none"}")
-                    }
-                    if (ReconnectPolicy.isPermanentHttpRejection(response?.code) || t is javax.net.ssl.SSLException) {
-                        pause("Pairing or certificate was rejected. Check your computer, then resume locally.",
-                            ReconnectPolicy.EndReason.AUTHENTICATION)
-                    } else transportLost("Connection lost. Reconnecting to the trusted computer.")
-                }
-            }
+        val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(0, TimeUnit.SECONDS)
+            .pingInterval(20, TimeUnit.SECONDS).retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build()
+        t.client = client
+        val request = Request.Builder().url(t.record.endpoint).header("Authorization", "Bearer " + t.record.token).build()
+        t.socket = client.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(ws: WebSocket, response: Response) { main.post {
+                if (!current(t) || t.socket !== ws) { ws.cancel(); return@post }
+                try { native.requireUnlocked(); requireNotifications(native) }
+                catch (_: BridgeFailure) { lost(t, "Waiting for the phone to be unlocked."); return@post }
+                t.connectTimeout?.let { main.removeCallbacks(it) }; t.connectTimeout = null
+                t.connecting = false; t.connected = true; t.retryAttempt = 0; t.error = ""; globalError = ""
+                val hello = JSONObject().put("type", "hello").put("protocol", 1).put("device", "Android").put("readOnly", !t.record.actionsEnabled)
+                t.negotiatedV2 = response.header("X-PhoneBridge-Protocol") == "2"
+                if (t.negotiatedV2) hello.put("protocol", 2).put("deviceId", deviceId)
+                    .put("device", Build.MODEL).put("capabilities", JSONArray(listOf("multi_device", "control_lease", "control_queue", "element_actions", "state_v2", "display_awake")))
+                if (!ws.send(hello.toString())) lost(t, "Connection was interrupted.") else { sendStatus(t); showNotification() }
+            } }
+            override fun onMessage(ws: WebSocket, text: String) { main.post {
+                if (!current(t) || t.socket !== ws) return@post
+                if (text.length > 32768 || text.toByteArray(Charsets.UTF_8).size > 32768) pause(t, "Command exceeded the size limit.")
+                else receive(t, text)
+            } }
+            override fun onMessage(ws: WebSocket, bytes: ByteString) { main.post { if (current(t) && t.socket === ws) pause(t, "Binary commands are not supported.") } }
+            override fun onClosing(ws: WebSocket, code: Int, reason: String) { main.post {
+                if (!current(t) || t.socket !== ws) return@post
+                if (code in setOf(1002, 1003, 1007, 1008, 1009)) pause(t, "Desktop rejected this session. Resume locally after checking pairing.")
+                else lost(t, "Desktop disconnected. Reconnecting to the trusted computer.")
+            } }
+            override fun onClosed(ws: WebSocket, code: Int, reason: String) { main.post { if (current(t) && t.socket === ws) lost(t, "Desktop disconnected. Reconnecting to the trusted computer.") } }
+            override fun onFailure(ws: WebSocket, error: Throwable, response: Response?) { main.post {
+                if (!current(t) || t.socket !== ws) return@post
+                if (ReconnectPolicy.isPermanentHttpRejection(response?.code) || error is javax.net.ssl.SSLException)
+                    pause(t, "Pairing or certificate was rejected. Check your computer, then resume locally.")
+                else lost(t, "Connection lost. Reconnecting to the trusted computer.")
+            } }
         })
-        connectTimeout = Runnable {
-            if (generation == current && connecting) transportLost("Connection timed out. Reconnecting to the trusted computer.")
-        }.also { main.postDelayed(it, 12000) }
+        t.connectTimeout = Runnable { if (current(t) && t.connecting) lost(t, "Connection timed out. Reconnecting to the trusted computer.") }
+            .also { main.postDelayed(it, 12000) }
     }
-
-    fun setActionsEnabled(enabled: Boolean) {
-        if (enabled) {
-            if (!connected) throw BridgeFailure("NO_SESSION", "Connect before enabling actions.")
-            service?.requireUnlocked() ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Accessibility is unavailable.")
-            requireNotifications(service!!)
-        }
-        // Revocation takes effect in memory before touching the encrypted record.
-        if (!enabled) { actionsEnabled = false; desiredActions = false; service?.clearOperationTrail() }
-        saved?.let { persist(it.copy(actionsEnabled = enabled)) }
-        actionsEnabled = enabled
-        desiredActions = enabled
-        service?.invalidateNodes()
+    private fun scheduleReconnect(t: Transport) {
+        if (!current(t) || !transportEnabled(t) || service == null || t.connected || t.connecting || t.retry != null) return
+        t.retry = Runnable {
+            t.retry = null
+            if (!current(t) || !transportEnabled(t)) return@Runnable
+            try { ensureTransport(t.id, entry(t.id)?.pairing ?: t.record) }
+            catch (_: Exception) { scheduleReconnect(t) }
+        }.also { main.postDelayed(it, ReconnectPolicy.delayMillis(t.retryAttempt++)) }
         showNotification()
     }
-
-    /** Explicit owner Stop; keeps credentials, but disables persisted automatic resume. */
-    fun disconnect(error: String = "") {
-        pause(error, ReconnectPolicy.EndReason.OWNER_STOP)
+    private fun lost(t: Transport, error: String) {
+        if (!current(t)) return
+        close(t, error); scheduleReconnect(t)
     }
-
-    private fun closeTransport(error: String = "") {
-        fileInbox?.disconnected()
-        service?.clearOperationTrail()
-        operationScope.invalidate()
-        connected = false
-        connecting = false
-        actionsEnabled = false
-        desiredActions = false
-        timeout?.let { main.removeCallbacks(it) }
-        connectTimeout?.let { main.removeCallbacks(it) }
-        retryTask?.let { main.removeCallbacks(it) }
-        timeout = null
-        connectTimeout = null
-        retryTask = null
-        service?.invalidateNodes()
-        val oldSocket = socket
-        socket = null
-        oldSocket?.cancel()
-        client?.connectionPool?.evictAll()
-        client?.dispatcher?.executorService?.shutdown()
-        client = null
-        packages = emptySet()
-        endpoint = ""
-        lastError = error
-        appContext?.getSystemService(NotificationManager::class.java)?.cancel(NOTIFICATION_ID)
+    private fun pause(t: Transport, error: String) {
+        if (!current(t)) return
+        control.revoke(t.id); authorityChanged()
+        close(t, error)
+        entry(t.id)?.let { c -> updateTrust { store!!.update(t.id, c.pairing.copy(resumeAllowed = false)) } }
     }
-
-    private fun receive(text: String, expectedGeneration: Long) {
-        if (!connected) return
-        val request = try { JSONObject(text) } catch (_: Exception) {
-            pause("Invalid command format.", ReconnectPolicy.EndReason.PROTOCOL)
-            return
+    private fun close(t: Transport, error: String = "") {
+        control.disconnect(t.id, t.serial)
+        if (execution?.transport === t) execution?.invalidated = true
+        authorityChanged()
+        t.connected = false; t.connecting = false; t.error = error
+        t.retry?.let { main.removeCallbacks(it) }; t.retry = null
+        t.connectTimeout?.let { main.removeCallbacks(it) }; t.connectTimeout = null
+        val old = t.socket; t.socket = null; old?.cancel()
+        t.client?.connectionPool?.evictAll(); t.client?.dispatcher?.executorService?.shutdown(); t.client = null
+        fileInbox?.disconnected(t.serial)
+        showNotification()
+    }
+    private fun authorityChanged() {
+        control.advance(operationScope.pending == null && service != null) { id, connection ->
+            transports[id]?.let { it.serial == connection && it.connected && current(it) } == true
         }
+        execution?.let { if (!control.valid(it.lease)) { it.invalidated = true; operationScope.invalidate() } }
+        val ownerChanged = lastAuthority !== control.lease
+        if (ownerChanged) {
+            lastAuthority = control.lease
+            service?.clearOperationTrail(); service?.invalidateNodes()
+        }
+        if (ownerChanged || lastWaitingCount != control.waitingCount) broadcastStatus()
+        lastWaitingCount = control.waitingCount
+        flushControlEvents()
+        updateAwake(); showNotification()
+    }
+    private fun receive(t: Transport, text: String) {
+        if (!t.connected) return
+        val request = try { JSONObject(text) } catch (_: Exception) { pause(t, "Invalid command format."); return }
         val id = request.opt("id") as? String
         val method = request.opt("method") as? String
-        if (id == null || !id.matches(Regex("[A-Za-z0-9_-]{1,128}")) || method == null) {
-            pause("Invalid command format.", ReconnectPolicy.EndReason.PROTOCOL)
-            return
-        }
-        if (pending != null) {
-            send(id, null, BridgeFailure("BUSY", "One operation is already in progress."))
-            return
-        }
+        if (id == null || !id.matches(Regex("[A-Za-z0-9_-]{1,128}")) || method == null) { pause(t, "Invalid command format."); return }
         val params = request.opt("params")
-        if (params !is JSONObject) {
-            send(id, null, BridgeFailure("INVALID_ARGUMENT", "params must be an object."))
-            return
-        }
-        check(operationScope.begin(id))
-        timeout = Runnable {
-            if (generation == expectedGeneration && pending == id) {
-                send(id, null, BridgeFailure("TIMEOUT", "Operation timed out; outcome may be unknown. Do not retry automatically."))
-                if (ReconnectPolicy.timedOutReadCanReconnect(method)) {
-                    transportLost("Observation timed out. Reconnecting to the trusted computer.")
-                } else {
-                    pause("Operation timed out. Resume locally and observe before retrying.", ReconnectPolicy.EndReason.TIMEOUT)
-                }
-            }
-        }.also { main.postDelayed(it, 12000) }
-        val complete: (JSONObject?, BridgeFailure?) -> Unit = complete@{ result, error ->
-            if (!operationScope.complete(id, expectedGeneration)) return@complete
-            timeout?.let { main.removeCallbacks(it) }
-            timeout = null
-            send(id, result, error)
-        }
+        if (params !is JSONObject) { send(t, id, null, BridgeFailure("INVALID_ARGUMENT", "params must be an object.")); return }
         try {
-            val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Accessibility is unavailable.")
-            native.execute(method, params, expectedGeneration, complete)
-        } catch (error: BridgeFailure) {
-            complete(null, error)
-        } catch (_: Exception) {
-            complete(null, BridgeFailure("UNAVAILABLE", "Android could not complete the operation."))
+            if (request.has("controlId") && request.opt("controlId") !is String) throw BridgeFailure("INVALID_ARGUMENT", "controlId must be a UUID.")
+            val task = request.opt("controlId") as? String
+            val name = entry(t.id)?.name ?: "Computer"
+            if (method == "acquire_control" || method == "release_control" || method == "control_status") {
+                val controlId = params.opt("controlId") as? String ?: task ?: throw BridgeFailure("INVALID_ARGUMENT", "controlId must be a UUID.")
+                if (task != null && task != controlId) throw BridgeFailure("INVALID_ARGUMENT", "Conflicting control IDs.")
+                if (method == "acquire_control") {
+                    requireReady()
+                    if (params.has("queue") && params.opt("queue") !is Boolean)
+                        throw BridgeFailure("INVALID_ARGUMENT", "queue must be a boolean.")
+                    val queue = params.optBoolean("queue", false)
+                    if (!queue) operationScope.requireIdle()
+                    val result = control.request(t.id, t.serial, name, controlId, queue,
+                        operationScope.pending == null) { computerId, connection ->
+                            transports[computerId]?.let { it.serial == connection && it.connected && current(it) } == true
+                        }
+                    authorityChanged()
+                    send(t, id, taskStatus(result), null)
+                } else if (method == "control_status") {
+                    control.status(t.id, t.serial, controlId)
+                    authorityChanged()
+                    send(t, id, taskStatus(control.status(t.id, t.serial, controlId)), null)
+                } else {
+                    val result = control.release(t.id, t.serial, controlId)
+                    authorityChanged()
+                    send(t, id, taskStatus(result).put("released", true), null)
+                }
+                updateAwake(); return
+            }
+            if (method !in setOf("file_offer", "state", "screenshot", "tap", "long_press", "swipe", "set_text",
+                    "node_action", "commit_text", "global_action", "launch_app"))
+                throw BridgeFailure("UNKNOWN_METHOD", "Unknown Android method.")
+            // Invalid explicit tasks must report terminal expiry even while another operation is running.
+            if (execution != null) {
+                if (task != null) control.requireExistingControl(t.id, t.serial, task)
+                operationScope.requireIdle()
+            }
+            val before = control.lease
+            val lease = control.authorize(t.id, t.serial, name, task)
+            if (before !== lease) authorityChanged()
+            updateAwake()
+            check(operationScope.begin(id))
+            val op = Operation(id, method, t, lease, t.record.copy(), operationScope.generation)
+            execution = op
+            val complete: (JSONObject?, BridgeFailure?) -> Unit = { result, error -> main.post { settle(op, result, error) } }
+            op.timeout = Runnable {
+                if (execution !== op || op.replied) return@Runnable
+                op.invalidated = true
+                operationScope.invalidate()
+                op.replied = true
+                if (current(t, op.socket)) {
+                    send(t, id, null, BridgeFailure("TIMEOUT", "Operation timed out; outcome may be unknown. Do not retry automatically."))
+                    if (ReconnectPolicy.timedOutReadCanReconnect(method))
+                        lost(t, "Observation timed out. Reconnecting to the trusted computer.")
+                    else pause(t, "Operation timed out. Resume locally and observe before retrying.")
+                }
+                // Read-only callbacks cannot apply late results. A delayed, never-dispatched call
+                // fails its authority check. Accepted gestures retain the fence until the real
+                // Android completion/cancellation callback, regardless of elapsed time.
+                if (operationScope.canSettleOnTimeout()) settle(op, null, null)
+            }.also { main.postDelayed(it, 12000) }
+            try {
+                val native = service ?: throw BridgeFailure("ACCESSIBILITY_DISABLED", "Accessibility is unavailable.")
+                native.execute(method, params, op.generation, complete)
+            } catch (e: BridgeFailure) { complete(null, e) }
+            catch (_: Exception) { complete(null, BridgeFailure("UNAVAILABLE", "Android could not complete the operation.")) }
+        } catch (e: BridgeFailure) {
+            authorityChanged()
+            send(t, id, null, e)
         }
     }
-
-    private fun send(id: String, result: JSONObject?, error: BridgeFailure?) {
+    private fun settle(op: Operation, result: JSONObject?, error: BridgeFailure?) {
+        if (execution !== op) return
+        val valid = isOperationCurrent(op.generation)
+        op.timeout?.let { main.removeCallbacks(it) }
+        execution = null
+        check(operationScope.complete(op.id, op.generation))
+        if (!op.replied && current(op.transport) && op.transport.connected)
+            send(op.transport, op.id, if (valid) result else null,
+                if (valid) error else BridgeFailure("CONTROL_EXPIRED", "This control task has ended. Acquire a new task explicitly."))
+        authorityChanged()
+    }
+    private fun send(t: Transport, id: String, result: JSONObject?, error: BridgeFailure?) {
+        if (!current(t) || !t.connected) return
         val message = JSONObject().put("id", id)
         if (error != null) message.put("error", JSONObject().put("code", error.code).put("message", error.message))
         else message.put("result", result ?: JSONObject())
         val encoded = message.toString()
-        if (encoded.length > 3 * 1024 * 1024) {
-            pause("Operation result exceeded the size limit.", ReconnectPolicy.EndReason.PROTOCOL)
-        } else if (socket?.send(encoded) != true) {
-            transportLost("Result could not be delivered. Observe after reconnection; never retry automatically.")
+        if (encoded.length > 3 * 1024 * 1024) pause(t, "Operation result exceeded the size limit.")
+        else if (t.connected && t.socket?.send(encoded) != true) lost(t, "Result could not be delivered. Observe after reconnection; never retry automatically.")
+    }
+    private fun broadcastStatus() { transports.values.toList().forEach(::sendStatus) }
+    private fun sendStatus(t: Transport) {
+        if (!current(t)) return
+        val owner = control.lease
+        val message = TransportStatusPolicy.message(t.negotiatedV2, t.connected, t.record.actionsEnabled,
+            t.id, owner?.computerId, owner?.name, control.waitingCount) ?: return
+        val socket = t.socket ?: return
+        if (!socket.send(message.toString())) main.post {
+            if (current(t, socket)) lost(t, "Connection status could not be delivered.")
         }
     }
-
     fun refreshNotificationLanguage() { showNotification() }
-
+    private fun taskStatus(value: ControlLeaseManager.TaskStatus): JSONObject = JSONObject()
+        .put("controlId", value.controlId).put("state", value.state).apply {
+            value.position?.let { put("position", it) }
+            value.ownerName?.let { put("ownerName", it) }
+            value.expiresInMs?.let { put("expiresInMs", it) }
+        }
+    private fun flushControlEvents() {
+        control.drainControlEvents().forEach { event ->
+            val t = transports[event.computerId] ?: return@forEach
+            if (!current(t) || t.serial != event.connection || !t.connected || !t.negotiatedV2) return@forEach
+            val message = JSONObject().put("type", "control_event").put("controlId", event.controlId).put("state", event.state)
+            event.position?.let { message.put("position", it) }
+            event.ownerName?.let { message.put("ownerName", it) }
+            val socket = t.socket ?: return@forEach
+            if (!socket.send(message.toString())) main.post {
+                if (current(t, socket)) lost(t, "Control notification could not be delivered.")
+            }
+        }
+    }
     private fun showNotification() {
-        val context = appContext ?: return
-        if (!connected && !connecting && retryTask == null) return
-        val stop = PendingIntent.getBroadcast(context, 1,
-            Intent(context, StopSessionReceiver::class.java).setAction(STOP_ACTION),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val open = PendingIntent.getActivity(context, 2, Intent(context, MainActivity::class.java),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val strings = AppLanguage.resources(context)
-        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
-            NotificationChannel(CHANNEL, strings.getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW))
-        val state = strings.getString(if (retryTask != null) R.string.session_reconnecting else if (connecting) R.string.session_connecting
-            else if (actionsEnabled) R.string.session_actions_enabled else R.string.session_read_only)
-        val notification = Notification.Builder(context, CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentTitle("PhoneBridge • " + state)
-            .setContentText(strings.getString(R.string.session_description))
-            .setContentIntent(open)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setVisibility(Notification.VISIBILITY_PRIVATE)
-            .addAction(Notification.Action.Builder(null, strings.getString(R.string.session_stop), stop).build())
-            .build()
-        context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
+        val value = context ?: return
+        val manager = value.getSystemService(NotificationManager::class.java)
+        if (transports.values.none { it.connected || it.connecting || it.retry != null }) { manager.cancel(NOTIFICATION_ID); return }
+        val stop = PendingIntent.getBroadcast(value, 1, Intent(value, StopSessionReceiver::class.java).setAction(STOP_ACTION), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val open = PendingIntent.getActivity(value, 2, Intent(value, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val strings = AppLanguage.resources(value)
+        manager.createNotificationChannel(NotificationChannel(CHANNEL, strings.getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW))
+        val state = strings.getString(if (transports.values.any { it.retry != null }) R.string.session_reconnecting
+            else if (!connected) R.string.session_connecting else if (actionsEnabled) R.string.session_actions_enabled else R.string.session_read_only)
+        manager.notify(NOTIFICATION_ID, Notification.Builder(value, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentTitle("PhoneBridge • $state").setContentText(strings.getString(R.string.session_description))
+            .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setVisibility(Notification.VISIBILITY_PRIVATE)
+            .addAction(Notification.Action.Builder(null, strings.getString(R.string.session_stop), stop).build()).build())
     }
 }
 
 class StopSessionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action == BridgeSession.STOP_ACTION) {
-            BridgeSession.initialize(context)
-            BridgeSession.disconnect()
-        }
+        if (intent.action == BridgeSession.STOP_ACTION) { BridgeSession.initialize(context); BridgeSession.disconnect() }
     }
 }

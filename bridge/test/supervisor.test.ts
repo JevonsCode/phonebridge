@@ -1,6 +1,6 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -48,7 +48,8 @@ test('concurrent authenticated start requests share one ready Hub and retain the
   const firstPid = supervisor.managedProcessId;
   assert.ok(firstPid);
   await start(); assert.equal(supervisor.managedProcessId, firstPid);
-  assert.deepEqual(await (await fetch(`${url}/status`, { headers })).json(), { connected: false, busy: false, protocol: 1 });
+  assert.deepEqual(await (await fetch(`${url}/status`, { headers })).json(), { connected: false, busy: false, protocol: 1, devices: [] });
+  assert.deepEqual(await (await fetch(`${url}/devices`, { headers })).json(), { devices: [] });
 });
 
 test('WebSocket and RPC pass through the original port without replaying a failed operation', async t => {
@@ -142,15 +143,37 @@ test('file upload, download and receipt pass through the installed service port'
   const { url, headers } = await setup(t, true);
   const phone = new WebSocket(`${url.replace('http', 'ws')}/device`, { headers });
   t.after(() => phone.terminate()); await once(phone, 'open');
-  phone.send(JSON.stringify({ type: 'hello', protocol: 1, readOnly: true }));
+  const deviceId = randomUUID(); const controlId = randomUUID();
+  phone.send(JSON.stringify({ type: 'hello', protocol: 2, deviceId, device: 'Routed phone', readOnly: true, capabilities: ['control_lease'] }));
   await until(async () => (await (await fetch(`${url}/status`, { headers })).json()).connected, 'Phone handshake failed');
+  assert.equal((await (await fetch(`${url}/devices`, { headers })).json()).devices[0].id, deviceId);
   let fileId = '';
-  phone.on('message', bytes => { const request = JSON.parse(bytes.toString()); fileId = request.params.id; phone.send(JSON.stringify({ id: request.id, result: { queued: true } })); });
+  phone.on('message', bytes => { const request = JSON.parse(bytes.toString()); assert.equal(request.controlId, controlId); fileId = request.params.id; phone.send(JSON.stringify({ id: request.id, result: { queued: true } })); });
   const metadata = Buffer.from(JSON.stringify({ name: 'fixture.png', mimeType: 'image/png', size: 3 })).toString('base64url');
-  const upload = await fetch(`${url}/files`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/octet-stream', 'X-PhoneBridge-File': metadata }, body: 'abc' });
+  const upload = await fetch(`${url}/files?deviceId=${deviceId}&controlId=${controlId}`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/octet-stream', 'X-PhoneBridge-File': metadata }, body: 'abc' });
   assert.equal(upload.status, 201);
   assert.equal((await fetch(`${url}/files/${fileId}`)).status, 401);
   assert.equal(await (await fetch(`${url}/files/${fileId}`, { headers })).text(), 'abc');
   assert.equal((await fetch(`${url}/files/${fileId}/received`, { method: 'POST', headers })).status, 200);
   assert.equal((await (await fetch(`${url}/status`, { headers })).json()).transfer.state, 'received');
+});
+
+test('control waits pass through the installed service port and receive a queued grant', async t => {
+  const { url, headers } = await setup(t, true);
+  const phone = new WebSocket(`${url.replace('http', 'ws')}/device`, { headers });
+  t.after(() => phone.terminate()); await once(phone, 'open');
+  const deviceId = randomUUID(); const controlId = randomUUID();
+  phone.send(JSON.stringify({ type: 'hello', protocol: 2, deviceId, device: 'Queue phone', readOnly: false, capabilities: ['control_lease', 'control_queue'] }));
+  await until(async () => (await (await fetch(`${url}/devices`, { headers })).json()).devices.some((d: any) => d.id === deviceId && d.connected), 'Queue phone handshake failed');
+  const connectionId = (await (await fetch(`${url}/devices`, { headers })).json()).devices[0].connectionId;
+  phone.on('message', bytes => {
+    const request = JSON.parse(bytes.toString()); assert.equal(request.method, 'control_status'); assert.equal(request.params.controlId, controlId);
+    phone.send(JSON.stringify({ id: request.id, result: { state: 'queued', position: 1 } }));
+    phone.send(JSON.stringify({ type: 'control_event', controlId, state: 'active' }));
+  });
+  const path = `/control-events?${new URLSearchParams({ deviceId, connectionId, controlId, waitMs: '25000' })}`;
+  assert.equal((await fetch(`${url}${path}`)).status, 401);
+  const result = await fetch(`${url}${path}`, { headers }); const body = await result.json();
+  assert.equal(result.status, 200, JSON.stringify(body));
+  assert.deepEqual(body, { deviceId, connectionId, controlId, state: 'active' });
 });

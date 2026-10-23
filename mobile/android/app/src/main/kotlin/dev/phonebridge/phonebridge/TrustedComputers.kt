@@ -102,9 +102,9 @@ class TrustedComputerRepository(private val persistence: TrustedComputerPersiste
     fun list(): TrustedComputers {
         val computers = persistence.read()
         return computers.copy(entries = computers.entries.map {
-            if (it.id == computers.activeId) it.copy(pairing = it.pairing.copy(
+            it.copy(pairing = it.pairing.copy(
                 resumeAllowed = it.pairing.resumeAllowed && !persistence.isPaused(),
-                actionsEnabled = it.pairing.actionsEnabled && !persistence.actionsPaused())) else it
+                actionsEnabled = it.pairing.actionsEnabled && !persistence.actionsPaused()))
         })
     }
 
@@ -114,7 +114,7 @@ class TrustedComputerRepository(private val persistence: TrustedComputerPersiste
         try {
             persistence.write(next)
             persistence.clearActionsPaused()
-            if (next.active?.pairing?.resumeAllowed == true) persistence.clearPaused()
+            if (next.entries.any { it.pairing.resumeAllowed }) persistence.clearPaused()
         } catch (error: Exception) {
             // Revocation must survive restart even when rewriting the encrypted collection fails.
             try { persistence.markActionsPaused() } catch (_: Exception) { }

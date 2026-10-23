@@ -3,12 +3,12 @@ import { constants } from 'node:fs';
 import { basename, extname, isAbsolute } from 'node:path';
 import { fileMetadataSchema, MAX_FILE_BYTES } from './file-transfer.js';
 import { validateHubUrl } from './hub-url.js';
-import { validateToken } from './protocol.js';
+import { BridgeError, validateToken } from './protocol.js';
 
 const mimeTypes: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp', '.heic': 'image/heic', '.pdf': 'application/pdf', '.txt': 'text/plain', '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.zip': 'application/zip' };
 
 /** Only the explicit file is opened; the hub never accepts a local filesystem path. */
-export async function sendLocalFile(url: URL, token: string, path: string): Promise<unknown> {
+export async function sendLocalFile(url: URL, token: string, path: string, routing: { deviceId?: string; controlId?: string; connectionId?: string } = {}): Promise<unknown> {
   validateHubUrl(url); validateToken(token);
   if (typeof path !== 'string' || !isAbsolute(path) || path.length > 4096) throw new Error('Choose an absolute path to a local file.');
   const file = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0)).catch(() => { throw new Error('The selected file cannot be opened.'); });
@@ -18,14 +18,18 @@ export async function sendLocalFile(url: URL, token: string, path: string): Prom
     const metadata = fileMetadataSchema.parse({ name: basename(path), size: stat.size, mimeType: mimeTypes[extname(path).toLowerCase()] ?? 'application/octet-stream' });
     const stream = file.createReadStream({ autoClose: false, start: 0, end: stat.size - 1 });
     try {
-      const response = await fetch(new URL('/files', url), {
+      const endpoint = new URL('/files', url);
+      if (routing.deviceId !== undefined) endpoint.searchParams.set('deviceId', routing.deviceId);
+      if (routing.controlId !== undefined) endpoint.searchParams.set('controlId', routing.controlId);
+      if (routing.connectionId !== undefined) endpoint.searchParams.set('connectionId', routing.connectionId);
+      const response = await fetch(endpoint, {
         method: 'POST', redirect: 'error', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream', 'Content-Length': String(stat.size), 'X-PhoneBridge-File': Buffer.from(JSON.stringify(metadata)).toString('base64url') },
         body: stream as unknown as BodyInit, duplex: 'half', signal: AbortSignal.timeout(60000),
       } as RequestInit);
       const text = await response.text();
       if (text.length > 8192) throw new Error('Invalid file transfer response.');
       const result = JSON.parse(text);
-      if (!response.ok) throw new Error(result.error?.message ?? 'The phone could not accept the file offer.');
+      if (!response.ok) throw new BridgeError(typeof result.error?.code === 'string' ? result.error.code : 'FILE_UNAVAILABLE', typeof result.error?.message === 'string' ? result.error.message : 'The phone could not accept the file offer.', response.status);
       return { ...result, message: 'Waiting for the phone owner to receive the file, then choose Share. No message has been sent.' };
     } finally { stream.destroy(); }
   } finally { await file.close(); }

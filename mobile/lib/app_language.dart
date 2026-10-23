@@ -153,6 +153,22 @@ const _errors = <String, String>{
 };
 
 const _english = <String, String>{
+  '等待控制': 'Waiting for control',
+  '保持屏幕常亮': 'Keep screen awake',
+  '关闭': 'Off',
+  '控制期间': 'While controlling',
+  '始终': 'Always',
+  '控制期间仅在 AI 正在控制时生效；始终在 PhoneBridge 无障碍服务运行时生效。手动息屏或锁屏优先，不会唤醒或解锁手机。':
+      'While controlling applies while AI controls your phone. Always applies while the PhoneBridge accessibility service runs. Turning off or locking the screen takes priority; this never wakes or unlocks your phone.',
+  '无法读取屏幕常亮设置，请重试': 'Could not read the screen awake setting. Try again.',
+  '无法保存屏幕常亮设置，请重试': 'Could not save the screen awake setting. Try again.',
+  '台电脑在线': 'computers online',
+  '当前控制方': 'Controlled by',
+  '点击电脑可将控制权交给它，其他电脑保持连接。':
+      'Tap a computer to hand over control. Other computers stay connected.',
+  '正在控制': 'Controlling',
+  '连接异常，请检查电脑服务或网络': 'Connection issue. Check the computer service or network.',
+  '恢复连接': 'Resume connection',
   "\u6765\u81ea\u7535\u8111\u7684\u6587\u4ef6": "Files from your computer",
   "\u63a5\u6536\u540e\u70b9\u5206\u4eab\uff0c\u9009\u62e9\u5fae\u4fe1\u3001WhatsApp \u6216\u5176\u4ed6\u5e94\u7528":
       "Receive, then share to WeChat, WhatsApp or another app.",

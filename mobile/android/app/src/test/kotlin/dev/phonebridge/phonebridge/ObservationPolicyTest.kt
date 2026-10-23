@@ -22,8 +22,17 @@ class ObservationPolicyTest {
         }
     }
 
-    @Test fun contentAndCursorRefreshesKeepCurrentNodeIds() {
-        assertFalse(ObservationPolicy.invalidatesNodeIds(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED))
+    @Test fun contentRebindExpiresIdsEvenWhenRecycledChildButtonIsIdentical() {
+        val observed = NodeActionPolicy.Target(7, "com.example.list", WindowGeometry.Bounds(10, 20, 100, 60),
+            "android.widget.Button", "com.example.list:id/open", "Open", null)
+        val reboundForAnotherItem = observed.copy()
+        // Refreshing the child alone cannot establish which parent list item it now belongs to.
+        NodeActionPolicy.requireUnchanged(observed, reboundForAnotherItem)
+        assertTrue(ObservationPolicy.invalidatesNodeIds(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED))
+        assertFalse(ObservationPolicy.isExcludedSystemRefresh(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, 7, setOf(24)))
+    }
+
+    @Test fun cursorOnlyRefreshKeepsCurrentNodeIds() {
         assertFalse(ObservationPolicy.invalidatesNodeIds(AccessibilityEvent.TYPE_VIEW_TEXT_SELECTION_CHANGED))
     }
 
