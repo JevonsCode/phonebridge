@@ -4,8 +4,8 @@ PhoneBridge provides a Flutter window for macOS 13 or later and Windows, using t
 
 ## Download and open
 
-1. Open [GitHub Releases](https://github.com/JevonsCode/phonebridge/releases). For 0.6.1, download `phonebridge-0.6.1-macos-arm64.dmg` for Apple Silicon (M1 or later), or `phonebridge-0.6.1-macos-x64.dmg` for an Intel Mac, together with its `.sha256` file. Each architecture also has an alternative App ZIP. Unreleased PR builds remain available from **Checks → Flutter desktop client preview → Details** as 14-day CI artifacts.
-2. In the download folder, run `shasum -a 256 -c phonebridge-0.6.1-macos-arm64.dmg.sha256` (replace `arm64` with `x64` on Intel). Open the matching DMG and drag **PhoneBridge.app** into **Applications**. `~/Applications` also works. Do not run the persistent service directly from the mounted DMG or Downloads.
+1. Open [GitHub Releases](https://github.com/JevonsCode/phonebridge/releases). For 0.7.0, download `phonebridge-0.7.0-macos-arm64.dmg` for Apple Silicon (M1 or later), or `phonebridge-0.7.0-macos-x64.dmg` for an Intel Mac, together with its `.sha256` file. Each architecture also has an alternative App ZIP. Unreleased PR builds remain available from **Checks → Flutter desktop client preview → Details** as 14-day CI artifacts.
+2. In the download folder, run `shasum -a 256 -c phonebridge-0.7.0-macos-arm64.dmg.sha256` (replace `arm64` with `x64` on Intel). Open the matching DMG and drag **PhoneBridge.app** into **Applications**. `~/Applications` also works. Do not run the persistent service directly from the mounted DMG or Downloads.
 3. Open **PhoneBridge**. The window shows connection status, the selected network, a pairing QR and **Copy MCP configuration**. Keep the Android phone on the same reachable private Wi-Fi, scan once in PhoneBridge, and enable the Android permissions on the phone. Later openings retain this pairing.
 
 The preview is ad-hoc signed, without Apple Developer ID signing or notarization. If macOS asks you to approve the App, use the system's normal approval flow. The package does not remove quarantine or disable Gatekeeper. Approve local-network access if macOS asks. Guest-network isolation or a Mac firewall policy can prevent phone access.
@@ -22,7 +22,7 @@ On reopening an upgraded App, a fingerprint of the bundled runtime inputs refres
 
 Service replacement waits for launchd to remove the old job after `bootout`, including during rollback. A successful `bootout` alone does not mean the old process has finished closing its sockets; bootstrapping immediately can return status 5 on macOS.
 
-In the updated Android source, **Scan / 扫一扫** is always visible at the top right of the connection home page, including for a remembered computer. It opens the built-in scanner directly. With an active connection, it first asks to pause; cancelling leaves the connection untouched, and pausing keeps remembered computers. Scanning fills pairing details only and still requires local consent. Older installed Android builds use **Connect computer**, or tap the remembered computer card → **Pair another computer** → **Scan computer pairing code**.
+In Android 0.7.0, **Scan / 扫一扫** is always visible at the top right of the connection home page, including for a remembered computer. It opens the built-in scanner directly. With an active connection, it first asks to pause; cancelling leaves the connection untouched, and pausing keeps remembered computers. Scanning fills pairing details only and still requires local consent. Older installed Android builds use **Connect computer**, or tap the remembered computer card → **Pair another computer** → **Scan computer pairing code**.
 
 To remove **only the owned login service**, quit the window and run:
 

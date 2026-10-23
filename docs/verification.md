@@ -2,6 +2,10 @@
 
 This document records evidence, not planned capabilities. Update it when tests finish. No private phone data, screenshots, tokens or serial numbers belong here.
 
+## v0.7.0 integration (2026-10-23)
+
+See the [0.7.0 release record](release-v0.7.0.md) for combined test results, the final APK identity, physical Mac/Android upgrade, two MCP clients sharing one real phone, file-transfer evidence and remaining limits.
+
 ## v0.6.0 (2026-10-11)
 
 - Android 16: installed the ARM64 preview as an update. PackageManager reports 0.6.0 / 2011. Reading the installed APK back gives SHA256 `EFD253B35689CCADA1D4F3B142C7858D4AE54910C6BA76CC4BF152C8762A88C3`; the original first-install date, pairing and action consent were retained.
