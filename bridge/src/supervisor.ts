@@ -16,6 +16,11 @@ type Options = {
   discovery?: false | { port?: number; host?: string; allowLoopback?: boolean };
 };
 
+export function supervisorOptionsForPlatform(options: Options, platform: NodeJS.Platform = process.platform): Options {
+  // Existing Windows installations may have only their TCP service permission.
+  return platform === 'win32' ? { ...options, discovery: false } : options;
+}
+
 /** The original public endpoint survives a Hub crash. No RPC is ever replayed. */
 export class DesktopSupervisor {
   private readonly server: http.Server | https.Server;
@@ -112,7 +117,9 @@ export class DesktopSupervisor {
           reply = trustedDiscoveryResponse(this.options.token, { type: 'phonebridge_discover', version: 1,
             identity: query.get('identity'), nonce: query.get('nonce') },
           this.discoveryEndpoint(),
-          this.options.discovery !== false && !!this.options.discovery?.allowLoopback);
+          // The actual HTTP listener remains challengeable independently of UDP,
+          // including a loopback-only management listener.
+          true);
         }
       }
       this.respond(res, reply ? 200 : 404, reply ?? { error: { code: 'NOT_FOUND' } }); return;

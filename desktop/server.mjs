@@ -217,9 +217,9 @@ async function main() {
     recovery = createNetworkRecovery({ config, networks: availableNetworks,
       readConfig: () => readOwnedConfig(path, sid),
       createCandidate: async next => {
-        const { DesktopSupervisor } = await import('../bridge/dist/supervisor.js');
-        const candidate = new DesktopSupervisor({ token, host: next.hostAddress, port: next.port, allowLan: true,
-          logFile: process.env.PHONEBRIDGE_LOG_FILE ?? join(dirname(savedCredentialFile), 'operations.jsonl') });
+        const { DesktopSupervisor, supervisorOptionsForPlatform } = await import('../bridge/dist/supervisor.js');
+        const candidate = new DesktopSupervisor(supervisorOptionsForPlatform({ token, host: next.hostAddress, port: next.port, allowLan: true,
+          logFile: process.env.PHONEBRIDGE_LOG_FILE ?? join(dirname(savedCredentialFile), 'operations.jsonl') }));
         try { await candidate.start(); return candidate; }
         catch (error) { await candidate.close(); throw error; }
       },

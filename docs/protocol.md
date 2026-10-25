@@ -2,6 +2,8 @@
 
 Phone connects to `ws[s]://HOST:PORT/device` with `Authorization: Bearer TOKEN`. The Hub refuses browser origins and wrong authentication. Pairing credentials remain scoped to the owner computer, not independently revocable per phone; lists and logs never expose them. Phone supports WebSocket ping/pong.
 
+Windows desktop uses the existing TCP `/discovery` HMAC challenge for trusted address recovery without opening a new UDP listener; macOS retains UDP discovery on port 8766.
+
 A v2 Hub advertises `X-PhoneBridge-Protocol: 2` in the WebSocket upgrade response. A new phone sends this hello only after seeing that header:
 
 ```json

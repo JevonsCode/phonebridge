@@ -4,7 +4,7 @@ import { createSocket, type Socket } from 'node:dgram';
 import { createServer } from 'node:net';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
-import { DesktopSupervisor } from '../dist/supervisor.js';
+import { DesktopSupervisor, supervisorOptionsForPlatform } from '../dist/supervisor.js';
 import { discoveryIdentity, discoveryProof, trustedDiscoveryResponse, TrustedDiscoveryResponder } from '../dist/discovery.js';
 
 const token = 'a'.repeat(32);
@@ -109,4 +109,21 @@ test('ordinary loopback supervisors leave production UDP discovery disabled', as
   const supervisor = new DesktopSupervisor({ token, port: 0, autoStart: false });
   await supervisor.start(); t.after(() => supervisor.close());
   assert.deepEqual(supervisor.discoveryStatus, { listening: false });
+});
+
+test('Windows entry options disable UDP while retaining the signed HTTP challenge and Mac UDP options', async t => {
+  const base = { token, port: 0, autoStart: false, discovery: { host: '127.0.0.1', port: 0, allowLoopback: true } };
+  const options = supervisorOptionsForPlatform(base, 'win32');
+  assert.equal(options.discovery, false);
+  assert.deepEqual(supervisorOptionsForPlatform(base, 'darwin'), base);
+  const supervisor = new DesktopSupervisor(options);
+  const url = await supervisor.start(); t.after(() => supervisor.close());
+  assert.deepEqual(supervisor.discoveryStatus, { listening: false });
+  const response = await fetch(`${url}/discovery?${new URLSearchParams({ identity, nonce })}`);
+  assert.equal(response.status, 200);
+  const found = await response.json();
+  assert.equal(found.endpoint, `${url.replace(/^http/, 'ws')}/device`);
+  assert.equal(found.proof, discoveryProof(token, identity, nonce, found.endpoint));
+  assert.equal(supervisor.managedProcessId, undefined);
+  assert.equal((await fetch(`${url}/discovery?${new URLSearchParams({ identity: 'f'.repeat(64), nonce })}`)).status, 404);
 });

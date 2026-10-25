@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { DesktopSupervisor } from './supervisor.js';
+import { DesktopSupervisor, supervisorOptionsForPlatform } from './supervisor.js';
 import { credentialPath, loadOrCreateSavedToken } from './credentials.js';
 import { startPairingDisplay } from './pairing.js';
 import { dirname, join } from 'node:path';
@@ -29,9 +29,9 @@ async function main(): Promise<void> {
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port.');
   const cert = process.env.PHONEBRIDGE_TLS_CERT, key = process.env.PHONEBRIDGE_TLS_KEY;
   if (!!cert !== !!key) throw new Error('Provide both TLS certificate and key.');
-  const sharedOptions = { token, allowLan: args.includes('--allow-lan'),
+  const sharedOptions = supervisorOptionsForPlatform({ token, allowLan: args.includes('--allow-lan'),
     logFile: process.env.PHONEBRIDGE_LOG_FILE ?? (config?.credentialFile ? join(dirname(config.credentialFile), 'operations.jsonl') : undefined),
-    tls: cert && key ? { cert: readFileSync(cert), key: readFileSync(key) } : undefined };
+    tls: cert && key ? { cert: readFileSync(cert), key: readFileSync(key) } : undefined });
   let supervisor: DesktopSupervisor;
   let recovery: any;
   let maintenance: any;
