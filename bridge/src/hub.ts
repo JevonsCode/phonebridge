@@ -8,12 +8,13 @@ import { FileOperationJournal, historyQuerySchema, journalErrorCode, operationPa
 
 import { FileTransferSlot, fileMetadataSchema } from './file-transfer.js';
 
-type Options = { token: string; host?: string; port?: number; allowLan?: boolean; timeoutMs?: number; tls?: { cert: Buffer; key: Buffer }; journal?: OperationJournal };
+type Options = { token: string; host?: string; port?: number; allowLan?: boolean; timeoutMs?: number; heartbeatIntervalMs?: number; tls?: { cert: Buffer; key: Buffer }; journal?: OperationJournal; publicEndpoint?: string };
 export type Routing = { deviceId?: string; controlId?: string; connectionId?: string };
-type Device = { id: string; name: string; protocol: number; capabilities: string[]; readOnly: boolean; controlling: boolean; controlOwnerName: string; waitingCount: number; connectionId: string; ws?: WebSocket; ready: boolean; alive: boolean; pending?: Pending; dispatching: boolean; managementPending: Map<string, Pending>; managementDispatching: number; controlEvents: Map<string, CachedControlEvent>; controlEventSequence: number; controlWaiters: Set<ControlWaiter>; eventTail: Promise<void>; eventWrites: number; files: FileTransferSlot };
+type DisconnectReason = 'SOCKET_CLOSED' | 'SOCKET_ABNORMAL_CLOSE' | 'SOCKET_ERROR' | 'HEARTBEAT_TIMEOUT' | 'COMMAND_TIMEOUT' | 'SEND_FAILED' | 'PROTOCOL_ERROR' | 'HUB_SHUTDOWN' | 'JOURNAL_UNAVAILABLE';
+type Device = { id: string; name: string; protocol: number; capabilities: string[]; readOnly: boolean; controlling: boolean; controlOwnerName: string; waitingCount: number; connectionId: string; ws?: WebSocket; ready: boolean; alive: boolean; lastSeenAt: string; lastComputerEndpoint: string; lastDisconnectedAt?: string; lastDisconnectReason?: DisconnectReason; pending?: Pending; dispatching: boolean; managementPending: Map<string, Pending>; managementDispatching: number; controlEvents: Map<string, CachedControlEvent>; controlEventSequence: number; controlWaiters: Set<ControlWaiter>; eventTail: Promise<void>; eventWrites: number; files: FileTransferSlot };
 type Pending = { id: string; resolve: (reply: Reply) => void; reject: (error: BridgeError) => void; timer: NodeJS.Timeout };
 type ControlWaiter = { controlId: string; event: (event: ControlEvent) => void; reject: (error: BridgeError) => void };
-const responseSchema = z.object({ id: z.string().max(100), result: z.record(z.unknown()).optional(), error: z.object({ code: z.string().max(100), message: z.string().max(500) }).strict().optional() }).strict().refine(r => (r.result !== undefined) !== (r.error !== undefined));
+const responseSchema = z.object({ id: z.string().max(100), result: z.record(z.unknown()).optional(), error: z.object({ code: z.string().max(100), message: z.string().max(500), details: z.record(z.unknown()).optional() }).strict().optional() }).strict().refine(r => (r.result !== undefined) !== (r.error !== undefined));
 const helloSchema = z.object({ type: z.literal('hello'), protocol: z.literal(1), device: z.string().max(120).optional(), readOnly: z.boolean().optional() }).strict();
 const hello2Schema = z.object({ type: z.literal('hello'), protocol: z.literal(2), deviceId: z.string().uuid(), device: z.string().min(1).max(120), readOnly: z.boolean(), capabilities: z.array(z.string().min(1).max(100)).max(100) }).strict();
 const statusSchema = z.object({ type: z.literal('status'), readOnly: z.boolean(), controlling: z.boolean(), controlOwnerName: z.string().max(80), waitingCount: z.number().int().min(0).max(64).default(0) }).strict();
@@ -33,6 +34,7 @@ export class PhoneHub {
   private digest: Buffer;
   private journal: OperationJournal;
   private controlWaiterCount = 0;
+  private disconnectReasons = new WeakMap<WebSocket, DisconnectReason>();
   constructor(private options: Options) {
     validateToken(options.token);
     this.journal = options.journal ?? new FileOperationJournal();
@@ -59,14 +61,17 @@ export class PhoneHub {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
     res.end(JSON.stringify(data));
   }
+  private errorBody(error: BridgeError) {
+    return { error: { code: error.code, message: error.message, ...(error.details ? { details: error.details } : {}) } };
+  }
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.headers.origin) { this.respond(res, 403, { error: { code: 'ORIGIN_REFUSED', message: 'Browser origins are not supported.' } }); return; }
     if (req.method === 'GET' && req.url === '/health') { this.respond(res, 200, { ok: true, protocol: 1 }); return; }
     if (!this.authorized(req)) { this.respond(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } }); return; }
-    if (req.method === 'GET' && req.url === '/devices') { this.respond(res, 200, { devices: this.listDevices() }); return; }
+    if (req.method === 'GET' && req.url === '/devices') { this.respond(res, 200, { devices: this.listDevices(), details: this.diagnostics() }); return; }
     if (req.method === 'GET' && req.url === '/status') {
       const online = [...this.devices.values()].filter(d => this.online(d));
-      this.respond(res, 200, { connected: online.length > 0, busy: online.some(d => !!d.pending || d.dispatching), protocol: 1, transfer: online.length === 1 ? online[0]!.files.status() : undefined, devices: this.listDevices() }); return;
+      this.respond(res, 200, { connected: online.length > 0, busy: online.some(d => !!d.pending || d.dispatching), protocol: 1, transfer: online.length === 1 ? online[0]!.files.status() : undefined, devices: this.listDevices(), details: this.diagnostics() }); return;
     }
     let endpoint: URL;
     try { endpoint = new URL(req.url ?? '/', 'http://localhost'); }
@@ -75,7 +80,7 @@ export class PhoneHub {
       try { this.respond(res, 200, await this.waitForControl(req, res, endpoint)); }
       catch (error) {
         const e = error instanceof BridgeError ? error : new BridgeError('INTERNAL', 'Control wait failed.', 500);
-        if (!res.headersSent && !res.destroyed) this.respond(res, e.status, { error: { code: e.code, message: e.message } });
+        if (!res.headersSent && !res.destroyed) this.respond(res, e.status, this.errorBody(e));
       }
       return;
     }
@@ -95,8 +100,8 @@ export class PhoneHub {
           offeredId = offer.id;
           if (!this.online(target) || target.ws !== phone) throw new BridgeError('DISCONNECTED', 'Phone disconnected during upload.', 503);
           const reply = await this.command('file_offer', offer, { ...routing, deviceId: target.id, connectionId: target.connectionId });
-          if (reply.error) throw new BridgeError(reply.error.code, reply.error.message, 409);
-          this.respond(res, 201, { transfer: target.files.status() });
+          if (reply.error) throw new BridgeError(reply.error.code, reply.error.message, 409, reply.error.details);
+          this.respond(res, 201, { transfer: target.files.status(), ...(typeof reply.result?.autoReceiveEnabled === 'boolean' ? { autoReceiveEnabled: reply.result.autoReceiveEnabled } : {}), ...(typeof reply.result?.state === 'string' ? { phoneState: reply.result.state } : {}) });
         } else {
           const id = endpoint.pathname.split('/')[2]!;
           target = [...this.devices.values()].find(d => d.files.status()?.id === id);
@@ -115,7 +120,7 @@ export class PhoneHub {
         if (offeredId && target?.files.status()?.id === offeredId) target.files.clear('failed');
         req.resume();
         const e = error instanceof BridgeError ? error : new BridgeError('FILE_UNAVAILABLE', 'File unavailable, invalid, or another file is awaiting the phone.', 409);
-        if (!res.headersSent && !res.destroyed) this.respond(res, e.status, { error: { code: e.code, message: e.message } });
+        if (!res.headersSent && !res.destroyed) this.respond(res, e.status, this.errorBody(e));
       }
       return;
     }
@@ -131,7 +136,7 @@ export class PhoneHub {
         this.respond(res, 200, await this.journal.read(query.data));
       } catch (error) {
         const e = error instanceof BridgeError ? error : new BridgeError('LOG_UNAVAILABLE', 'Operation history could not be read.', 503);
-        this.respond(res, e.status, { error: { code: e.code, message: e.message } });
+        this.respond(res, e.status, this.errorBody(e));
       }
       return;
     }
@@ -150,23 +155,42 @@ export class PhoneHub {
       this.respond(res, 200, await this.command(command.method, command.params, command));
     } catch (error) {
       const e = error instanceof BridgeError ? error : new BridgeError('INTERNAL', 'Bridge request failed.', 500);
-      if (!res.headersSent && !res.destroyed) this.respond(res, e.status, { error: { code: e.code, message: e.message } });
+      if (!res.headersSent && !res.destroyed) this.respond(res, e.status, this.errorBody(e));
     }
   }
   private online(device: Device): boolean { return device.ready && device.ws?.readyState === WebSocket.OPEN; }
+  private publicEndpoint(): string {
+    const configured = this.options.publicEndpoint ?? process.env.PHONEBRIDGE_PUBLIC_ENDPOINT;
+    if (configured) {
+      try { const u = new URL(configured); if (['http:', 'https:'].includes(u.protocol) && !u.username && !u.password && !u.search && !u.hash) return u.origin; } catch { /* use the actual listener below */ }
+    }
+    const address = this.server.address();
+    return address && typeof address !== 'string'
+      ? `${this.options.tls ? 'https' : 'http'}://${address.family === 'IPv6' ? `[${address.address}]` : address.address}:${address.port}` : '';
+  }
+  private diagnostics(): Record<string, unknown> {
+    const knownDevices = [...this.devices.values()].map(d => ({ id: d.id, name: d.name, connected: this.online(d), readOnly: d.readOnly, lastSeenAt: d.lastSeenAt, lastComputerEndpoint: d.lastComputerEndpoint, ...(d.lastDisconnectedAt ? { lastDisconnectedAt: d.lastDisconnectedAt, lastDisconnectReason: d.lastDisconnectReason } : {}) }));
+    const connectionState = knownDevices.some(d => d.connected) ? 'connected' : knownDevices.length ? 'phone_offline' : 'no_phone_connected';
+    return { publicEndpoint: this.publicEndpoint(), connectionState, knownDevices,
+      nextSteps: connectionState === 'connected' ? ['Use phone_list_devices to select an online phone; readOnly is separate from connectivity.'] :
+        ['The phone reconnects to its paired computer automatically on the same network.', 'Compare the computer endpoint above with the phone connection status. A changed address is rediscovered by updated clients; no new pairing is needed.', 'If the computer Hub is stopped, use the phone desktop-service start button.'] };
+  }
+  private unavailableDevice(message: string): BridgeError {
+    return Object.assign(new BridgeError('NO_DEVICE', `${message} Current computer: ${this.publicEndpoint()}.`, 503), { details: this.diagnostics() });
+  }
   private listDevices() {
-    return [...this.devices.values()].map(d => ({ id: d.id, name: d.name, connected: this.online(d), busy: !!d.pending || d.dispatching || d.managementDispatching > 0, protocol: d.protocol, capabilities: [...d.capabilities], readOnly: d.readOnly, controlling: d.controlling, controlOwnerName: d.controlOwnerName, waitingCount: d.waitingCount, connectionId: d.connectionId, transfer: d.files.status() }));
+    return [...this.devices.values()].map(d => ({ id: d.id, name: d.name, connected: this.online(d), busy: !!d.pending || d.dispatching || d.managementDispatching > 0, protocol: d.protocol, capabilities: [...d.capabilities], readOnly: d.readOnly, controlling: d.controlling, controlOwnerName: d.controlOwnerName, waitingCount: d.waitingCount, connectionId: d.connectionId, lastSeenAt: d.lastSeenAt, lastComputerEndpoint: d.lastComputerEndpoint, ...(d.lastDisconnectedAt ? { lastDisconnectedAt: d.lastDisconnectedAt, lastDisconnectReason: d.lastDisconnectReason } : {}), transfer: d.files.status() }));
   }
   private selectDevice(deviceId?: string, connectionId?: string): Device {
     if (deviceId !== undefined) {
       const device = this.devices.get(deviceId);
-      if (!device || !this.online(device)) throw new BridgeError('NO_DEVICE', 'The selected phone is offline or unknown.', 503);
+      if (!device || !this.online(device)) throw this.unavailableDevice('The selected phone is offline or unknown. Check phone_list_devices; do not pair again solely because it is offline.');
       if (connectionId !== undefined && device.connectionId !== connectionId) throw new BridgeError('CONTROL_EXPIRED', 'The selected phone connection has changed.', 409);
       return device;
     }
     const online = [...this.devices.values()].filter(d => this.online(d));
     if (online.length > 1) throw new BridgeError('DEVICE_REQUIRED', 'Choose a deviceId when more than one phone is connected.', 409);
-    if (!online.length) throw new BridgeError('NO_DEVICE', 'Connect and authorize the phone first.', 503);
+    if (!online.length) throw this.unavailableDevice('No phone is connected. Saved pairing can be reused; check phone and computer network/service status.');
     if (connectionId !== undefined && online[0]!.connectionId !== connectionId) throw new BridgeError('CONTROL_EXPIRED', 'The selected phone connection has changed.', 409);
     return online[0]!;
   }
@@ -214,7 +238,7 @@ export class PhoneHub {
       // Register first: the native may send a grant before its initial status reply.
       void this.command('control_status', { controlId }, { deviceId, connectionId }).then(reply => {
         if (settled) return;
-        if (reply.error) { fail(new BridgeError(reply.error.code, reply.error.message, 409)); return; }
+        if (reply.error) { fail(new BridgeError(reply.error.code, reply.error.message, 409, reply.error.details)); return; }
         const status = controlStatusSchema.safeParse(reply.result);
         if (!status.success) { fail(new BridgeError('INVALID_RESPONSE', 'Invalid phone control status.', 502)); return; }
         if (status.data.controlId !== undefined && status.data.controlId !== controlId) { fail(new BridgeError('INVALID_RESPONSE', 'Phone returned a different control ID.', 502)); return; }
@@ -260,14 +284,21 @@ export class PhoneHub {
       for (const waiter of [...device.controlWaiters]) if (waiter.controlId === event.controlId) waiter.event(event);
     }).catch(() => {
       this.rejectControlWaiters(device, new BridgeError('LOG_WRITE_FAILED', 'A phone control event could not be recorded. Check current control before acting.', 503));
+      this.recordDisconnect(device, ws, 'JOURNAL_UNAVAILABLE');
       ws.close(1011, 'Control event journal unavailable');
     }).finally(() => { --device.eventWrites; });
+  }
+  private recordDisconnect(device: Device, ws: WebSocket, reason: DisconnectReason): void {
+    if (device.ws !== ws || this.disconnectReasons.has(ws)) return;
+    this.disconnectReasons.set(ws, reason);
+    device.lastDisconnectedAt = new Date().toISOString(); device.lastDisconnectReason = reason;
+    device.ready = false;
   }
   private attach(ws: WebSocket): void {
     let device: Device | undefined;
     const helloTimeout = setTimeout(() => ws.close(1008, 'Protocol handshake required'), 5000);
-    ws.on('pong', () => { if (device?.ws === ws) device.alive = true; });
-    ws.on('error', () => ws.terminate());
+    ws.on('pong', () => { if (device?.ws === ws) { device.alive = true; device.lastSeenAt = new Date().toISOString(); } });
+    ws.on('error', () => { if (device) this.recordDisconnect(device, ws, 'SOCKET_ERROR'); ws.terminate(); });
     ws.on('message', (data, binary) => {
       try {
         if (binary) throw new Error('Binary frame');
@@ -278,31 +309,37 @@ export class PhoneHub {
           const existing = this.devices.get(id);
           // Reconnecting cannot bypass an outstanding command's journal fence.
           if (existing && (existing.ws || existing.dispatching || existing.pending || existing.managementDispatching)) { ws.close(1008, 'Device already connected'); return; }
-          device = { id, name: hello.device ?? 'Phone', protocol: hello.protocol, capabilities: hello.protocol === 2 ? hello.capabilities : [], readOnly: hello.readOnly ?? false, controlling: false, controlOwnerName: '', waitingCount: 0, connectionId: randomUUID(), ws, ready: true, alive: true, dispatching: false, managementPending: new Map(), managementDispatching: 0, controlEvents: new Map(), controlEventSequence: 0, controlWaiters: new Set(), eventTail: Promise.resolve(), eventWrites: 0, files: new FileTransferSlot() };
+          device = { id, name: hello.device ?? 'Phone', protocol: hello.protocol, capabilities: hello.protocol === 2 ? hello.capabilities : [], readOnly: hello.readOnly ?? false, controlling: false, controlOwnerName: '', waitingCount: 0, connectionId: randomUUID(), ws, ready: true, alive: true, lastSeenAt: new Date().toISOString(), lastComputerEndpoint: this.publicEndpoint(),
+            ...(existing?.lastDisconnectedAt ? { lastDisconnectedAt: existing.lastDisconnectedAt, lastDisconnectReason: existing.lastDisconnectReason } : {}),
+            dispatching: false, managementPending: new Map(), managementDispatching: 0, controlEvents: new Map(), controlEventSequence: 0, controlWaiters: new Set(), eventTail: Promise.resolve(), eventWrites: 0, files: new FileTransferSlot() };
           this.devices.set(id, device); clearTimeout(helloTimeout); return;
         }
         if (device.ws !== ws || !device.ready) return;
         if (device.protocol === 2 && typeof value === 'object' && value !== null && 'type' in value && value.type === 'status') {
           const status = statusSchema.parse(value);
+          device.lastSeenAt = new Date().toISOString();
           device.readOnly = status.readOnly; device.controlling = status.controlling; device.controlOwnerName = status.controlOwnerName; device.waitingCount = status.waitingCount;
           return;
         }
         if (device.protocol === 2 && device.capabilities.includes('control_queue') && typeof value === 'object' && value !== null && 'type' in value && value.type === 'control_event') {
-          this.receiveControlEvent(device, ws, controlEventSchema.parse(value)); return;
+          const event = controlEventSchema.parse(value); device.lastSeenAt = new Date().toISOString();
+          this.receiveControlEvent(device, ws, event); return;
         }
         const reply = responseSchema.parse(value);
+        device.lastSeenAt = new Date().toISOString();
         const management = device.managementPending.get(reply.id);
         if (management) { device.managementPending.delete(reply.id); clearTimeout(management.timer); management.resolve(reply); return; }
         if (reply.id !== device.pending?.id) return;
         const pending = device.pending!; device.pending = undefined; clearTimeout(pending.timer); pending.resolve(reply);
-      } catch { ws.close(1008, 'Invalid protocol message'); }
+      } catch { if (device) this.recordDisconnect(device, ws, 'PROTOCOL_ERROR'); ws.close(1008, 'Invalid protocol message'); }
     });
-    ws.on('close', () => {
+    ws.on('close', code => {
       clearTimeout(helloTimeout);
       if (!device || device.ws !== ws) return;
+      this.recordDisconnect(device, ws, code === 1006 ? 'SOCKET_ABNORMAL_CLOSE' : 'SOCKET_CLOSED');
       device.ws = undefined; device.ready = false; device.controlling = false; device.controlOwnerName = ''; device.waitingCount = 0; device.controlEvents.clear(); device.files.clear();
-      this.rejectControlWaiters(device, new BridgeError('DISCONNECTED', 'The phone connection closed while waiting for control.', 503));
-      this.rejectPending(device, new BridgeError('DISCONNECTED', 'Phone disconnected. Action outcome may be unknown; observe before trying again.', 503));
+      this.rejectControlWaiters(device, new BridgeError('DISCONNECTED', 'The phone connection closed while waiting for control.', 503, this.diagnostics()));
+      this.rejectPending(device, new BridgeError('DISCONNECTED', 'Phone disconnected. Action outcome may be unknown; observe before trying again.', 503, this.diagnostics()));
     });
   }
   private rejectPending(device: Device, error: BridgeError): void {
@@ -322,20 +359,20 @@ export class PhoneHub {
     const command = parseCommand({ method, params, ...(routing.deviceId !== undefined ? { deviceId: routing.deviceId } : {}), ...(routing.controlId !== undefined ? { controlId: routing.controlId } : {}), ...(routing.connectionId !== undefined ? { connectionId: routing.connectionId } : {}) });
     const startedAt = Date.now();
     const base: OperationRecord = { version: 1, requestId: randomUUID(), time: new Date(startedAt).toISOString(), method, params: operationParams(method, command.params), status: 'started', outcome: 'unknown', ...(routing.deviceId ? { deviceId: routing.deviceId } : {}), ...(routing.controlId ? { controlId: routing.controlId } : {}) };
-    if ((method === 'acquire_control' || method === 'release_control' || method === 'control_status') && typeof command.params.controlId === 'string') base.controlId = command.params.controlId;
+    if (['acquire_control', 'release_control', 'control_status', 'renew_control'].includes(method) && typeof command.params.controlId === 'string') base.controlId = command.params.controlId;
     const notDispatched = async (error: BridgeError): Promise<never> => {
       try { await this.journal.append({ ...base, status: 'failed', outcome: 'not_dispatched', errorCode: error.code, durationMs: Date.now() - startedAt }); }
-      catch { throw new BridgeError('LOG_UNAVAILABLE', `Command was not dispatched (${error.code}); its rejection could not be recorded.`, 503); }
+      catch { throw new BridgeError('LOG_UNAVAILABLE', `Command was not dispatched (${error.code}); its rejection could not be recorded.`, 503, error.details); }
       throw error;
     };
     let device: Device;
     try { device = this.selectDevice(routing.deviceId, routing.connectionId); }
     catch (error) { return notDispatched(error as BridgeError); }
     base.deviceId = device.id;
-    const requiredCapability = method === 'control_status' || (method === 'acquire_control' && command.params.queue === true) ? 'control_queue' : method === 'acquire_control' || method === 'release_control' ? 'control_lease' : method === 'node_action' ? 'element_actions' : undefined;
+    const requiredCapability = method === 'control_status' || (method === 'acquire_control' && command.params.queue === true) ? 'control_queue' : method === 'acquire_control' || method === 'release_control' ? 'control_lease' : method === 'renew_control' ? 'control_renew' : method === 'get_clipboard' || method === 'set_clipboard' ? 'clipboard' : method === 'node_action' ? 'element_actions' : undefined;
     if (requiredCapability && !device.capabilities.includes(requiredCapability)) return notDispatched(new BridgeError('UNSUPPORTED', 'This phone does not support the requested capability.', 409));
     if (routing.controlId && (device.protocol < 2 || !device.capabilities.includes('control_lease'))) return notDispatched(new BridgeError('UNSUPPORTED', 'This phone does not support task control.', 409));
-    const management = device.protocol === 2 && ['acquire_control', 'release_control', 'control_status'].includes(method);
+    const management = device.protocol === 2 && ['acquire_control', 'release_control', 'control_status', 'renew_control'].includes(method);
     if (management ? device.managementDispatching >= 64 : device.pending || device.dispatching) return notDispatched(new BridgeError('BUSY', management ? 'Too many phone control requests are in progress.' : 'One command is already in progress on this phone.', 409));
     const ws = device.ws!; const id = base.requestId;
     // Screen operations remain single-flight; bounded control management is independent.
@@ -344,17 +381,19 @@ export class PhoneHub {
     try { await this.journal.append(base); }
     catch { releaseDispatch(); throw new BridgeError('LOG_UNAVAILABLE', 'Command was not dispatched because the operation journal could not be written.', 503); }
     if (!this.online(device) || device.ws !== ws || ws.readyState !== WebSocket.OPEN) {
-      try { return await notDispatched(new BridgeError('NO_DEVICE', 'Phone disconnected before dispatch.', 503)); }
+      try { return await notDispatched(this.unavailableDevice('Phone disconnected before dispatch.')); }
       finally { releaseDispatch(); }
     }
     const pendingReply = new Promise<Reply>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.rejectRequest(device, id, new BridgeError('TIMEOUT', 'Device command timed out. Outcome unknown; reconnect and observe. No automatic retry.', 504));
-        device.ready = false; ws.terminate();
+        if (device.pending?.id !== id && !device.managementPending.has(id)) return;
+        this.recordDisconnect(device, ws, 'COMMAND_TIMEOUT');
+        this.rejectRequest(device, id, new BridgeError('TIMEOUT', 'Device command timed out. Outcome unknown; reconnect and observe. No automatic retry.', 504, this.diagnostics()));
+        ws.terminate();
       }, this.options.timeoutMs ?? 15000);
       const pending = { id, resolve, reject, timer };
       if (management) device.managementPending.set(id, pending); else device.pending = pending;
-      ws.send(JSON.stringify({ id, method: command.method, params: command.params, ...(routing.controlId ? { controlId: routing.controlId } : {}) }), error => { if (error && (device.pending?.id === id || device.managementPending.has(id))) { this.rejectRequest(device, id, new BridgeError('SEND_FAILED', 'Could not deliver command.', 503)); ws.terminate(); } });
+      ws.send(JSON.stringify({ id, method: command.method, params: command.params, ...(routing.controlId ? { controlId: routing.controlId } : {}) }), error => { if (error && (device.pending?.id === id || device.managementPending.has(id))) { this.recordDisconnect(device, ws, 'SEND_FAILED'); this.rejectRequest(device, id, new BridgeError('SEND_FAILED', 'Could not deliver command.', 503, this.diagnostics())); ws.terminate(); } });
     });
     let reply: Reply | undefined; let failure: BridgeError | undefined;
     try { reply = await pendingReply; }
@@ -366,7 +405,7 @@ export class PhoneHub {
     try {
       await this.journal.append({ ...base, time: new Date().toISOString(), status: uncertain ? 'uncertain' : deviceReportedError ? 'failed' : 'completed', outcome: uncertain ? 'unknown' : deviceReportedError ? 'device_reported_error' : 'device_reported_success', durationMs: Date.now() - startedAt, ...(errorCode !== undefined ? { errorCode: journalErrorCode(errorCode) } : {}) });
     } catch {
-      throw new BridgeError('LOG_WRITE_FAILED', 'Command may have executed, but its final journal record could not be saved. Observe the phone; do not automatically retry.', 503);
+      throw new BridgeError('LOG_WRITE_FAILED', 'Command may have executed, but its final journal record could not be saved. Observe the phone; do not automatically retry.', 503, failure?.details ?? reply?.error?.details);
     } finally { releaseDispatch(); }
     if (failure) throw failure;
     return reply!;
@@ -376,10 +415,10 @@ export class PhoneHub {
     this.heartbeat = setInterval(() => {
       for (const device of this.devices.values()) {
         if (!this.online(device)) continue;
-        if (!device.alive) { device.ws!.terminate(); continue; }
+        if (!device.alive) { this.recordDisconnect(device, device.ws!, 'HEARTBEAT_TIMEOUT'); device.ws!.terminate(); continue; }
         device.alive = false; device.ws!.ping();
       }
-    }, 20000);
+    }, this.options.heartbeatIntervalMs ?? 20000);
     this.heartbeat.unref();
     const address = this.server.address();
     if (!address || typeof address === 'string') throw new Error('Missing listen address');
@@ -388,9 +427,10 @@ export class PhoneHub {
   async close(): Promise<void> {
     clearInterval(this.heartbeat);
     for (const device of this.devices.values()) {
+      if (device.ws) this.recordDisconnect(device, device.ws, 'HUB_SHUTDOWN');
       device.ready = false; device.files.clear();
-      this.rejectControlWaiters(device, new BridgeError('SHUTDOWN', 'Hub stopped while waiting for control.', 503));
-      this.rejectPending(device, new BridgeError('SHUTDOWN', 'Hub stopped.', 503));
+      this.rejectControlWaiters(device, new BridgeError('SHUTDOWN', 'Hub stopped while waiting for control.', 503, this.diagnostics()));
+      this.rejectPending(device, new BridgeError('SHUTDOWN', 'Hub stopped.', 503, this.diagnostics()));
     }
     for (const ws of this.wss.clients) ws.terminate();
     await new Promise<void>(resolve => this.wss.close(() => resolve()));

@@ -20,6 +20,16 @@ Make fixed-launcher help/version useful, retain old-launcher protocol compatibil
 
 NO_DEVICE results and device listing include the current computer endpoint, known-phone online/offline/read-only status, last-seen information when actually known, and concrete next actions. Do not invent a phone's settings or claim an online read-only phone is disconnected.
 
+## Echo feedback additions
+
+Provide clipboard get/set and native paste/copy/cut/select-all without per-operation confirmation. A persistent owner switch controls clipboard access; Android's foreground requirement uses a short focused activity that restores the previous app. Return truncation metadata within the existing wire budget instead of adding an arbitrary text-size rejection.
+
+Resolve text/description/resource/class selectors against the current tree, require explicit index for ambiguity, and support screenshotId plus image coordinates using the original crop. Preserve Android stateDescription and selection ranges. Add foreground package/window/occlusion diagnostics without recording screen or clipboard contents in operation history. Explicit task renewal extends only the current active task and cannot revive an expired or queued task.
+
+Default received images/videos into the media gallery, retaining the option to use Downloads. Expose actual transfer expiry and saved location. Mark precise PhoneBridge connection/authorization controls with semantics IDs and prevent accidental remote changes while its user switch is enabled; file navigation remains usable.
+
+Provide one owner “Allow all” action for the selected computer: all eligible applications, actions, resume, clipboard, automatic file receipt and gallery. Preserve existing computer identities and other computers' grants. The currently connected test phone should have these capabilities enabled. Install both desktop and phone, then have the existing Grok Bot Echo publish one FULI item using the updated tools and report the resulting link and observed issues.
+
 ## Validation and delivery
 
 Retain the already verified FIFO lease/queue contract; re-run competing AI clients and gesture/task handoff checks. Add deterministic cross-language discovery vectors and real UDP/HTTP challenge fixtures, network migration/rollback tests, offline diagnostics and real stdio schema/help/version checks. Verify auto receipt using a real harmless file when a phone is available. Preserve installed pairing and user data during upgrades. Keep PR #11's app-selector correction included for combined testing; keep that PR reviewable separately. Submit a reviewable follow-up PR and close rec#3 only after its issues have actual supporting verification and integration.

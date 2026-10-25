@@ -54,6 +54,14 @@ void main() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
+          if (call.method == 'getAutoReceiveFilesEnabled') return true;
+          if ({
+            'getClipboardAccessEnabled',
+            'getSaveMediaToGallery',
+            'getProtectConnectionControls',
+          }.contains(call.method)) {
+            return true;
+          }
           if (call.method == 'status') {
             return {
               'accessibilityEnabled': accessibility,
@@ -466,6 +474,8 @@ void main() {
       await tester.pump();
       await tester.tap(find.byKey(const Key('nav-settings')));
       await tester.pumpAndSettle();
+      await tester.ensureVisible(find.text('已记住的电脑'));
+      await tester.pumpAndSettle();
       await tester.tap(find.text('已记住的电脑'));
       await tester.pumpAndSettle();
       final forget = find.byKey(const Key('forget-saved'));
@@ -505,6 +515,29 @@ void main() {
     await tester.tap(find.text('保存练习文字'));
     await tester.pump();
     expect(find.text('已保存：你好 PhoneBridge'), findsOneWidget);
+  });
+
+  testWidgets('allow all is a single owner action without repeating pairing', (
+    tester,
+  ) async {
+    saved = true;
+    connected = true;
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('nav-settings')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('allow-all-automation')));
+    await tester.pumpAndSettle();
+    expect(calls.where((c) => c.method == 'allowAllAutomation'), hasLength(1));
+    expect(
+      calls.where(
+        (c) => {'connect', 'disconnect', 'forgetComputer'}.contains(c.method),
+      ),
+      isEmpty,
+    );
+    expect(find.byKey(const Key('ClipboardAccessEnabled')), findsOneWidget);
+    expect(tester.takeException(), isNull);
+    await tester.pumpWidget(const SizedBox.shrink());
   });
 
   testWidgets('native disconnect clears a retained pairing token', (

@@ -57,7 +57,7 @@ async function fixtureBundle(base, name) {
   await mkdir(join(bundle, 'desktop'), { recursive: true });
   await mkdir(join(bundle, 'bridge', 'dist'), { recursive: true });
   await mkdir(join(bundle, 'bridge', 'node_modules', 'qrcode', 'lib'), { recursive: true });
-  for (const file of ['server.mjs', 'network.mjs', 'network-transaction.mjs', 'recover-client-claim.ps1']) await copyFile(join(root, 'desktop', file), join(bundle, 'desktop', file));
+  for (const file of ['server.mjs', 'network.mjs', 'network-transaction.mjs', 'configuration-lock.mjs', 'launcher-maintenance.mjs', 'recover-client-claim.ps1']) await copyFile(join(root, 'desktop', file), join(bundle, 'desktop', file));
   await writeFile(join(bundle, 'bridge', 'package.json'), '{"type":"module"}');
   await writeFile(join(bundle, 'bridge', 'dist', 'credentials.js'), 'export const credentialPath=()=>process.env.PHONEBRIDGE_CREDENTIAL_FILE; export const loadOrCreateSavedToken=async()=>"isolated-test-token";');
   await writeFile(join(bundle, 'bridge', 'dist', 'pairing.js'), 'export const pairingUri=()=>"test-pairing";');

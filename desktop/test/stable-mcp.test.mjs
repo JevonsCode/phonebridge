@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, copyFile, symlink, realpath } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, copyFile, cp, symlink, realpath } from 'node:fs/promises';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import { createHash } from 'node:crypto';
 import { windowsIdentity, privateIPv4 } from '../network.mjs';
 import { createMcpConfiguration } from '../server.mjs';
 import { installMcpLauncher } from '../macos/mcp-launcher.mjs';
@@ -60,7 +61,7 @@ async function boundedExit(s) { let timer;try {return await Promise.race([s.exit
 async function fakePackage(state, name) {
   const folder = join(state, name); await mkdir(join(folder, 'bridge', 'dist'), { recursive: true });
   await writeFile(join(folder, 'bridge', 'dist', 'mcp.js'), `const readline=require('node:readline'); const label=${JSON.stringify(name)}; readline.createInterface({input:process.stdin}).on('line',line=>{const req=JSON.parse(line);if(req.method==='exit'){process.exit(23);}console.log(JSON.stringify({id:req.id,label,url:process.env.PHONEBRIDGE_URL,credential:process.env.PHONEBRIDGE_CREDENTIAL_FILE,tokenPresent:!!process.env.PHONEBRIDGE_TOKEN}));});`);
-  if (!windows) { await mkdir(join(folder, 'runtime')); await copyFile(process.execPath, join(folder, 'runtime', 'node')); await mkdir(join(folder, 'desktop', 'macos'), { recursive: true }); for (const name of ['mcp-bootstrap.mjs','network.mjs']) await copyFile(join(root,'desktop',name),join(folder,'desktop',name)); for(const name of ['lifecycle.mjs','mcp-launcher.mjs'])await copyFile(join(root,'desktop','macos',name),join(folder,'desktop','macos',name)); }
+  if (!windows) { await mkdir(join(folder, 'runtime')); await copyFile(process.execPath, join(folder, 'runtime', 'node')); await mkdir(join(folder, 'desktop', 'macos'), { recursive: true }); for (const name of ['mcp-bootstrap.mjs','network.mjs','configuration-lock.mjs']) await copyFile(join(root,'desktop',name),join(folder,'desktop',name)); for(const name of ['lifecycle.mjs','mcp-launcher.mjs'])await copyFile(join(root,'desktop','macos',name),join(folder,'desktop','macos',name)); }
   return folder;
 }
 test('bootstrap runs through a symlinked installation path instead of silently exiting', async t => {
@@ -89,6 +90,53 @@ $ownedFile=$type.GetMethod('OwnedFile',$flags)
 `);
   assert.match(execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, f.launcher, f.configFile], { encoding: 'utf8', windowsHide: true }), /ownership checks passed/);
 });
+
+test('Windows launcher help and unknown options do not misreport installation damage; App version follows the active manifest', { skip: !windows }, async t => {
+  const f = await fixture(t);
+  const help = spawnSync(f.launcher, ['--help'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(help.status, 0); assert.match(help.stdout, /Usage: PhoneBridgeMcp.exe/); assert.equal(help.stderr, '');
+  const unknown = spawnSync(f.launcher, ['--unknown'], { encoding: 'utf8', windowsHide: true });
+  assert.equal(unknown.status, 2); assert.match(unknown.stderr, /Unknown.*arguments/); assert.match(unknown.stderr, /Usage:/); assert.doesNotMatch(unknown.stderr, /could not start|installation/);
+  const a = await fakePackage(f.state, 'version-A'), b = await fakePackage(f.state, 'version-B');
+  for (const [projectRoot, version] of [[a, '7.8.9'], [b, '8.9.0-beta.1']]) {
+    await writeFile(join(projectRoot, 'package-manifest.json'), '\uFEFF' + JSON.stringify({ product: 'PhoneBridge', version }));
+    await f.save({ ...f.config, projectRoot });
+    const result = spawnSync(f.launcher, ['--version'], { encoding: 'utf8', windowsHide: true });
+    assert.equal(result.status, 0, result.stderr); assert.match(result.stdout, new RegExp(`PhoneBridge App ${version.replaceAll('.', '\\.')}`)); assert.match(result.stdout, /MCP launcher: PhoneBridge MCP bootstrap v1/); assert.equal(result.stderr, '');
+  }
+});
+
+test('Windows defers a busy legacy v1 launcher and its temporary helper applies the pending update without a new GUI or service', { skip: !windows, timeout: 60000 }, async t => {
+  const f = await fixture(t), a = await fakePackage(f.state, 'legacy-A'), source = join(a, 'PhoneBridgeMcp.exe'); await copyFile(f.launcher, source);
+  await writeFile(join(a, 'package-manifest.json'), JSON.stringify({ product: 'PhoneBridge', platform: 'windows-x64' }));
+  await mkdir(join(a, 'desktop')); await mkdir(join(a, 'scripts', 'windows'), { recursive: true });
+  await copyFile(join(root, 'desktop', 'install-mcp-launcher.ps1'), join(a, 'desktop', 'install-mcp-launcher.ps1'));
+  for (const name of ['atomic-config.ps1', 'run-desktop.ps1']) await copyFile(join(root, 'scripts', 'windows', name), join(a, 'scripts', 'windows', name));
+  const legacySource = join(f.state, 'LegacyLauncher.cs');
+  const code = (await readFile(join(root, 'desktop', 'McpLauncher.cs'), 'utf8'))
+    .replace('if(args.Length==1 && (args[0]=="--help" || args[0]=="-h"))', 'if(false)')
+    .replace('bool showVersion=args.Length==1 && args[0]=="--version";', 'bool showVersion=false;');
+  await writeFile(legacySource, code);
+  execFileSync(join(process.env.SystemRoot, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'), ['/nologo', '/target:exe', '/reference:System.Web.Extensions.dll', '/out:' + f.launcher, legacySource], { windowsHide: true });
+  await f.save({ ...f.config, projectRoot: a, launcherPath: join(a, 'scripts', 'windows', 'run-desktop.ps1'), powershellPath: powershell });
+  const running = session(t, f.launcher); assert.equal((await running.request({ id: 1 })).label, 'legacy-A');
+  const before = await readFile(f.launcher);
+  const script = join(f.state, 'upgrade.ps1'); await writeFile(script, `param($Source,$State)\n$ErrorActionPreference='Stop'\n. '${join(root, 'desktop', 'install-mcp-launcher.ps1').replaceAll("'", "''")}'\nInstall-PhoneBridgeMcpLauncher -Source $Source -StateDirectory $State\n`);
+  const upgrade = () => execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, source, f.state], { encoding: 'utf8', windowsHide: true });
+  assert.match(upgrade(), /running MCP launcher was preserved/); assert.deepEqual(await readFile(f.launcher), before); assert.equal((await running.request({ id: 2 })).label, 'legacy-A');
+  assert.equal(JSON.parse(await readFile(join(f.state, 'bin', 'PhoneBridgeMcp.pending.json'), 'utf8')).source, source);
+  running.child.stdin.end(); assert.equal((await boundedExit(running)).code, 0);
+  // No new GUI/service loop is started: this is the legacy-running-bundle case.
+  for (let attempt = 0; attempt < 900 && !(await readFile(f.launcher)).equals(await readFile(source)); attempt++) await new Promise(resolve => setTimeout(resolve, 40));
+  assert.ok((await readFile(f.launcher)).equals(await readFile(source)), 'The temporary idle helper must publish the queued launcher');
+  await assert.rejects(readFile(join(f.state, 'bin', 'PhoneBridgeMcp.pending.json')), /ENOENT/);
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try { await readFile(join(f.state, 'bin', 'PhoneBridgeMcp.maintenance.json')); } catch (error) { if (error.code === 'ENOENT') break; throw error; }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  await assert.rejects(readFile(join(f.state, 'bin', 'PhoneBridgeMcp.maintenance.json')), /ENOENT/);
+  assert.equal(spawnSync(f.launcher, ['--help'], { windowsHide: true }).status, 0);
+});
 test('stable launch selects current A/B target, endpoint and credential on reconnect; live A survives; stdio exit code propagates', { skip: !windows && process.platform !== 'darwin', timeout: 30000 }, async t => {
   const f = await fixture(t), a = await fakePackage(f.state, 'A'), b = await fakePackage(f.state, 'B');
   const configA = { ...f.config, projectRoot: a, nodePath: windows ? process.execPath : join(a,'runtime','node') };
@@ -104,6 +152,23 @@ test('stable launch selects current A/B target, endpoint and credential on recon
   first.child.stdin.end();assert.equal((await boundedExit(first)).code,0);assert.equal(first.stderr(),'');assert.equal(second.stderr(),'');
   const copied=createMcpConfiguration(configB,configB.credentialFile,{configFile:f.configFile}).mcpServers.phonebridge;
   assert.equal(copied.command,windows?f.launcher:'/bin/sh');assert.equal('env' in copied,false);assert.doesNotMatch(JSON.stringify(copied),/versions|9876|TOKEN/);
+});
+
+test('pending maintenance cannot apply another package or downgrade the current source to older queued bytes', { skip: !windows }, async t => {
+  const f = await fixture(t), a = await fakePackage(f.state, 'older-package'), b = await fakePackage(f.state, 'current-package');
+  const source = join(b, 'PhoneBridgeMcp.exe'), payload = join(f.state, 'bin', 'PhoneBridgeMcp.pending.exe');
+  const current = await readFile(f.launcher), queued = Buffer.concat([current, Buffer.from('older-queued-build')]);
+  await copyFile(f.launcher, source); await writeFile(payload, queued);
+  await writeFile(join(b, 'package-manifest.json'), JSON.stringify({ product: 'PhoneBridge', platform: 'windows-x64' }));
+  await f.save({ ...f.config, projectRoot: b, launcherPath: join(root, 'scripts', 'windows', 'run-desktop.ps1'), powershellPath: powershell });
+  const marker = join(f.state, 'bin', 'PhoneBridgeMcp.pending.json');
+  const record = { schema: 'phonebridge-mcp-pending-v1', source: join(a, 'PhoneBridgeMcp.exe'), sourceSha256: createHash('sha256').update(queued).digest('base64') };
+  await writeFile(marker, JSON.stringify(record));
+  const resume = () => execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(root, 'desktop', 'install-mcp-launcher.ps1'), '--resume', f.configFile], { windowsHide: true });
+  resume(); assert.deepEqual(await readFile(f.launcher), current); assert.deepEqual(await readFile(payload), queued);
+  await writeFile(marker, JSON.stringify({ ...record, source }));
+  resume(); assert.deepEqual(await readFile(f.launcher), current);
+  await assert.rejects(readFile(marker), /ENOENT/);
 });
 test('invalid, missing and foreign owned config fail without stdout protocol noise', {skip:!windows && process.platform!=='darwin',timeout:30000},async t=>{
   const f=await fixture(t);
@@ -154,15 +219,15 @@ test('real packaged MCP initialize and tools/list survive active config upgrade'
   const host=Object.values(networkInterfaces()).flat().find(net=>net.family==='IPv4'&&privateIPv4(net.address))?.address;
   assert.ok(host,'A local private address is needed by the real MCP adapter');
   const nodePath=process.env.PHONEBRIDGE_TEST_PACKAGE?join(packageRoot,'runtime',windows?'node.exe':'node'):process.execPath;
-  // Two installation roots reference the same verified runtime payload; neither touches live state.
+  // Two independent payloads exercise installed manifest precedence and old/new sessions.
   const a=join(f.state,'package-A'),b=join(f.state,'package-B');
-  for(const folder of [a,b]) { await mkdir(folder);await symlink(join(packageRoot,'bridge'),join(folder,'bridge'),windows?'junction':'dir');if(!windows){await mkdir(join(folder,'runtime'));await copyFile(nodePath,join(folder,'runtime','node'));await symlink(join(packageRoot,'desktop'),join(folder,'desktop'),'dir');} }
+  for(const [folder,version] of [[a,'9.8.7'],[b,'9.8.8']]) { await mkdir(join(folder,'bridge'),{recursive:true});await cp(join(packageRoot,'bridge','dist'),join(folder,'bridge','dist'),{recursive:true});await copyFile(join(packageRoot,'bridge','package.json'),join(folder,'bridge','package.json'));await symlink(join(packageRoot,'bridge','node_modules'),join(folder,'bridge','node_modules'),windows?'junction':'dir');await writeFile(join(folder,'package-manifest.json'),'\uFEFF'+JSON.stringify({product:'PhoneBridge',version}));if(!windows){await mkdir(join(folder,'runtime'));await copyFile(nodePath,join(folder,'runtime','node'));await symlink(join(packageRoot,'desktop'),join(folder,'desktop'),'dir');} }
   const config={...f.config,projectRoot:a,nodePath:windows?nodePath:join(a,'runtime','node'),hostAddress:host};await f.save(config);
   const first=session(t,f.launcher);const initialize={jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'isolated-test',version:'1'}}};
-  assert.equal((await first.request(initialize)).result.serverInfo.name,'phonebridge');
+  const initial=await first.request(initialize);assert.equal(initial.result.serverInfo.name,'phonebridge');assert.equal(initial.result.serverInfo.version,'9.8.7');
   await f.save({...config,projectRoot:b,nodePath:windows?nodePath:join(b,'runtime','node'),port:9876});
-  const second=session(t,f.launcher);assert.equal((await second.request(initialize)).result.serverInfo.name,'phonebridge');
-  for(const s of [first,second]) { const list=await s.request({jsonrpc:'2.0',id:2,method:'tools/list',params:{}});assert.ok(list.result.tools.some(tool=>tool.name==='phone_state'));s.child.stdin.end();assert.equal((await boundedExit(s)).code,0);assert.equal(s.stderr(),''); }
+  const second=session(t,f.launcher);const upgraded=await second.request(initialize);assert.equal(upgraded.result.serverInfo.name,'phonebridge');assert.equal(upgraded.result.serverInfo.version,'9.8.8');
+  for(const s of [first,second]) { const list=await s.request({jsonrpc:'2.0',id:2,method:'tools/list',params:{}});assert.ok(list.result.tools.some(tool=>tool.name==='phone_state'));for(const tool of list.result.tools){assert.equal(tool.inputSchema.type,'object');assert.doesNotMatch(JSON.stringify(tool.inputSchema),/"\$ref"\s*:/);for(const key of ['anyOf','oneOf','allOf'])assert.equal(key in tool.inputSchema,false);}s.child.stdin.end();assert.equal((await boundedExit(s)).code,0);assert.equal(s.stderr(),''); }
 });
 test('POSIX launcher publication is idempotent and refuses modified scripts; bootstrap validates current config', {skip:windows},async t=>{
   const f=await fixture(t),a=await fakePackage(f.state,'A');const config={...f.config,projectRoot:a,nodePath:join(a,'runtime','node')};await f.save(config);

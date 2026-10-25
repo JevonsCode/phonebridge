@@ -7,10 +7,10 @@ export const fileMetadataSchema = z.object({
   mimeType: z.string().max(100).regex(/^[a-z0-9][a-z0-9.+-]*\/[a-z0-9][a-z0-9.+-]*$/),
   size: z.number().int().min(1).max(MAX_FILE_BYTES),
 }).strict();
-export const fileOfferSchema = fileMetadataSchema.extend({ id: z.string().uuid(), sha256: z.string().regex(/^[0-9a-f]{64}$/) });
+export const fileOfferSchema = fileMetadataSchema.extend({ id: z.string().uuid(), sha256: z.string().regex(/^[0-9a-f]{64}$/), expiresAt: z.number().int().min(0).optional() });
 export type FileOffer = z.infer<typeof fileOfferSchema>;
 type TransferState = 'uploading' | 'pending' | 'receiving' | 'received' | 'declined' | 'expired' | 'cancelled' | 'failed';
-type Status = { id: string; name: string; size: number; state: TransferState };
+type Status = { id: string; name: string; size: number; state: TransferState; expiresAt?: number };
 
 /** A single in-memory handoff: bounded size, lifetime and concurrency; no path is ever accepted. */
 export class FileTransferSlot {
@@ -30,7 +30,10 @@ export class FileTransferSlot {
   private expire(): void {
     if (this.expires && this.now() >= this.expires && this.bytes) this.clear('expired');
   }
-  status(): Status | undefined { this.expire(); return this.current ? { ...this.current } : undefined; }
+  status(): Status | undefined {
+    this.expire();
+    return this.current ? { ...this.current, ...(this.expires && ['pending', 'receiving'].includes(this.current.state) ? { expiresAt: this.expires } : {}) } : undefined;
+  }
   async upload(raw: unknown, source: AsyncIterable<Uint8Array>): Promise<FileOffer> {
     const metadata = fileMetadataSchema.parse(raw);
     if (metadata.size > this.maxBytes) throw new Error('File exceeds the size limit.');
@@ -55,7 +58,7 @@ export class FileTransferSlot {
       this.current.state = 'pending';
       this.expires = this.now() + this.ttlMs;
       this.timer = setTimeout(() => this.clear('expired'), this.ttlMs); this.timer.unref();
-      return { ...metadata, id, sha256: hash.digest('hex') };
+      return { ...metadata, id, sha256: hash.digest('hex'), expiresAt: this.expires };
     } catch (error) {
       if (revision === this.revision) this.clear('failed');
       throw error;

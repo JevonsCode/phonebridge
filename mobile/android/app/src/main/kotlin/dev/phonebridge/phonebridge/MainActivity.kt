@@ -44,6 +44,32 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
+                        "getClipboardAccessEnabled" -> result.success(AutomationPreferences.clipboardAccessEnabled(this))
+                        "setClipboardAccessEnabled" -> {
+                            val enabled = call.argument<Boolean>("enabled") ?: throw IllegalArgumentException("enabled must be a boolean.")
+                            AutomationPreferences.setClipboardAccessEnabled(this, enabled)
+                            result.success(null)
+                        }
+                        "getProtectConnectionControls" -> result.success(AutomationPreferences.protectConnectionControls(this))
+                        "setProtectConnectionControls" -> {
+                            val enabled = call.argument<Boolean>("enabled") ?: throw IllegalArgumentException("enabled must be a boolean.")
+                            AutomationPreferences.setProtectConnectionControls(this, enabled)
+                            result.success(null)
+                        }
+                        "getAutoReceiveFilesEnabled" -> result.success(BridgeSession.fileInbox!!.autoReceiveEnabled)
+                        "setAutoReceiveFilesEnabled" -> {
+                            val enabled = call.argument<Boolean>("enabled")
+                                ?: throw IllegalArgumentException("enabled must be a boolean.")
+                            BridgeSession.fileInbox!!.setAutoReceiveEnabled(enabled)
+                            result.success(null)
+                        }
+                        "getSaveMediaToGallery" -> result.success(BridgeSession.fileInbox!!.saveMediaToGallery)
+                        "setSaveMediaToGallery" -> {
+                            BridgeSession.fileInbox!!.setSaveMediaToGallery(call.argument<Boolean>("enabled")
+                                ?: throw IllegalArgumentException("enabled must be a boolean."))
+                            result.success(null)
+                        }
+                        "allowAllAutomation" -> result.success(BridgeSession.allowAllAutomation(call.argument<String>("id")))
                         "getShowOperationTrails" -> result.success(OperationTrailPreference.enabled(this))
                         "setShowOperationTrails" -> {
                             val enabled = call.argument<Boolean>("enabled")
@@ -64,7 +90,7 @@ class MainActivity : FlutterActivity() {
                         "shareFile" -> { BridgeSession.fileInbox!!.share(this, call.argument<String>("id") ?: ""); result.success(null) }
                         "storageStatus" -> result.success(BridgeSession.fileInbox!!.storage())
                         "openFilesFolder" -> {
-                            AppStorage.openFolder(this, BridgeSession.fileInbox!!.storage()["files"] != 0)
+                            AppStorage.openFolder(this, BridgeSession.fileInbox!!.storage()["downloadFiles"] != 0)
                             result.success(null)
                         }
                         "cleanupFiles" -> {

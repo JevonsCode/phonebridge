@@ -121,7 +121,7 @@ test('first registration and repeat opening retain configuration and owned job',
 test('same-path runtime replacement refreshes the service once and preserves pairing',posix,async t=>{
   const f=await fixture(t),ctl=fakeLaunchctl(),root=f.config.projectRoot;
   for (const path of ['desktop/macos','bridge/dist']) await mkdir(join(root,path),{recursive:true});
-  for (const path of ['package-manifest.json','desktop/macos/service.mjs','desktop/macos/lifecycle.mjs','desktop/network.mjs','bridge/package-lock.json','bridge/dist/hub.js']) await writeFile(join(root,path),'original');
+  for (const path of ['package-manifest.json','desktop/macos/service.mjs','desktop/macos/lifecycle.mjs','desktop/network.mjs','desktop/network-transaction.mjs','desktop/configuration-lock.mjs','bridge/package-lock.json','bridge/dist/hub.js']) await writeFile(join(root,path),'original');
   const first={...f.config,runtimeRevision:await macRuntimeRevision(root)};
   const pairing=join(f.home,'.phonebridge','pairing.json');
   await writeFile(pairing,'preserved',{mode:0o600});

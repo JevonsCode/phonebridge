@@ -37,6 +37,7 @@ void main() {
         case 'getLanguagePreference':
           return preference;
         case 'getShowOperationTrails':
+        case 'getAutoReceiveFilesEnabled':
           return true;
         case 'getScreenAwakeMode':
           return 'controlling';
@@ -161,6 +162,10 @@ void main() {
             'status',
             'getLanguagePreference',
             'getShowOperationTrails',
+            'getAutoReceiveFilesEnabled',
+            'getClipboardAccessEnabled',
+            'getSaveMediaToGallery',
+            'getProtectConnectionControls',
             'getScreenAwakeMode',
             'setLanguagePreference',
             'getUpdateStatus',

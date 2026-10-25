@@ -22,8 +22,12 @@ if ($task.Count -gt 0) { Export-ScheduledTask -TaskName 'PhoneBridge Desktop' -T
 # Publish before changing the active configuration. A failure preserves the old
 # target; the immutable bootstrap remains safe through subsequent rollback.
 [void](Install-PhoneBridgeMcpLauncher -Source (Join-Path $PackageRoot 'PhoneBridgeMcp.exe') -StateDirectory (Split-Path $configPath -Parent))
+$publishedConfig = [pscustomobject]@{ value = $null }
 Invoke-PhoneBridgeSetupTransaction -HadTask ($task.Count -gt 0) -Install {
     & (Join-Path $PackageRoot 'scripts\windows\install-desktop.ps1') -ProjectRoot $PackageRoot -NodePath (Join-Path $PackageRoot 'runtime\node.exe') -HostAddress $address -Port $(if ($previous) { $previous.port } else { 8767 }) -ConfigurationPath $configPath
+    $fresh = Read-PhoneBridgeDesktopConfiguration $configPath
+    if ($fresh.projectRoot -ne $PackageRoot) { throw 'A newer installation configuration was preserved.' }
+    $publishedConfig.value = $fresh
 } -CreateShortcut {
     & (Join-Path $PSScriptRoot 'shortcut.ps1') -PackageRoot $PackageRoot
 } -RemoveNewTask {
@@ -34,15 +38,16 @@ Invoke-PhoneBridgeSetupTransaction -HadTask ($task.Count -gt 0) -Install {
 } -RestoreTask {
     [void](Register-ScheduledTask -TaskName 'PhoneBridge Desktop' -TaskPath '\' -Xml (Get-Content -LiteralPath "$backup.task.xml" -Raw) -Force)
 } -RestoreConfiguration {
+    if ($null -eq $publishedConfig.value) { return }
     if ($previous) {
         $restore = "$configPath.restore-$([Guid]::NewGuid().ToString('N'))"
-        try { [IO.File]::Copy($backup, $restore, $false); Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $restore -ConfigurationPath $configPath }
+        try { [IO.File]::Copy($backup, $restore, $false); Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $restore -ConfigurationPath $configPath -ExpectedConfiguration $publishedConfig.value }
         finally { if (Test-Path -LiteralPath $restore) { Remove-Item -LiteralPath $restore } }
     }
     elseif (Test-Path -LiteralPath $configPath) {
         $newConfig = Read-PhoneBridgeDesktopConfiguration $configPath
         if ($newConfig.projectRoot -ne $PackageRoot) { throw 'Cannot remove configuration whose installation ownership changed.' }
-        Remove-Item -LiteralPath $configPath
+        Remove-PhoneBridgeAtomicConfiguration -ConfigurationPath $configPath -ExpectedConfiguration $publishedConfig.value
     }
 }
 # An already running service stays in place; the new paths apply at the next start.

@@ -70,12 +70,13 @@ $temporaryConfig = "$ConfigurationPath.tmp-$([Guid]::NewGuid().ToString('N'))"
 try {
     $json = $config | ConvertTo-Json
     [IO.File]::WriteAllText($temporaryConfig, $json, (New-Object Text.UTF8Encoding($false)))
-    Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporaryConfig -ConfigurationPath $ConfigurationPath
+    if ($oldConfig) { Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporaryConfig -ConfigurationPath $ConfigurationPath -ExpectedConfiguration $oldConfig }
+    else { Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporaryConfig -ConfigurationPath $ConfigurationPath -RequireAbsent }
     try {
         [void](Register-ScheduledTask -TaskName $taskName -TaskPath $taskPath -InputObject $task -Force -ErrorAction Stop)
     } catch {
-        if ($backup) { [IO.File]::Copy($backup, $temporaryConfig, $false); Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporaryConfig -ConfigurationPath $ConfigurationPath }
-        else { Remove-Item -LiteralPath $ConfigurationPath -Force }
+        if ($backup) { [IO.File]::Copy($backup, $temporaryConfig, $false); Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporaryConfig -ConfigurationPath $ConfigurationPath -ExpectedConfiguration ([pscustomobject]$config) }
+        else { Remove-PhoneBridgeAtomicConfiguration -ConfigurationPath $ConfigurationPath -ExpectedConfiguration ([pscustomobject]$config) }
         throw "Task registration failed; the previous desktop configuration was restored. This installer will not elevate privileges or create a system service. Check current-user Task Scheduler permission. $($_.Exception.Message)"
     }
 } finally {

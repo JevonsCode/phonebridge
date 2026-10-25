@@ -89,7 +89,39 @@ For an installed Windows preview, the generated shape is below. Use the client's
 
 On an installed Mac preview, the server entry uses `"command": "/bin/sh"` and `"args": ["/Users/Owner/.phonebridge/bin/phonebridge-mcp"]`. The shell entry reads `desktop-macos.json`; Windows reads `desktop.json`. Both resolve `pairing.json` beside that configuration (or its explicit `credentialFile` override), forward stdin/stdout/stderr, and return the MCP exit code. Windows credentials remain protected with DPAPI. The desktop defaults to port `8767`; the launcher always supplies the actual configured endpoint rather than using the standalone adapter's default port `8765`.
 
-**One-time migration from 0.6.0 or an older copied configuration:** after installing the new preview, copy its MCP configuration and replace only the existing `phonebridge` server entry in your AI client. Remove that entry's old version-specific arguments and `PHONEBRIDGE_URL`/credential environment settings. Then disconnect/reconnect that MCP server or restart the AI client. Subsequent desktop upgrades do not require another AI configuration edit. A running MCP process keeps its current target until reconnect; it does not hot-swap. Windows installation retains the immutable fixed executable even while it is running and publishes active configuration changes atomically. The new launcher is installed before the active target changes; a failed publication preserves the old configuration and existing sessions.
+**One-time migration from 0.6.0 or an older copied configuration:** after installing the new preview, copy its MCP configuration and replace only the existing `phonebridge` server entry in your AI client. Remove that entry's old version-specific arguments and `PHONEBRIDGE_URL`/credential environment settings. Then disconnect/reconnect that MCP server or restart the AI client. Subsequent desktop upgrades do not require another AI configuration edit. A running MCP process keeps its runtime payload until reconnect. The current adapter reads the owned desktop endpoint before each request, so a saved address/port change does not require re-registering MCP. An old connection's control handle expires after reconnect; acquire a new handle and observe without replaying old actions.
+
+Windows keeps the compatible `PhoneBridge MCP bootstrap v1` protocol identity. An idle launcher is refreshed atomically, including earlier v1 installations. If it is running, installation preserves that executable and its live sessions, then updates the active payload configuration atomically. The desktop retries a deferred launcher update automatically after those sessions finish; no installer rerun is needed. A busy launcher does not block the App upgrade. The launcher is validated before changing the active target, and failed publication preserves the old configuration.
+
+The Windows fixed launcher accepts `--help` and `--version`. `--version` reports **PhoneBridge App** from the current installation's `package-manifest.json` and separately reports the **MCP launcher** protocol identity. The protocol identity is not the App release version. MCP `initialize.serverInfo.version` uses the installed manifest; a source checkout uses `mobile/pubspec.yaml` (or the bridge package version when mobile sources are absent). Unknown launcher arguments print usage and exit with code 2.
+
+### Claude Code (optional)
+
+PhoneBridge runs without the Claude CLI. Use **Copy MCP configuration** for a client that accepts JSON. If you already use Claude Code, the following optional commands register the same fixed entry for your user across projects. They follow the [official Claude Code MCP instructions](https://code.claude.com/docs/en/mcp#option-3-add-a-local-stdio-server).
+
+Windows PowerShell:
+
+```powershell
+claude mcp add --transport stdio --scope user phonebridge -- "$env:USERPROFILE\.phonebridge\bin\PhoneBridgeMcp.exe"
+```
+
+macOS:
+
+```sh
+claude mcp add --transport stdio --scope user phonebridge -- /bin/sh "$HOME/.phonebridge/bin/phonebridge-mcp"
+```
+
+Verify or remove this entry:
+
+```sh
+claude mcp get phonebridge
+claude mcp list
+claude mcp remove phonebridge --scope user
+```
+
+Within Claude Code, `/mcp` shows connection status. Registration only saves configuration; verify a connected server, its tool list and a permitted phone observation before reporting success. If an older entry already exists, remove it in its original scope, then register the fixed entry. JSON clients need only their existing `phonebridge` entry replaced; keep all other servers.
+
+Files from trusted computers are received automatically by default. The phone's saved automatic-receive setting can be disabled for manual receipt. When `autoReceiveEnabled=true`, the AI must use `phone_list_devices` to check the same phone's matching `transfer.id` until `transfer.state=received` before dependent file operations; no owner confirmation is required. Queued/receiving does not confirm receipt, and the AI must not resend a file just because it is still waiting. When automatic receipt is disabled, report the actual pending state and the saved setting. Receipt does not send a message or share a file to another app/contact.
 
 Portable or development use without an installed fixed entry still copies an explicit Node path, MCP script and environment. That fallback is version-specific and must be copied again when its paths or endpoint change. Merely unpacking a portable update does not migrate the owned installation. The public 0.6.0 release retains its previous behavior; these fixed entries are part of the current preview.
 
@@ -98,11 +130,15 @@ Keep the desktop service running and confirm the phone is connected before reque
 For the current multi-device/control tools, teach the AI this convention:
 
 1. Call `phone_list_devices` and choose a paired online phone. With several online phones, specify its `deviceId`; never guess or silently switch after disconnect.
-2. Call `phone_acquire_control`. Retain the returned opaque `taskHandle` whether state is active or queued. If queued, call `phone_wait_for_control` (at most 25s per call); only an active grant permits observations, actions and files.
-3. Pass that handle to every observation/action/file call. Observe, do one action, then observe again. `phone_wait_for` checks a screen condition for at most 10s; it is different from waiting for control.
+2. Call `phone_acquire_control` once per workflow. Retain and reuse the returned opaque `taskHandle` whether state is active or queued. If queued, call `phone_wait_for_control` (at most 25s per call); only an active grant permits observations, clipboard, actions and files.
+3. Pass that same handle to every call. Observe, do one action, then observe again. Do not reacquire for each command: control changes invalidate previous node/screenshot IDs. Use `phone_renew_control` before the active 60s idle lease expires when more time is needed; queued or expired tasks cannot renew. `phone_wait_for` checks a screen condition for at most 10s; it is different from waiting for control.
 4. Release with `phone_release_control` in `finally`, including cancellation or failure. Release also cancels queued tickets. Do not reuse expired handles, reacquire silently or replay uncertain actions after reconnect.
 
 Waiting is FIFO, at most 64 tasks. Live waiting checks renew only that ticket's 120s lifetime. An active task expires after 60s without valid observations/actions; status reads and heartbeats do not keep it active. An open waiting tool call receives a grant through push notification, rather than repeated screenshots. PhoneBridge does not relaunch a closed AI client, contain a model, or schedule the business steps of the task. Phone and desktop show the current owner and waiting count. See the [protocol](protocol.md) for exact compatibility and errors.
+
+For a copied link, call `phone_get_clipboard` with the workflow handle. It returns `text`, `hasText`, `truncated` and `totalLength`; inspect `truncated` before treating the result as complete. Clipboard access is enabled by default and follows the phone's saved setting rather than asking on each call. `phone_set_clipboard` sets text; `phone_node_action` can `paste`, `copy`, `cut` or `select_all` on a fresh `nodeId` or a selector. Use exactly one node target. A selector combines literal `text`, `description`, `textContains`, `descriptionContains`, `resourceId` or `className`; use an explicit zero-based `index` only when choosing among known matches. `AMBIGUOUS_SELECTOR` requires refinement rather than silently selecting the first match.
+
+For a screenshot click, pass the latest returned `screenshotId` with `imageX` and `imageY` to `phone_tap`, without physical `x`/`y` or a selector. The phone maps the crop and rejects stale or changed screenshots. Physical-coordinate taps remain available for older phones. `phone_wait_for` examples are `condition={"text":"发布笔记"}` for an exact visible label and `condition={"packageName":"com.xingin.xhs"}` for the intended app. There is no `windowUnobscured` condition: inspect `WINDOW_OBSCURED` details to understand an overlap, then check the intended package/text when it clears. A `stateDescription` is the raw Android value, not inferred proof that a custom control is selected.
 
 These capabilities require the matching phone and Hub; unsupported methods return `UNSUPPORTED`. Preserve the installed fixed MCP entry and reconnect the AI client after upgrading; the entry is version-independent. The physical single-phone/two-computer queue test is pending and must be reported separately from simulated socket/widget checks. Do not replace public download URLs with an unpublished source version or claim that all current-source features are in the older download above.
 

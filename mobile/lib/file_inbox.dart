@@ -208,8 +208,7 @@ class _FileInboxPageState extends State<FileInboxPage> {
                     return Padding(
                       padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
                       child: Text(
-                        '${tr(context, '接收后点分享，选择微信、WhatsApp 或其他应用')}\n'
-                        '${tr(context, '文件保存在「下载/PhoneBridge」，也可以在系统文件管理里查看和删除。')}',
+                        tr(context, '图片和视频可保存到相册，其他文件保存在下载/PhoneBridge。'),
                         style: const TextStyle(fontSize: 12, color: muted),
                       ),
                     );
@@ -284,7 +283,7 @@ class FileRow extends StatelessWidget {
     final name = file['name'] as String? ?? '';
     final error = file['error'] as String? ?? '';
     final stateText = tr(context, switch (state) {
-      'pending' => '等待你接收',
+      'pending' => file['autoReceiveEnabled'] == true ? '等待自动接收' : '等待你接收',
       'receiving' => '正在接收并校验…',
       'received' => '已接收',
       'declined' => '已拒绝',
@@ -296,6 +295,14 @@ class FileRow extends StatelessWidget {
       if ((file['sourceName'] as String? ?? '').isNotEmpty) file['sourceName'],
       fileSize(file['size'] as num? ?? 0),
       if (state != 'received') stateText,
+      if (state == 'received')
+        tr(
+          context,
+          file['location'] == 'gallery' ? '已保存到相册' : '已保存到下载/PhoneBridge',
+        ),
+      if ((state == 'pending' || state == 'receiving') &&
+          file['expiresAt'] is num)
+        '${tr(context, '有效至')} ${TimeOfDay.fromDateTime(DateTime.fromMillisecondsSinceEpoch((file['expiresAt'] as num).toInt())).format(context)}',
     ].join(' · ');
     return Container(
       key: Key('file-$id'),

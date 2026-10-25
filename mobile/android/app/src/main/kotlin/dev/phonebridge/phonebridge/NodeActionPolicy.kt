@@ -2,7 +2,7 @@ package dev.phonebridge.phonebridge
 
 /** Pure target identity and geometry checks for actions on an observed node. */
 object NodeActionPolicy {
-    val actions = setOf("click", "long_click", "scroll_forward", "scroll_backward", "focus")
+    val actions = setOf("click", "long_click", "scroll_forward", "scroll_backward", "focus", "paste", "copy", "cut", "select_all")
 
     data class Target(
         val windowId: Int,
@@ -16,11 +16,29 @@ object NodeActionPolicy {
         val checked: Boolean = false,
         val checkable: Boolean = false,
         val focused: Boolean = false,
+        val stateDescription: String? = null,
+        val editable: Boolean = false,
+        val selectionStart: Int = -1,
+        val selectionEnd: Int = -1,
     )
 
     fun requireUnchanged(observed: Target, current: Target) {
         if (observed != current) {
             throw BridgeFailure("STALE_NODE", "The target changed or moved. Request state again.")
+        }
+    }
+
+    fun requireTextAction(action: String, editable: Boolean, focused: Boolean, textLength: Int,
+                          selectionStart: Int, selectionEnd: Int) {
+        if (action in setOf("paste", "cut") && (!editable || !focused)) {
+            throw BridgeFailure("FOCUS_REQUIRED", "Paste and cut require a focused editable, non-password field.")
+        }
+        if (action in setOf("copy", "cut") && (minOf(selectionStart, selectionEnd) < 0 || selectionStart == selectionEnd ||
+                maxOf(selectionStart, selectionEnd) > textLength)) {
+            throw BridgeFailure("SELECTION_REQUIRED", "Select nonempty text first, for example with select_all, then request fresh state.")
+        }
+        if (action == "select_all" && textLength <= 0) {
+            throw BridgeFailure("SELECTION_REQUIRED", "The target has no selectable text.")
         }
     }
 

@@ -88,6 +88,19 @@ test('a reconnect with the same device ID does not revive a previous task', asyn
   assert.equal(f.requests.length, 1);
 });
 
+test('one running client follows a changed desktop endpoint, expires the old connection handle and never replays its action', async t => {
+  const a = await fixture(t), b = await fixture(t); b.reconnect();
+  let endpoint = a.url;
+  const client = new AgentClient(new URL(a.url), 'x'.repeat(32), async () => endpoint);
+  const previous = await client.acquire('phone-a');
+  endpoint = b.url;
+  await assert.rejects(client.command('tap', { x: 1, y: 2 }, previous), (error: AgentError) => error.code === 'CONTROL_EXPIRED');
+  assert.equal(a.requests.filter(item => item.method === 'tap').length, 0);
+  assert.equal(b.requests.filter(item => item.method === 'tap').length, 0);
+  const current = await client.acquire('phone-a'); await client.command('state', {}, current); await client.release(current.taskHandle as string);
+  assert.deepEqual(b.requests.map(item => item.method), ['acquire_control', 'state', 'release_control']);
+});
+
 test('multiple phones require explicit selection; independent handles target each phone', async t => {
   const f = await fixture(t); f.multiple();
   await assert.rejects(f.client.acquire(), (e: AgentError) => e.code === 'DEVICE_REQUIRED');
@@ -190,6 +203,7 @@ test('queued handles cannot act until a phone grant notification, and cancellati
   const task = await f.client.acquire('phone-a'); assert.equal(task.state, 'queued');
   assert.equal(f.requests[0]!.params.queue, true);
   await assert.rejects(f.client.command('tap', { x: 1, y: 2 }, task), (e: AgentError) => e.code === 'CONTROL_QUEUED');
+  await assert.rejects(f.client.renew(task.taskHandle as string), (e: AgentError) => e.code === 'CONTROL_QUEUED');
   assert.equal(f.requests.length, 1);
   const waiting = await f.client.waitForControl(task.taskHandle as string, 0);
   assert.equal(waiting.state, 'queued'); assert.equal(waiting.position, 1);

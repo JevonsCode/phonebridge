@@ -11,6 +11,8 @@ import 'app_language.dart';
 import 'operation_trails.dart';
 import 'screen_awake.dart';
 import 'file_inbox.dart';
+import 'file_receive_setting.dart';
+import 'automation_settings.dart';
 import 'operation_history.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -71,6 +73,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   String? error;
   bool pairingPrefilled = false;
   int tab = 0;
+  int automationRevision = 0;
   bool showPairing = false, manual = false;
   // Retries alternate between scheduled and in flight; keep the hint until connected.
   bool reconnectFailed = false;
@@ -230,6 +233,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
         pairingPrefilled = false;
         showPairing = false;
       }
+      if (method == 'allowAllAutomation' && mounted) {
+        setState(() => automationRevision++);
+      }
       await refresh();
       if ((method == 'forgetSavedConnection' || method == 'forgetComputer') &&
           !hasSavedPairing &&
@@ -319,13 +325,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
     }
   }
 
-  Widget appAccessEntry(String key) => SettingsRow(
-    key: Key(key),
-    icon: Icons.apps_rounded,
-    title: '允许访问的应用',
-    subtitle:
-        '${(status['allowedPackages'] as List? ?? []).length} ${tr(context, '个应用 · 点击修改')}',
-    onTap: busy ? null : () => openAppAccess(),
+  Widget appAccessEntry(String key) => ProtectedControl(
+    name: 'app-access',
+    child: SettingsRow(
+      key: Key(key),
+      icon: Icons.apps_rounded,
+      title: '允许访问的应用',
+      subtitle:
+          '${(status['allowedPackages'] as List? ?? []).length} ${tr(context, '个应用 · 点击修改')}',
+      onTap: busy ? null : () => openAppAccess(),
+    ),
   );
 
   Future<void> startDesktopService() async {
@@ -556,13 +565,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         padding: const EdgeInsets.fromLTRB(24, 8, 24, 6),
                         child: SizedBox(
                           width: 512,
-                          child: OutlinedButton.icon(
-                            key: const Key('stop'),
-                            onPressed: busy
-                                ? null
-                                : () => perform('disconnect'),
-                            icon: const Icon(Icons.pause_rounded, size: 20),
-                            label: Text(tr(context, '暂停连接')),
+                          child: ProtectedControl(
+                            name: 'pause',
+                            child: OutlinedButton.icon(
+                              key: const Key('stop'),
+                              onPressed: busy
+                                  ? null
+                                  : () => perform('disconnect'),
+                              icon: const Icon(Icons.pause_rounded, size: 20),
+                              label: Text(tr(context, '暂停连接')),
+                            ),
                           ),
                         ),
                       ),
@@ -753,27 +765,30 @@ class _ConnectionPageState extends State<ConnectionPage> {
       ],
       SurfaceGroup(
         children: [
-          SwitchListTile(
-            key: const Key('actions'),
-            contentPadding: const EdgeInsets.fromLTRB(20, 8, 16, 8),
-            value: granted,
-            onChanged: connected && !busy
-                ? (v) => perform('setActionsEnabled', {'enabled': v})
-                : null,
-            title: Text(
-              tr(context, '允许操作'),
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-            ),
-            subtitle: Text(
-              tr(
-                context,
-                !connected && granted
-                    ? '操作授权已保留，重连后恢复'
-                    : granted
-                    ? 'AI 可以操作下方已授权的应用'
-                    : 'AI 只能查看下方已授权的应用',
+          ProtectedControl(
+            name: 'actions',
+            child: SwitchListTile(
+              key: const Key('actions'),
+              contentPadding: const EdgeInsets.fromLTRB(20, 8, 16, 8),
+              value: granted,
+              onChanged: connected && !busy
+                  ? (v) => perform('setActionsEnabled', {'enabled': v})
+                  : null,
+              title: Text(
+                tr(context, '允许操作'),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
               ),
-              style: const TextStyle(fontSize: 12, color: muted, height: 1.6),
+              subtitle: Text(
+                tr(
+                  context,
+                  !connected && granted
+                      ? '操作授权已保留，重连后恢复'
+                      : granted
+                      ? 'AI 可以操作下方已授权的应用'
+                      : 'AI 只能查看下方已授权的应用',
+                ),
+                style: const TextStyle(fontSize: 12, color: muted, height: 1.6),
+              ),
             ),
           ),
         ],
@@ -835,6 +850,40 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   List<Widget> settingsView() => [
     const SizedBox(height: 12),
+    if (hasSavedPairing || connected) ...[
+      ProtectedControl(
+        name: 'allow-all',
+        child: FilledButton.icon(
+          key: const Key('allow-all-automation'),
+          onPressed: busy ? null : () => perform('allowAllAutomation'),
+          icon: const Icon(Icons.done_all_rounded, size: 20),
+          label: Text(tr(context, '全部允许')),
+        ),
+      ),
+      const SizedBox(height: 12),
+    ],
+    SurfaceGroup(
+      key: ValueKey('automation-$automationRevision'),
+      children: const [
+        AutomationSetting(
+          preference: 'ClipboardAccessEnabled',
+          title: '允许 AI 使用剪贴板',
+          subtitle: '读取、复制和粘贴手机上的文字',
+        ),
+        FileReceiveSetting(),
+        AutomationSetting(
+          preference: 'SaveMediaToGallery',
+          title: '图片和视频保存到相册',
+          subtitle: '收到后可直接在其他应用中选择',
+        ),
+        AutomationSetting(
+          preference: 'ProtectConnectionControls',
+          title: '避免 AI 误断开连接',
+          subtitle: '保护连接和授权开关，防止操作中误触',
+        ),
+      ],
+    ),
+    const SizedBox(height: 12),
     const SurfaceGroup(children: [OperationTrailSetting()]),
     const SizedBox(height: 12),
     const SurfaceGroup(children: [ScreenAwakeSetting()]),
@@ -852,17 +901,20 @@ class _ConnectionPageState extends State<ConnectionPage> {
           padding: EdgeInsets.symmetric(horizontal: 20),
           child: Divider(),
         ),
-        SettingsRow(
-          icon: Icons.laptop_mac_outlined,
-          title: '已记住的电脑',
-          subtitle: computers.isNotEmpty || hasSavedPairing
-              ? computerAddress
-              : '尚未配对',
-          onTap: busy || startingDesktop
-              ? null
-              : computers.isNotEmpty || hasSavedPairing
-              ? showComputer
-              : openPairing,
+        ProtectedControl(
+          name: 'computers',
+          child: SettingsRow(
+            icon: Icons.laptop_mac_outlined,
+            title: '已记住的电脑',
+            subtitle: computers.isNotEmpty || hasSavedPairing
+                ? computerAddress
+                : '尚未配对',
+            onTap: busy || startingDesktop
+                ? null
+                : computers.isNotEmpty || hasSavedPairing
+                ? showComputer
+                : openPairing,
+          ),
         ),
         if (hasSavedPairing || connected || connecting) ...[
           const Padding(
@@ -883,7 +935,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           title: '文件夹',
           subtitle: storage == null
               ? '下载/PhoneBridge'
-              : '${tr(context, '下载/PhoneBridge')} · ${storage!['files']} ${tr(context, '个文件')} · ${fileSize(storage!['bytes'] as num? ?? 0)}',
+              : '${tr(context, '下载/PhoneBridge')} · ${storage!['downloadFiles'] ?? storage!['files']} ${tr(context, '个文件')} · ${fileSize((storage!['downloadBytes'] ?? storage!['bytes']) as num? ?? 0)}',
           onTap: busy ? null : () => perform('openFilesFolder'),
         ),
         const Padding(
@@ -1341,27 +1393,30 @@ class _ConnectionPageState extends State<ConnectionPage> {
                               Wrap(
                                 spacing: 8,
                                 children: [
-                                  TextButton(
-                                    key: Key('resume-${computer['id']}'),
-                                    onPressed: disabled || !enabled
-                                        ? null
-                                        : () => edit(
-                                            () => perform(
-                                              'setComputerResumeAllowed',
-                                              {
-                                                'id': computer['id'],
-                                                'enabled':
-                                                    computer['resumeAllowed'] !=
-                                                    true,
-                                              },
+                                  ProtectedControl(
+                                    name: 'computer-resume',
+                                    child: TextButton(
+                                      key: Key('resume-${computer['id']}'),
+                                      onPressed: disabled || !enabled
+                                          ? null
+                                          : () => edit(
+                                              () => perform(
+                                                'setComputerResumeAllowed',
+                                                {
+                                                  'id': computer['id'],
+                                                  'enabled':
+                                                      computer['resumeAllowed'] !=
+                                                      true,
+                                                },
+                                              ),
                                             ),
-                                          ),
-                                    child: Text(
-                                      tr(
-                                        context,
-                                        computer['resumeAllowed'] == true
-                                            ? '暂停连接'
-                                            : '恢复连接',
+                                      child: Text(
+                                        tr(
+                                          context,
+                                          computer['resumeAllowed'] == true
+                                              ? '暂停连接'
+                                              : '恢复连接',
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -1379,22 +1434,25 @@ class _ConnectionPageState extends State<ConnectionPage> {
                                   ),
                                 ],
                               ),
-                              SwitchListTile(
-                                key: Key('actions-${computer['id']}'),
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(
-                                  tr(context, '允许操作'),
-                                  style: const TextStyle(fontSize: 14),
+                              ProtectedControl(
+                                name: 'computer-actions',
+                                child: SwitchListTile(
+                                  key: Key('actions-${computer['id']}'),
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(
+                                    tr(context, '允许操作'),
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
+                                  value: computer['actionsEnabled'] == true,
+                                  onChanged: disabled
+                                      ? null
+                                      : (value) => edit(
+                                          () => perform('setActionsEnabled', {
+                                            'id': computer['id'],
+                                            'enabled': value,
+                                          }),
+                                        ),
                                 ),
-                                value: computer['actionsEnabled'] == true,
-                                onChanged: disabled
-                                    ? null
-                                    : (value) => edit(
-                                        () => perform('setActionsEnabled', {
-                                          'id': computer['id'],
-                                          'enabled': value,
-                                        }),
-                                      ),
                               ),
                             ],
                           ),
@@ -1414,16 +1472,19 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  FilledButton.icon(
-                    key: const Key('pair-another-computer'),
-                    onPressed: disabled
-                        ? null
-                        : () {
-                            Navigator.pop(sheetContext);
-                            pairAnotherComputer();
-                          },
-                    icon: const Icon(Icons.add_rounded, size: 20),
-                    label: Text(tr(context, '配对另一台电脑')),
+                  ProtectedControl(
+                    name: 'pair-another',
+                    child: FilledButton.icon(
+                      key: const Key('pair-another-computer'),
+                      onPressed: disabled
+                          ? null
+                          : () {
+                              Navigator.pop(sheetContext);
+                              pairAnotherComputer();
+                            },
+                      icon: const Icon(Icons.add_rounded, size: 20),
+                      label: Text(tr(context, '配对另一台电脑')),
+                    ),
                   ),
                 ],
               ),

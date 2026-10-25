@@ -5,6 +5,19 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 class NodeActionPolicyTest {
+    @Test fun clipboardActionsRequireRealEditableFocusAndValidSelection() {
+        NodeActionPolicy.requireTextAction("copy", false, false, 4, 0, 4)
+        NodeActionPolicy.requireTextAction("copy", false, false, 4, 4, 0)
+        NodeActionPolicy.requireTextAction("cut", true, true, 4, 0, 4)
+        NodeActionPolicy.requireTextAction("paste", true, true, 0, -1, -1)
+        NodeActionPolicy.requireTextAction("select_all", false, false, 4, -1, -1)
+        assertFailure("FOCUS_REQUIRED") { NodeActionPolicy.requireTextAction("paste", false, true, 4, 0, 4) }
+        assertFailure("FOCUS_REQUIRED") { NodeActionPolicy.requireTextAction("cut", true, false, 4, 0, 4) }
+        assertFailure("SELECTION_REQUIRED") { NodeActionPolicy.requireTextAction("copy", true, true, 4, 0, 0) }
+        assertFailure("SELECTION_REQUIRED") { NodeActionPolicy.requireTextAction("copy", true, true, 4, 0, 5) }
+        assertFailure("SELECTION_REQUIRED") { NodeActionPolicy.requireTextAction("select_all", true, true, 0, 0, 0) }
+    }
+
     private val screen = WindowGeometry.Bounds(0, 0, 400, 800)
     private val safe = WindowGeometry.Bounds(0, 30, 400, 750)
     private val target = NodeActionPolicy.Target(12, "dev.allowed", WindowGeometry.Bounds(10, 40, 80, 90),
@@ -20,6 +33,8 @@ class NodeActionPolicyTest {
             target.copy(text = "Delete"), target.copy(description = "Remove"),
             target.copy(selected = true), target.copy(checked = true),
             target.copy(checkable = true), target.copy(focused = true),
+            target.copy(stateDescription = "selected"), target.copy(editable = true),
+            target.copy(selectionStart = 0, selectionEnd = 3),
             target.copy(bounds = target.bounds.copy(left = 11))).forEach { changed ->
             assertFailure("STALE_NODE") { NodeActionPolicy.requireUnchanged(target, changed) }
         }

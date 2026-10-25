@@ -1,6 +1,7 @@
 package dev.phonebridge.phonebridge
 
-class BridgeFailure(val code: String, override val message: String) : Exception(message)
+class BridgeFailure(val code: String, override val message: String,
+                    val details: Map<String, Any> = emptyMap()) : Exception(message)
 
 /** Pure authorization gate, shared by every native RPC including asynchronous capture checks. */
 object OperationPolicy {
@@ -23,7 +24,7 @@ object OperationPolicy {
             throw BridgeFailure("NO_SESSION", "The session has ended.")
         }
         if (!unlocked) {
-            throw BridgeFailure("DEVICE_LOCKED", "Unlock the phone before using PhoneBridge.")
+            throw BridgeFailure("DEVICE_LOCKED", "Unlock the phone before using PhoneBridge.", mapOf("obscuredBy" to "lockscreen"))
         }
         if (ownerAuthorizationOpen) {
             throw BridgeFailure("OWNER_AUTHORIZATION", "Complete app authorization locally on the phone.")

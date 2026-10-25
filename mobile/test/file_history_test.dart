@@ -120,7 +120,7 @@ void main() {
         ),
       ),
     );
-    expect(find.textContaining('Download/PhoneBridge'), findsOneWidget);
+    expect(find.textContaining('Downloads/PhoneBridge'), findsWidgets);
     await tester.tap(find.byKey(const Key('file-inbox-folder')));
     expect(opened, 1);
     await tester.tap(find.byKey(const Key('file-inbox-cleanup')));
