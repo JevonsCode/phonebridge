@@ -142,6 +142,36 @@ test('the exact workflow PowerShell guard rejects single-backslash traversal and
   assert.equal(results[7].normalized, 'desktop/server.mjs');
 });
 
+test('the workflow ZIP guard accepts large valid packages and still rejects unsafe entries', async t => {
+  const workflow = await readFile(new URL('../../.github/workflows/release-distribution.yml', import.meta.url), 'utf8');
+  const guard = workflow.match(/\$archive = \[System\.IO\.Compression\.ZipFile\]::OpenRead\(\$assetPath\)\r?\n\s+try \{([\s\S]*?)\} finally \{ \$archive\.Dispose\(\) \}/)?.[1];
+  assert.ok(guard, 'Execute the same ZIP validation body as the release workflow');
+  const source = `$ErrorActionPreference = 'Stop'
+$largePackage = @(0..4433 | ForEach-Object { [pscustomobject]@{ FullName = "bridge/node_modules/dependency/file-$_.js"; ExternalAttributes = 0; Length = 100 } })
+$cases = @(
+  [pscustomobject]@{ name = 'large-valid-package'; entries = $largePackage },
+  [pscustomobject]@{ name = 'traversal'; entries = @([pscustomobject]@{ FullName = 'safe\\..\\escape'; ExternalAttributes = 0; Length = 1 }) },
+  [pscustomobject]@{ name = 'symlink'; entries = @([pscustomobject]@{ FullName = 'safe/link'; ExternalAttributes = ([long]0xA000 -shl 16); Length = 1 }) },
+  [pscustomobject]@{ name = 'expanded-size'; entries = @([pscustomobject]@{ FullName = 'safe/file'; ExternalAttributes = 0; Length = 536870913 }) }
+)
+$results = @()
+foreach ($case in $cases) {
+  $archive = [pscustomobject]@{ Entries = $case.entries }
+  $blocked = $false
+  try { ${guard} } catch { $blocked = $true }
+  $results += [pscustomobject]@{ name = $case.name; blocked = $blocked; count = $archive.Entries.Count }
+}
+ConvertTo-Json -InputObject $results -Compress
+`;
+  const host = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
+  const run = spawnSync(host, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')], { encoding: 'utf8' });
+  if (run.error?.code === 'ENOENT') { t.skip('PowerShell unavailable on this test host'); return; }
+  assert.equal(run.status, 0, run.stderr);
+  const results = JSON.parse(run.stdout.trim());
+  assert.equal(results[0].count, 4434);
+  assert.deepEqual(results.map(result => result.blocked), [false, true, true, true]);
+});
+
 test('present Windows assets synchronize existing desktop URLs in both languages and README and join kit', async t => {
   const contents = publicFixture();
   for (const file of PUBLIC_TEXT_FILES.slice(1)) {

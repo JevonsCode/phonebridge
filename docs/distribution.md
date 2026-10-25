@@ -1,15 +1,15 @@
 # Distribution status
 
-Checked against official documentation on 2026-10-11. Public availability is recorded separately from a submitted request or prepared metadata.
+Release and developer-console status rechecked on 2026-10-26. Policy references below retain their original 2026-10-11 check. Public availability is recorded separately from a submitted request or prepared metadata.
 
 | Channel | Current status | Next step |
 |---|---|---|
-| GitHub Releases | v0.6.0 published with direct ARM64 APK, Windows installer and portable ZIP | Continue verified releases with the existing preview signer |
+| GitHub Releases | v0.7.1 published with a direct ARM64 APK, Windows installer/portable ZIP and Apple Silicon/Intel Mac DMG/ZIP packages | Continue verified releases with the existing preview signer |
 | Obtainium direct source | Official-source configuration prepared; it requires no directory listing | Import the configuration or use the README link; physical Obtainium import is not yet tested |
 | Obtainium directory | Not eligible yet: repository created 2026-10-09, with 0 stars at this check | Its current criteria require 4 months and 35 stars for GitHub sources |
-| GitHub-based store discovery | Public repository description/topics updated | Some clients only show stable releases; current releases remain explicitly previews |
+| GitHub-based store discovery | Public repository description/topics updated; v0.7.1 is the latest stable GitHub release | Availability in individual store clients is not verified |
 | F-Droid main repository | Text metadata, project icon and [packaging request draft](fdroid-packaging-request.md) prepared; not submitted or listed | Provide screenshots, validate a release build recipe, adapt the updater's distribution notice/variant, and sign in to GitLab for submission |
-| Uptodown | v0.6.0 APK (versionCode 2011), icon, website, Chinese/English descriptions and three real App screenshots submitted successfully; console status is Pending revision | Wait for editorial approval; submission and pending review do not establish a public listing |
+| Uptodown | The old submission was rejected on 2026-10-15 for not meeting minimum quality standards. A 0.7.1 upload on 2026-10-26 was blocked with “This app has been banned as it does not meet our publication criteria.” | This channel cannot accept the new APK in its current console state. Use GitHub or Obtainium; no public Uptodown listing is claimed |
 | IzzyOnDroid | Not a suitable submission target | Current policy rejects generative-AI-produced App code; this project is AI-assisted. Other blockers include the debug preview binary and its size |
 | Aptoide Connect | Not used for this free distribution task | Manual submissions for apps not on Google Play require a subscription under its current FAQ |
 
@@ -17,7 +17,7 @@ F-Droid normally builds from public source and signs with its own App key unless
 
 Prepared Fastlane text metadata under `fastlane/metadata/android/` is not a statement that any market has accepted the App. Never mark it as listed until the public listing is actually verified.
 
-The v0.6.0 release-distribution run [38097431823](https://github.com/JevonsCode/phonebridge/actions/runs/38097431823) passed Windows package diagnostics, Android APK identity/hash/signature checks, public update-manifest synchronization and GitHub Pages deployment. Future published releases dispatch this workflow on main. It generates an Uptodown submission kit; it does not call an invented store upload API or claim automatic editorial approval. This version's Uptodown submission was completed in the developer console.
+Published releases dispatch `release-distribution.yml` on main to validate packages, synchronize the public update manifest and download links, and deploy GitHub Pages. It also generates an Uptodown submission kit. The kit does not upload to the store or override its editorial decisions. The 0.7.1 packages are published on [GitHub Releases](https://github.com/JevonsCode/phonebridge/releases/tag/v0.7.1); the Uptodown upload was blocked as recorded above.
 
 Official references:
 

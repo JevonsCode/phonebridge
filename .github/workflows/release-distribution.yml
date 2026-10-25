@@ -115,7 +115,6 @@ jobs:
             } else {
               $archive = [System.IO.Compression.ZipFile]::OpenRead($assetPath)
               try {
-                if ($archive.Entries.Count -gt 4096) { throw 'Too many ZIP entries' }
                 $total = [long]0
                 foreach ($entry in $archive.Entries) {
                   $entryName = $entry.FullName.Replace([char]92, [char]47)
