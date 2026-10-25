@@ -246,9 +246,9 @@ export async function observeCondition(client: AgentClient, condition: Condition
       observed = await client.command('state', {}, pinned, Math.max(1, deadline - Date.now()));
       state = observed; lastObservationError = undefined;
     } catch (error) {
-      // App launches can temporarily have no accessible window. Only wait-mode
-      // state reads may retry this exact device-reported transition error.
-      if (timeoutMs > 0 && error instanceof AgentError && error.code === 'NO_WINDOW') lastObservationError = error;
+      // App launches can temporarily lack an accessible, verifiable window.
+      // Only wait-mode state reads may retry these observed transition codes.
+      if (timeoutMs > 0 && error instanceof AgentError && ['NO_WINDOW', 'WINDOW_UNSAFE'].includes(error.code)) lastObservationError = error;
       else { if (Date.now() >= deadline && !(error instanceof AgentError)) break; throw error; }
     }
     if (observed) {
@@ -262,6 +262,6 @@ export async function observeCondition(client: AgentClient, condition: Condition
     ...(lastObservationError ? { lastError: { code: lastObservationError.code, message: lastObservationError.message, outcome: lastObservationError.outcome,
       ...(lastObservationError.details ? { details: lastObservationError.details } : {}) } }
       : state ? { evidence: checkCondition(state, condition).evidence, state } : {}),
-    message: lastObservationError ? 'Waiting ended after the last observation returned NO_WINDOW. Inspect lastError, let the app transition settle, then observe again. No action was retried.'
+    message: lastObservationError ? `Waiting ended after the last observation returned ${lastObservationError.code}. Inspect lastError, let the app transition settle, then observe again. No action was retried.`
       : 'Condition was not observed. No action was retried.' };
 }

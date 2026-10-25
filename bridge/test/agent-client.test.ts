@@ -45,7 +45,7 @@ async function fixture(t: TestContext) {
       observations++;
       if (switchOnState && observations === 1) connectionId = 'connection-2';
       const code = stateErrorCodes.shift() ?? persistentStateError;
-      if (code) { res.end(JSON.stringify({ error: { code, message: 'No accessible window during the app transition.', details: { transition: 'app_launch', targetPackage: 'dev.example.app' } } })); return; }
+      if (code) { res.end(JSON.stringify({ error: { code, message: code === 'WINDOW_UNSAFE' ? 'Cannot verify the active window.' : 'No accessible window during the app transition.', details: { transition: 'app_launch', targetPackage: 'dev.example.app' } } })); return; }
       res.end(JSON.stringify({ result: { packageName: 'dev.example.app', snapshotId: `s-${observations}`, truncated: false,
         nodes: [{ id: `s-${observations}:1`, resourceId: 'app:id/send', text: observations >= 2 ? 'Ready' : 'Loading', description: 'Send' }] } })); return;
     }
@@ -146,6 +146,34 @@ test('assert returns the original NO_WINDOW immediately without retrying', async
   await assert.rejects(observeCondition(f.client, conditionSchema.parse({ packageName: 'dev.example.app' }), { deviceId: 'phone-a' }, 0),
     (error: AgentError) => error.code === 'NO_WINDOW' && error.message === 'No accessible window during the app transition.' && error.details?.transition === 'app_launch');
   assert.equal(f.observations(), 1); assert.deepEqual(f.requests.map(request => request.method), ['state']);
+});
+
+test('wait crosses an unmatched frame and WINDOW_UNSAFE transition without losing its workflow handle', async t => {
+  const f = await fixture(t); f.stateErrors('', 'WINDOW_UNSAFE');
+  const task = await f.client.acquire('phone-a');
+  const result = await observeCondition(f.client, conditionSchema.parse({ text: 'Ready' }), task, 1500);
+  assert.equal(result.matched, true); assert.equal(f.observations(), 3);
+  assert.equal((result.state as any).snapshotId, 's-3');
+  assert.deepEqual(f.requests.map(request => request.method), ['acquire_control', 'state', 'state', 'state']);
+  assert(f.requests.slice(1).every(request => request.controlId === f.requests[0]!.params.controlId && request.deviceId === 'phone-a' && request.connectionId === 'connection-1'));
+  await f.client.release(task.taskHandle as string);
+});
+
+test('assert returns WINDOW_UNSAFE immediately instead of waiting through it', async t => {
+  const f = await fixture(t); f.stateErrors('WINDOW_UNSAFE');
+  await assert.rejects(observeCondition(f.client, conditionSchema.parse({ packageName: 'dev.example.app' }), { deviceId: 'phone-a' }, 0),
+    (error: AgentError) => error.code === 'WINDOW_UNSAFE' && error.message === 'Cannot verify the active window.');
+  assert.equal(f.observations(), 1);
+});
+
+test('persistent WINDOW_UNSAFE times out with its actual last error code and diagnostics', async t => {
+  const f = await fixture(t); f.stateError('WINDOW_UNSAFE');
+  const result = await observeCondition(f.client, conditionSchema.parse({ packageName: 'dev.example.app' }), { deviceId: 'phone-a' }, 260);
+  assert.equal(result.code, 'WAIT_TIMEOUT'); assert.equal(result.matched, false);
+  assert.deepEqual(result.lastError, { code: 'WINDOW_UNSAFE', message: 'Cannot verify the active window.', outcome: 'device_reported_error', details: { transition: 'app_launch', targetPackage: 'dev.example.app' } });
+  assert.match(result.message as string, /WINDOW_UNSAFE/); assert.doesNotMatch(result.message as string, /NO_WINDOW/);
+  assert.equal(result.state, undefined); assert.equal(result.evidence, undefined);
+  assert(f.requests.every(request => request.method === 'state'));
 });
 
 test('wait timeout retains the final NO_WINDOW diagnosis without reporting stale screen evidence', async t => {

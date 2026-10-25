@@ -24,7 +24,9 @@ NO_DEVICE results and device listing include the current computer endpoint, know
 
 ## Echo feedback additions
 
-Provide clipboard get/set and native paste/copy/cut/select-all without per-operation confirmation. A persistent owner switch controls clipboard access; Android's foreground requirement uses a short focused activity that restores the previous app. Return truncation metadata within the existing wire budget instead of adding an arbitrary text-size rejection.
+Provide clipboard get/set and native paste/copy/cut/select-all without per-operation confirmation. A persistent owner switch controls clipboard access. Android's input-focus requirement uses a temporary transparent, non-touchable accessibility overlay, removed before returning the result so the original app regains focus. This uses the existing accessibility authorization and does not launch a background Activity or require overlay permission. Return truncation metadata within the existing wire budget instead of adding an arbitrary text-size rejection.
+
+The temporary accessibility window also supports an explicit app-launch operation when the service is in the background. Wait for actual input focus and its first draw, revalidate the task's mutation grant and the requested application's allowlist status, and dispatch the Intent once. Launching does not read or change the clipboard or depend on its switch. Remove only the owned View before completion; cancellation, timeouts and failed cleanup must not replay an operation or return clipboard contents.
 
 Resolve text/description/resource/class selectors against the current tree, require explicit index for ambiguity, and support screenshotId plus image coordinates using the original crop. Preserve Android stateDescription and selection ranges. Add foreground package/window/occlusion diagnostics without recording screen or clipboard contents in operation history. Explicit task renewal extends only the current active task and cannot revive an expired or queued task.
 

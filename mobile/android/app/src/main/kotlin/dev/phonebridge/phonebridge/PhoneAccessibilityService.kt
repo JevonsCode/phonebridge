@@ -84,7 +84,7 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         clearOperationTrail()
-        ClipboardBridge.cancel(this)
+        AccessibilityFocusedOperation.cancel(this)
         BridgeSession.detach(this)
         imageWorker.shutdown()
         super.onDestroy()
@@ -372,13 +372,24 @@ class PhoneAccessibilityService : AccessibilityService() {
                 requireOrdinaryApp(target)
                 val launch = packageManager.getLaunchIntentForPackage(target)
                     ?: throw BridgeFailure("APP_UNAVAILABLE", "Application is not installed or has no launch activity.")
-                requireSession(generation, true)
-                invalidateNodes()
                 launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                try { startActivity(launch) } catch (_: Exception) {
-                    throw BridgeFailure("ACTION_REJECTED", "Android could not launch that application.")
-                }
-                complete(completed(), null)
+                AccessibilityFocusedOperation.run(this, {
+                    requireSession(generation, true)
+                    if (!BridgeSession.isAllowed(target)) throw BridgeFailure("PACKAGE_BLOCKED", "Target application is not allowed.")
+                    requireOrdinaryApp(target)
+                }, { stage ->
+                    val message = when (stage) {
+                        FocusedOperationFailure.OPERATION_FAILED -> "Android could not launch that application."
+                        FocusedOperationFailure.FOCUS_TIMEOUT -> "Android did not grant focus for launching the application. Observe before retrying."
+                        FocusedOperationFailure.CLEANUP_FAILED -> "The temporary launch focus window could not be removed. Observe before retrying."
+                        else -> "Application launch focus changed. Observe before retrying."
+                    }
+                    BridgeFailure("ACTION_REJECTED", message)
+                }, {
+                    invalidateNodes()
+                    startActivity(launch)
+                    completed()
+                }, complete)
             }
             else -> throw BridgeFailure("UNKNOWN_METHOD", "Unsupported operation.")
         }
