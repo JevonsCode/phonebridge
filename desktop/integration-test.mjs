@@ -11,7 +11,7 @@ const temp=await mkdtemp(join(tmpdir(),'phonebridge-client-test-'));
 const reserve=createServer();await new Promise(r=>reserve.listen(0,'127.0.0.1',r));const port=reserve.address().port;await new Promise(r=>reserve.close(r));
 const path=join(temp,'desktop.json');const config={schema:'phonebridge-desktop-v1',ownerSid:windowsIdentity(),projectRoot:root,nodePath:process.execPath,hostAddress:'127.0.0.1',port,launcherPath:join(root,'scripts','windows','run-desktop.ps1'),powershellPath:process.env.SystemRoot+'\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'};
 await writeFile(path,JSON.stringify(config));
-const env={...process.env,PATH:join(process.env.SystemRoot,'System32'),PHONEBRIDGE_DESKTOP_CONFIG:path,PHONEBRIDGE_CREDENTIAL_FILE:join(temp,'pairing.json'),PHONEBRIDGE_DESKTOP_TEST:'1',PHONEBRIDGE_TOKEN:undefined};
+const env={...process.env,PATH:join(process.env.SystemRoot,'System32'),PHONEBRIDGE_DESKTOP_CONFIG:path,PHONEBRIDGE_CREDENTIAL_FILE:join(temp,'pairing.json'),PHONEBRIDGE_LOG_FILE:join(temp,'operations.jsonl'),PHONEBRIDGE_DESKTOP_TEST:'1',PHONEBRIDGE_TOKEN:undefined};
 const children=new Set();
 const launch=(native=false,launchEnv=env)=>{const child=spawn(process.execPath,[join(root,'desktop','server.mjs'),native?'--native-window':'--no-open'],{env:launchEnv,stdio:['ignore','pipe','pipe'],windowsHide:true});children.add(child);return child;};
 const exited=child=>child.exitCode!==null||child.signalCode!==null?Promise.resolve(child.exitCode):new Promise(r=>child.once('exit',r));
@@ -39,17 +39,21 @@ try {
   // new package path. Keep ordinary local validation on loopback; CI or an
   // explicitly requested LAN check can opt in without changing firewall policy.
   const testLan=process.env.PHONEBRIDGE_TEST_LAN==='1';
-  const active=testLan?localNetworks()[0]:undefined;
+  const active=testLan?localNetworks().find(network=>network.physical===true&&!/vpn|tailscale|wireguard|tap|tun|virtual|vethernet|docker|hyper-v/i.test(network.name)):undefined;
   if(active){
     await fetch(url+'/shutdown',{method:'POST',headers:{Origin:url.origin,'X-PhoneBridge-CSRF':url.pathname.split('/').pop()}});await exited(first);first=undefined;
     const recoveryPath=join(temp,'network-recovery.json'),unavailable=localNetworks().some(n=>n.address==='192.168.254.254')?'10.253.254.254':'192.168.254.254';
-    await writeFile(recoveryPath,JSON.stringify({...config,hostAddress:unavailable}));
+    const recoveryConfig={...config,hostAddress:unavailable};await writeFile(recoveryPath,JSON.stringify(recoveryConfig));
     first=launch(true,{...env,PHONEBRIDGE_DESKTOP_CONFIG:recoveryPath});url=new URL((await ready(first)).dashboardUrl);
-    let failure;for(let attempt=0;attempt<20;attempt++){failure=await(await fetch(url+'/status')).json();if(failure.error)break;await new Promise(r=>setTimeout(r,100));}assert.match(failure.error,/saved network is unavailable/);
-    const changed=await fetch(url+'/network',{method:'POST',headers:{Origin:url.origin,'X-PhoneBridge-CSRF':url.pathname.split('/').pop(),'Content-Type':'application/json'},body:JSON.stringify({address:active.address})});assert.equal(changed.status,200);
-    const recovered=await(await fetch(url+'/status')).json();assert.equal(recovered.unavailable,false);assert.equal(recovered.error,undefined);assert.equal(recovered.address,active.address);assert.equal(await readFile(env.PHONEBRIDGE_CREDENTIAL_FILE,'utf8'),pairingBefore);
+    // A saved address which left this computer recovers without a network-selection request.
+    // Wait for both a working listener and the committed configuration, then verify
+    // that every field apart from the address and the remembered pairing survived.
+    let recovered;const deadline=Date.now()+30000;
+    while(Date.now()<deadline){recovered=await(await fetch(url+'/status')).json();if(!recovered.unavailable&&recovered.address===active.address)break;await new Promise(r=>setTimeout(r,200));}
+    assert.equal(recovered.unavailable,false,`Automatic network recovery failed: ${recovered.error??'service unavailable'}`);assert.equal(recovered.error,undefined);assert.equal(recovered.address,active.address);
+    assert.deepEqual(JSON.parse(await readFile(recoveryPath,'utf8')),{...recoveryConfig,hostAddress:active.address});assert.equal(recovered.port,config.port);assert.equal(await readFile(env.PHONEBRIDGE_CREDENTIAL_FILE,'utf8'),pairingBefore);
   }
-  console.log('LAN network recovery: '+(active?'passed':testLan?'skipped (no private adapter)':'skipped (opt in with PHONEBRIDGE_TEST_LAN=1)'));
+  console.log('LAN network recovery: '+(active?'automatic recovery passed':testLan?'skipped (no physical private adapter)':'skipped (opt in with PHONEBRIDGE_TEST_LAN=1)'));
   console.log('Isolated Windows client integration passed: preserved identity, live supervisor, fresh/reused/concurrent native ready, no URL in ordinary output, stale state recovery.');
 } finally {
   if(first&&url){try{await fetch(url+'/shutdown',{method:'POST',headers:{Origin:url.origin,'X-PhoneBridge-CSRF':url.pathname.split('/').pop()}});await exited(first);}catch{}}
