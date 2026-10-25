@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, readdir, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -46,4 +46,61 @@ test('a busy writer times out promptly and a crashed writer leaves no permanent 
   await withConfigurationLock(file, async () => { entered = true; });
   assert.equal(entered, true);
   await delay(1);
+});
+
+test('Windows marker rename retries transient occupancy without republishing bytes or repeating the operation', { skip: process.platform !== 'win32' }, async t => {
+  const { file } = await fixture(t), paths = new Set(), codes = ['EPERM', 'EACCES', 'EBUSY'];
+  let attempts = 0, operations = 0, markerBytes;
+  await withConfigurationLock(file, async () => { operations++; await writeFile(file, 'committed once'); }, {
+    renameMarker: async (temporary, destination) => {
+      const bytes = await readFile(temporary, 'utf8');
+      if (!JSON.parse(bytes).choosing) {
+        paths.add(`${temporary}\n${destination}`);
+        markerBytes ??= bytes; assert.equal(bytes, markerBytes);
+        const code = codes[attempts++];
+        if (code) throw Object.assign(new Error('Injected marker occupancy'), { code });
+      }
+      await rename(temporary, destination);
+    },
+  });
+  assert.equal(attempts, 4); assert.equal(paths.size, 1); assert.equal(operations, 1);
+  assert.equal(await readFile(file, 'utf8'), 'committed once');
+  assert.deepEqual(await readdir(file + '.writers'), []);
+});
+
+test('Windows permanent marker occupancy rejects at the deadline and cleans both marker files', { skip: process.platform !== 'win32' }, async t => {
+  const { file } = await fixture(t), failure = Object.assign(new Error('Injected permanent occupancy'), { code: 'EPERM' });
+  let attempts = 0, operations = 0, initialPublished = false;
+  const started = performance.now();
+  await assert.rejects(withConfigurationLock(file, async () => { operations++; }, {
+    timeoutMs: 200,
+    renameMarker: async (temporary, destination) => {
+      if (!JSON.parse(await readFile(temporary, 'utf8')).choosing) {
+        assert.equal(initialPublished, true);
+        assert.equal(JSON.parse(await readFile(destination, 'utf8')).choosing, true);
+        attempts++; throw failure;
+      }
+      await rename(temporary, destination);
+      initialPublished = true;
+    },
+  }), error => error === failure);
+  const elapsed = performance.now() - started;
+  assert.ok(attempts >= 1 && attempts < 50); assert.ok(elapsed >= 180 && elapsed < 2000);
+  assert.equal(operations, 0); assert.equal(await readFile(file, 'utf8'), '0');
+  assert.deepEqual(await readdir(file + '.writers'), []);
+});
+
+test('other rename errors fail immediately and operation failures are never retried', async t => {
+  const { file } = await fixture(t), failure = Object.assign(new Error('Injected permanent I/O error'), { code: 'EIO' });
+  let attempts = 0, operations = 0;
+  await assert.rejects(withConfigurationLock(file, async () => { operations++; }, {
+    renameMarker: async (temporary, destination) => {
+      if (!JSON.parse(await readFile(temporary, 'utf8')).choosing) { attempts++; throw failure; }
+      await rename(temporary, destination);
+    },
+  }), error => error === failure);
+  assert.equal(attempts, 1); assert.equal(operations, 0); assert.deepEqual(await readdir(file + '.writers'), []);
+  const operationFailure = Object.assign(new Error('Injected operation failure'), { code: 'EPERM' });
+  await assert.rejects(withConfigurationLock(file, async () => { operations++; throw operationFailure; }), error => error === operationFailure);
+  assert.equal(operations, 1); assert.deepEqual(await readdir(file + '.writers'), []);
 });

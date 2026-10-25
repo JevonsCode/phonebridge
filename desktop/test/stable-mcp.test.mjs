@@ -110,7 +110,12 @@ test('Windows defers a busy legacy v1 launcher and its temporary helper applies 
   const f = await fixture(t), a = await fakePackage(f.state, 'legacy-A'), source = join(a, 'PhoneBridgeMcp.exe'); await copyFile(f.launcher, source);
   await writeFile(join(a, 'package-manifest.json'), JSON.stringify({ product: 'PhoneBridge', platform: 'windows-x64' }));
   await mkdir(join(a, 'desktop')); await mkdir(join(a, 'scripts', 'windows'), { recursive: true });
-  await copyFile(join(root, 'desktop', 'install-mcp-launcher.ps1'), join(a, 'desktop', 'install-mcp-launcher.ps1'));
+  const removal = 'function Remove-PhoneBridgePendingMcpLauncher {\n    param([string]$Directory)';
+  const helperSource = (await readFile(join(root, 'desktop', 'install-mcp-launcher.ps1'), 'utf8')).replaceAll('\r\n', '\n');
+  assert.ok(helperSource.includes(removal));
+  // Make the real File.Replace -> pending cleanup window observable even on a
+  // fast machine. Only this disposable package's helper is delayed.
+  await writeFile(join(a, 'desktop', 'install-mcp-launcher.ps1'), helperSource.replace(removal, removal + '\n    Start-Sleep -Milliseconds 250'));
   for (const name of ['atomic-config.ps1', 'run-desktop.ps1']) await copyFile(join(root, 'scripts', 'windows', name), join(a, 'scripts', 'windows', name));
   const legacySource = join(f.state, 'LegacyLauncher.cs');
   const code = (await readFile(join(root, 'desktop', 'McpLauncher.cs'), 'utf8'))
@@ -121,20 +126,23 @@ test('Windows defers a busy legacy v1 launcher and its temporary helper applies 
   await f.save({ ...f.config, projectRoot: a, launcherPath: join(a, 'scripts', 'windows', 'run-desktop.ps1'), powershellPath: powershell });
   const running = session(t, f.launcher); assert.equal((await running.request({ id: 1 })).label, 'legacy-A');
   const before = await readFile(f.launcher);
-  const script = join(f.state, 'upgrade.ps1'); await writeFile(script, `param($Source,$State)\n$ErrorActionPreference='Stop'\n. '${join(root, 'desktop', 'install-mcp-launcher.ps1').replaceAll("'", "''")}'\nInstall-PhoneBridgeMcpLauncher -Source $Source -StateDirectory $State\n`);
+  const script = join(f.state, 'upgrade.ps1'); await writeFile(script, `param($Source,$State)\n$ErrorActionPreference='Stop'\n. '${join(a, 'desktop', 'install-mcp-launcher.ps1').replaceAll("'", "''")}'\nInstall-PhoneBridgeMcpLauncher -Source $Source -StateDirectory $State\n`);
   const upgrade = () => execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, source, f.state], { encoding: 'utf8', windowsHide: true });
   assert.match(upgrade(), /running MCP launcher was preserved/); assert.deepEqual(await readFile(f.launcher), before); assert.equal((await running.request({ id: 2 })).label, 'legacy-A');
   assert.equal(JSON.parse(await readFile(join(f.state, 'bin', 'PhoneBridgeMcp.pending.json'), 'utf8')).source, source);
   running.child.stdin.end(); assert.equal((await boundedExit(running)).code, 0);
   // No new GUI/service loop is started: this is the legacy-running-bundle case.
-  for (let attempt = 0; attempt < 900 && !(await readFile(f.launcher)).equals(await readFile(source)); attempt++) await new Promise(resolve => setTimeout(resolve, 40));
-  assert.ok((await readFile(f.launcher)).equals(await readFile(source)), 'The temporary idle helper must publish the queued launcher');
-  await assert.rejects(readFile(join(f.state, 'bin', 'PhoneBridgeMcp.pending.json')), /ENOENT/);
-  for (let attempt = 0; attempt < 100; attempt++) {
-    try { await readFile(join(f.state, 'bin', 'PhoneBridgeMcp.maintenance.json')); } catch (error) { if (error.code === 'ENOENT') break; throw error; }
-    await new Promise(resolve => setTimeout(resolve, 20));
+  const pendingRecord = join(f.state, 'bin', 'PhoneBridgeMcp.pending.json'), workerRecord = join(f.state, 'bin', 'PhoneBridgeMcp.maintenance.json');
+  const missing = async path => { try { await readFile(path); return false; } catch (error) { if (error.code === 'ENOENT') return true; throw error; } };
+  // File.Replace publishes the new binary before the helper clears its pending
+  // and worker records. Observe the complete terminal state, not that first step.
+  for (let attempt = 0; attempt < 900; attempt++) {
+    if ((await readFile(f.launcher)).equals(await readFile(source)) && await missing(pendingRecord) && await missing(workerRecord)) break;
+    await new Promise(resolve => setTimeout(resolve, 40));
   }
-  await assert.rejects(readFile(join(f.state, 'bin', 'PhoneBridgeMcp.maintenance.json')), /ENOENT/);
+  assert.ok((await readFile(f.launcher)).equals(await readFile(source)), 'The temporary idle helper must publish the queued launcher');
+  await assert.rejects(readFile(pendingRecord), /ENOENT/);
+  await assert.rejects(readFile(workerRecord), /ENOENT/);
   assert.equal(spawnSync(f.launcher, ['--help'], { windowsHide: true }).status, 0);
 });
 test('stable launch selects current A/B target, endpoint and credential on reconnect; live A survives; stdio exit code propagates', { skip: !windows && process.platform !== 'darwin', timeout: 30000 }, async t => {

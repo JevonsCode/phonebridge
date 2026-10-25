@@ -18,7 +18,7 @@ function alive(record) {
 }
 
 /** Bakery participants have unique names, so reaping a dead PID cannot unlink a new owner's lock. */
-export async function withConfigurationLock(path, operation, { timeoutMs = 1500 } = {}) {
+export async function withConfigurationLock(path, operation, { timeoutMs = 1500, renameMarker = rename } = {}) {
   const directory = join(await realpath(dirname(resolve(path))), basename(path)) + '.writers';
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const info = await lstat(directory);
@@ -30,7 +30,22 @@ export async function withConfigurationLock(path, operation, { timeoutMs = 1500 
   const deadline = performance.now() + timeoutMs;
   const publish = async value => {
     const temp = participant + '.tmp';
-    try { await writeFile(temp, JSON.stringify(value), { mode: 0o600, flag: 'wx' }); await rename(temp, participant); }
+    try {
+      await writeFile(temp, JSON.stringify(value), { mode: 0o600, flag: 'wx' });
+      // Retry only this marker publication. Neither the bytes nor the protected
+      // operation are replayed, and acquisition keeps its original deadline.
+      let failure;
+      for (;;) {
+        if (failure && performance.now() >= deadline) throw failure;
+        try { await renameMarker(temp, participant); break; }
+        catch (error) {
+          const remaining = deadline - performance.now();
+          if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || remaining <= 0) throw error;
+          failure = error;
+          await delay(Math.min(15, remaining));
+        }
+      }
+    }
     finally { await unlink(temp).catch(() => {}); }
   };
   const readParticipant = async name => {
