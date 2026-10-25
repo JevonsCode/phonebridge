@@ -8,18 +8,49 @@ using System.Web.Script.Serialization;
 
 internal static class Installer {
     const string Version = "__VERSION__";
+    static bool DirectoryEntry(string name) { return name.Replace('\\','/').EndsWith("/", StringComparison.Ordinal); }
+    static string EntryName(string name) {
+        if (String.IsNullOrEmpty(name)) throw new IOException("Invalid package path.");
+        string normalized = name.Replace('\\','/');
+        if (normalized.StartsWith("/") || normalized.IndexOf(':') >= 0) throw new IOException("Invalid package path.");
+        if (normalized.EndsWith("/", StringComparison.Ordinal)) normalized = normalized.Substring(0, normalized.Length - 1);
+        foreach (string part in normalized.Split('/')) {
+            if (part.Length == 0 || part == "." || part == ".." || part.EndsWith(".", StringComparison.Ordinal) || part.EndsWith(" ", StringComparison.Ordinal) || part.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0) throw new IOException("Invalid package path.");
+            string stem = part.Split('.')[0].ToUpperInvariant();
+            if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" || (stem.Length == 4 && (stem.StartsWith("COM") || stem.StartsWith("LPT")) && stem[3] >= '1' && stem[3] <= '9')) throw new IOException("Invalid package path.");
+        }
+        return normalized;
+    }
     static string Contained(string root, string name) {
-        if (String.IsNullOrEmpty(name) || name.IndexOf(':') >= 0 || name.StartsWith("/") || name.StartsWith("\\")) throw new IOException("Invalid package path.");
-        string path = Path.GetFullPath(Path.Combine(root, name.Replace('/', Path.DirectorySeparatorChar)));
+        string path = Path.GetFullPath(Path.Combine(root, EntryName(name).Replace('/', Path.DirectorySeparatorChar)));
         if (!path.StartsWith(Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) throw new IOException("Package path escapes installation.");
         return path;
     }
     static void Validate(ZipArchive zip, string root) {
         bool launcher = false, node = false, entry = false; long total = 0;
         var names = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (ZipArchiveEntry e in zip.Entries) { Contained(root, e.FullName); if (!names.Add(e.FullName)) throw new IOException("Duplicate package path."); total += e.Length; if (total > 600L * 1024 * 1024) throw new IOException("Package too large."); launcher |= e.FullName == "PhoneBridge.exe"; node |= e.FullName == "runtime/node.exe"; entry |= e.FullName == "desktop/server.mjs"; }
+        var files = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var directories = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        ZipArchiveEntry manifest = null;
+        foreach (ZipArchiveEntry e in zip.Entries) {
+            string name = EntryName(e.FullName); bool directory = DirectoryEntry(e.FullName);
+            Contained(root, name);
+            if (!names.Add(name)) throw new IOException("Duplicate package path.");
+            if (!directory && directories.Contains(name)) throw new IOException("Conflicting package path.");
+            if (directory) directories.Add(name); else files.Add(name);
+            for (int slash = name.IndexOf('/'); slash >= 0; slash = name.IndexOf('/', slash + 1)) {
+                string parent = name.Substring(0, slash);
+                if (files.Contains(parent)) throw new IOException("Conflicting package path.");
+                directories.Add(parent);
+            }
+            total = checked(total + e.Length); if (total > 600L * 1024 * 1024) throw new IOException("Package too large.");
+            if (directory) continue;
+            launcher |= String.Equals(name, "PhoneBridge.exe", StringComparison.OrdinalIgnoreCase);
+            node |= String.Equals(name, "runtime/node.exe", StringComparison.OrdinalIgnoreCase);
+            entry |= String.Equals(name, "desktop/server.mjs", StringComparison.OrdinalIgnoreCase);
+            if (String.Equals(name, "package-manifest.json", StringComparison.OrdinalIgnoreCase)) manifest = e;
+        }
         if (!launcher || !node || !entry) throw new IOException("Incomplete PhoneBridge package.");
-        ZipArchiveEntry manifest = zip.GetEntry("package-manifest.json");
         if (manifest == null) throw new IOException("Package identity missing.");
         using (var reader = new StreamReader(manifest.Open())) { var metadata = new JavaScriptSerializer().Deserialize<System.Collections.Generic.Dictionary<string,object>>(reader.ReadToEnd()); if ((string)metadata["product"] != "PhoneBridge" || (string)metadata["version"] != Version || (string)metadata["platform"] != "windows-x64") throw new IOException("Package identity mismatch."); }
     }
@@ -45,7 +76,7 @@ internal static class Installer {
                     if (!Directory.Exists(destination)) {
                         string staging = destination + ".staging-" + Guid.NewGuid().ToString("N");
                         Directory.CreateDirectory(staging);
-                        try { foreach (ZipArchiveEntry e in zip.Entries) { string path = Contained(staging, e.FullName); if (e.FullName.EndsWith("/")) { Directory.CreateDirectory(path); continue; } Directory.CreateDirectory(Path.GetDirectoryName(path)); using (Stream from = e.Open()) using (Stream to = new FileStream(path, FileMode.CreateNew)) from.CopyTo(to); } Directory.Move(staging, destination); }
+                        try { foreach (ZipArchiveEntry e in zip.Entries) { string path = Contained(staging, e.FullName); if (DirectoryEntry(e.FullName)) { Directory.CreateDirectory(path); continue; } Directory.CreateDirectory(Path.GetDirectoryName(path)); using (Stream from = e.Open()) using (Stream to = new FileStream(path, FileMode.CreateNew)) from.CopyTo(to); } Directory.Move(staging, destination); }
                         finally { if (Directory.Exists(staging)) Directory.Delete(staging, true); }
                     }
                 }

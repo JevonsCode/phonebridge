@@ -6,9 +6,10 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Web.Script.Serialization;
 
-// Immutable v1 bootstrap. Keep this executable installed while MCP clients run;
+// Stable v1 bootstrap protocol. Upgrades preserve a running executable;
 // each new process reads the current installation instead of a version path.
 internal static class McpLauncher {
     const string Identity = "PhoneBridge MCP bootstrap v1";
@@ -38,11 +39,36 @@ internal static class McpLauncher {
         for(int i=0;i<4;i++)if(!int.TryParse(pieces[i],out octets[i]) || octets[i]<0 || octets[i]>255 || octets[i].ToString()!=pieces[i])return false;
         return octets[0]==10 || (octets[0]==172 && octets[1]>=16 && octets[1]<=31) || (octets[0]==192 && octets[1]==168);
     }
+    static void Usage(TextWriter output) {
+        output.WriteLine("Usage: PhoneBridgeMcp.exe [--help | --version | --launcher-version]");
+        output.WriteLine("No arguments: start the installed PhoneBridge MCP server over stdio.");
+        output.WriteLine("--version: show the current installed App version and stable launcher identity.");
+        output.WriteLine("--launcher-version: show the bootstrap protocol identity used by the installer.");
+    }
+    static bool VersionValue(string value) { return Regex.IsMatch(value,@"^\d+\.\d+\.\d+(?:-[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?(?:\+[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?$"); }
+    static string AppVersion(string root) {
+        string manifest=Path.Combine(root,"package-manifest.json");
+        if(File.Exists(manifest)) {
+            var metadata=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(manifest));
+            string value=Text(metadata,"version");
+            if(Text(metadata,"product")!="PhoneBridge" || !VersionValue(value))throw new Exception("Invalid installed App version.");
+            return value;
+        }
+        string pubspec=Path.Combine(root,"mobile","pubspec.yaml");
+        if(File.Exists(pubspec)) {
+            var match=Regex.Match(File.ReadAllText(pubspec),@"^version:\s*([^\s#]+)",RegexOptions.Multiline);
+            if(match.Success && VersionValue(match.Groups[1].Value))return match.Groups[1].Value.Split('+')[0];
+        }
+        var package=new JavaScriptSerializer().Deserialize<Dictionary<string,object>>(File.ReadAllText(Path.Combine(root,"bridge","package.json")));
+        string version=Text(package,"version");if(!VersionValue(version))throw new Exception("Invalid MCP package version.");return version;
+    }
     static int Main(string[] args) {
         string stage="arguments";
         try {
             if(args.Length==1 && args[0]=="--launcher-version") { Console.WriteLine(Identity); return 0; }
-            if(args.Length!=0)throw new Exception("The MCP bootstrap does not accept arguments.");
+            if(args.Length==1 && (args[0]=="--help" || args[0]=="-h")) { Usage(Console.Out); return 0; }
+            bool showVersion=args.Length==1 && args[0]=="--version";
+            if(args.Length!=0 && !showVersion) { Console.Error.WriteLine("Unknown PhoneBridge MCP arguments.");Usage(Console.Error);return 2; }
             string state=Directory.GetParent(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)).FullName;
             string configPath=Path.Combine(state,"desktop.json"),sid=WindowsIdentity.GetCurrent().User.Value;
             stage="configuration-file"; OwnedFile(configPath,sid);
@@ -52,6 +78,7 @@ internal static class McpLauncher {
             if(Text(config,"schema")!="phonebridge-desktop-v1" || Text(config,"ownerSid")!=sid)throw new Exception("Unsupported desktop configuration or another owner.");
             stage="configuration-paths";
             string root=PathValue(Text(config,"projectRoot")),node=PathValue(Text(config,"nodePath")),host=Text(config,"hostAddress");
+            if(showVersion) { stage="app-version";Console.WriteLine("PhoneBridge App "+AppVersion(root));Console.WriteLine("MCP launcher: "+Identity);return 0; }
             stage="configuration-endpoint";
             object rawPort; if(!config.TryGetValue("port",out rawPort) || !(rawPort is int) || (int)rawPort<1 || (int)rawPort>65535 || !PrivateAddress(host))throw new Exception("Invalid desktop endpoint.");
             string entry=Path.Combine(root,"bridge","dist","mcp.js");
@@ -64,6 +91,7 @@ internal static class McpLauncher {
             environment.Remove("PHONEBRIDGE_TOKEN"); environment.Remove("NODE_OPTIONS"); environment.Remove("NODE_PATH");
             environment["PHONEBRIDGE_URL"]="http://"+host+":"+(int)rawPort;
             environment["PHONEBRIDGE_CREDENTIAL_FILE"]=credential;
+            environment["PHONEBRIDGE_DESKTOP_CONFIG"]=configPath;
             environment["PATH"]=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),"System32","WindowsPowerShell","v1.0")+";"+Environment.GetEnvironmentVariable("PATH");
             var block=new StringBuilder();foreach(var item in environment)block.Append(item.Key).Append('=').Append(item.Value).Append('\0');block.Append('\0');
             IntPtr env=Marshal.StringToHGlobalUni(block.ToString());

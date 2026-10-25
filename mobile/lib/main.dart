@@ -11,6 +11,8 @@ import 'app_language.dart';
 import 'operation_trails.dart';
 import 'screen_awake.dart';
 import 'file_inbox.dart';
+import 'file_receive_setting.dart';
+import 'automation_settings.dart';
 import 'operation_history.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -56,11 +58,11 @@ const _retryNotices = {
 
 class _ConnectionPageState extends State<ConnectionPage> {
   static const channel = MethodChannel('dev.phonebridge/control');
+  static const _defaultPairingPackages =
+      'dev.phonebridge.phonebridge\ncom.tencent.mm';
   final endpoint = TextEditingController(text: 'ws://127.0.0.1:8765/device');
   final token = TextEditingController();
-  final packages = TextEditingController(
-    text: 'dev.phonebridge.phonebridge\ncom.tencent.mm',
-  );
+  final packages = TextEditingController(text: _defaultPairingPackages);
   Timer? timer;
   Map<String, dynamic> status = {};
   bool consent = false, insecureLocal = false, busy = false, polling = false;
@@ -71,7 +73,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
   String? error;
   bool pairingPrefilled = false;
   int tab = 0;
+  int automationRevision = 0;
   bool showPairing = false, manual = false;
+  String? pairingTargetEndpoint, pairingTargetComputerId;
+  bool pairingHadConnection = false;
   // Retries alternate between scheduled and in flight; keep the hint until connected.
   bool reconnectFailed = false;
   VoidCallback? refreshComputerSheet;
@@ -138,8 +143,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
     }
   }
 
-  bool get connected => status['connected'] == true;
-  bool get connecting => status['connecting'] == true;
+  bool get connected =>
+      (status['selectedConnected'] ?? status['connected']) == true;
+  bool get connecting =>
+      (status['selectedConnecting'] ?? status['connecting']) == true;
+  bool get anyConnectionActive =>
+      status['connected'] == true ||
+      status['connecting'] == true ||
+      status['reconnecting'] == true ||
+      autoReconnect;
   bool get enabled => status['accessibilityEnabled'] == true;
   bool get hasSavedPairing => status['hasSavedPairing'] == true;
   List<Map<String, dynamic>> get computers =>
@@ -185,7 +197,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         final wasActive = connected || connecting;
         setState(() {
           status = next ?? {};
-          if (connected) showPairing = false;
+          completePairingIfConnected();
           if (connected || !autoReconnect) {
             reconnectFailed = false;
           } else if (status['reconnecting'] == true) {
@@ -195,7 +207,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
         files.value = (status['files'] as List? ?? [])
             .map((e) => Map<String, dynamic>.from(e as Map))
             .toList();
-        if (wasActive && !connected && !connecting) token.clear();
+        if (wasActive && !connected && !connecting && !showPairing) {
+          token.clear();
+        }
         refreshComputerSheet?.call();
       }
     } on PlatformException catch (e) {
@@ -230,6 +244,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
         pairingPrefilled = false;
         showPairing = false;
       }
+      if (method == 'allowAllAutomation' && mounted) {
+        setState(() => automationRevision++);
+      }
       await refresh();
       if ((method == 'forgetSavedConnection' || method == 'forgetComputer') &&
           !hasSavedPairing &&
@@ -248,15 +265,17 @@ class _ConnectionPageState extends State<ConnectionPage> {
   }
 
   Future<void> connect() async {
-    if (!consent || !enabled) return;
+    if (busy || openingScanner || startingDesktop || !consent || !enabled) {
+      return;
+    }
     if (!RegExp(r'^[A-Za-z0-9_-]{32,256}$').hasMatch(token.text.trim())) {
       setState(() => error = '请输入电脑端生成的完整配对密钥（32–256 个字母、数字、- 或 _）');
       return;
     }
-    await perform('requestNotificationPermission');
-    if (!mounted || error != null) return;
-    await perform('connect', {
-      'endpoint': endpoint.text.trim(),
+    final target = endpoint.text.trim();
+    final hadConnection = anyConnectionActive;
+    final arguments = <String, dynamic>{
+      'endpoint': target,
       'token': token.text.trim(),
       'allowInsecureLocal': insecureLocal,
       'remember': remember,
@@ -266,7 +285,81 @@ class _ConnectionPageState extends State<ConnectionPage> {
           .where((s) => s.isNotEmpty)
           .toSet()
           .toList(),
+    };
+    setState(() {
+      busy = true;
+      error = null;
     });
+    try {
+      await channel.invokeMethod<void>('requestNotificationPermission');
+      if (!mounted || !showPairing) return;
+      final result = await channel.invokeMapMethod<String, dynamic>(
+        'connect',
+        arguments,
+      );
+      if (!mounted) return;
+      token.clear();
+      setState(() {
+        final acceptedEndpoint = result?['endpoint'];
+        // Native normalizes accepted addresses to /device.
+        pairingTargetEndpoint =
+            acceptedEndpoint is String && acceptedEndpoint.isNotEmpty
+            ? acceptedEndpoint
+            : target;
+        pairingTargetComputerId = result?['activeComputerId'] as String?;
+        pairingHadConnection = hadConnection;
+        if (result != null) status = result;
+        completePairingIfConnected();
+      });
+      await refresh();
+    } on PlatformException catch (e) {
+      if (mounted) {
+        setState(() => error = userError(e.code, e.message, '操作失败，请检查手机状态'));
+      }
+    } on MissingPluginException {
+      if (mounted) setState(() => error = '请在安卓设备上打开 PhoneBridge');
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  void pairingCredentialsChanged() => setState(() {
+    packages.text = _defaultPairingPackages;
+    packagesEdited = false;
+    consent = false;
+    insecureLocal = false;
+    pairingTargetEndpoint = null;
+    pairingTargetComputerId = null;
+  });
+
+  void completePairingIfConnected() {
+    if (!showPairing || pairingTargetEndpoint == null) return;
+    final id = pairingTargetComputerId;
+    final targetConnected = status.containsKey('selectedConnected')
+        ? connected &&
+              status['endpoint'] == pairingTargetEndpoint &&
+              (id == null || id.isEmpty || status['activeComputerId'] == id)
+        : id != null && id.isNotEmpty
+        ? computers.any(
+            (computer) =>
+                computer['id'] == id &&
+                computer['endpoint'] == pairingTargetEndpoint &&
+                (computer['connected'] == true ||
+                    computer['state'] == 'connected' ||
+                    computer['state'] == 'controlling'),
+          )
+        : (status['endpoint'] == pairingTargetEndpoint &&
+                  (status['effectiveAllowedPackages'] as List? ?? [])
+                      .isNotEmpty) ||
+              (!pairingHadConnection &&
+                  computers.isEmpty &&
+                  connected &&
+                  !connecting);
+    if (targetConnected) {
+      showPairing = false;
+      pairingTargetEndpoint = null;
+      pairingTargetComputerId = null;
+    }
   }
 
   Future<void> openAppAccess({bool draft = false}) async {
@@ -319,13 +412,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
     }
   }
 
-  Widget appAccessEntry(String key) => SettingsRow(
-    key: Key(key),
-    icon: Icons.apps_rounded,
-    title: '允许访问的应用',
-    subtitle:
-        '${(status['allowedPackages'] as List? ?? []).length} ${tr(context, '个应用 · 点击修改')}',
-    onTap: busy ? null : () => openAppAccess(),
+  Widget appAccessEntry(String key) => ProtectedControl(
+    name: 'app-access',
+    child: SettingsRow(
+      key: Key(key),
+      icon: Icons.apps_rounded,
+      title: '允许访问的应用',
+      subtitle:
+          '${(status['allowedPackages'] as List? ?? []).length} ${tr(context, '个应用 · 点击修改')}',
+      onTap: busy ? null : () => openAppAccess(),
+    ),
   );
 
   Future<void> startDesktopService() async {
@@ -355,10 +451,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
   }
 
   Future<void> scanPairing() async {
-    if (busy || connected || connecting) return;
+    if (busy || startingDesktop) return;
     setState(() {
       busy = true;
       error = null;
+      pairingTargetEndpoint = null;
+      pairingTargetComputerId = null;
     });
     try {
       final pairing = await Navigator.of(context).push<PairingData>(
@@ -370,10 +468,6 @@ class _ConnectionPageState extends State<ConnectionPage> {
       if (!mounted || pairing == null) return;
       await refresh();
       if (!mounted) return;
-      if (connected || connecting) {
-        setState(() => error = '请先停止当前连接，再扫描新的配对码。');
-        return;
-      }
       setState(() {
         endpoint.text = pairing.endpoint;
         token.text = pairing.token;
@@ -381,6 +475,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         consent = false;
         insecureLocal = false;
         pairingPrefilled = true;
+        packages.text = _defaultPairingPackages;
         packagesEdited = false;
       });
     } finally {
@@ -392,28 +487,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     if (busy || startingDesktop || openingScanner) return;
     setState(() => openingScanner = true);
     try {
-      if (connected || connecting || autoReconnect) {
-        final pause = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: Text(tr(context, '扫描新的电脑？')),
-            content: Text(tr(context, '扫码前需要暂停当前连接。已记住的电脑和授权会保留。')),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: Text(tr(context, '取消')),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: Text(tr(context, '暂停并扫码')),
-              ),
-            ],
-          ),
-        );
-        if (!mounted || pause != true) return;
-      }
-      await pairAnotherComputer();
-      if (!mounted || error != null) return;
+      preparePairing();
       await scanPairing();
     } finally {
       if (mounted) setState(() => openingScanner = false);
@@ -451,6 +525,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void openPairing() => setState(() {
     showPairing = true;
     manual = false;
+    pairingTargetEndpoint = null;
+    pairingTargetComputerId = null;
   });
 
   Future<void> showInfo(String title, String body) =>
@@ -542,8 +618,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 ]
               : null,
         ),
-        bottomNavigationBar:
-            showPairing && !(connected || connecting || autoReconnect)
+        bottomNavigationBar: showPairing && !anyConnectionActive
             ? null
             : SafeArea(
                 top: false,
@@ -551,18 +626,21 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (connected || connecting || autoReconnect)
+                    if (anyConnectionActive)
                       Padding(
                         padding: const EdgeInsets.fromLTRB(24, 8, 24, 6),
                         child: SizedBox(
                           width: 512,
-                          child: OutlinedButton.icon(
-                            key: const Key('stop'),
-                            onPressed: busy
-                                ? null
-                                : () => perform('disconnect'),
-                            icon: const Icon(Icons.pause_rounded, size: 20),
-                            label: Text(tr(context, '暂停连接')),
+                          child: ProtectedControl(
+                            name: 'pause',
+                            child: OutlinedButton.icon(
+                              key: const Key('stop'),
+                              onPressed: busy
+                                  ? null
+                                  : () => perform('disconnect'),
+                              icon: const Icon(Icons.pause_rounded, size: 20),
+                              label: Text(tr(context, '暂停连接')),
+                            ),
                           ),
                         ),
                       ),
@@ -651,9 +729,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
   }
 
   List<Widget> homeView() {
-    final active = connected || connecting || autoReconnect;
+    final active = anyConnectionActive;
     final granted = connected
-        ? status['actionsEnabled'] == true
+        ? (status['selectedActionsEnabled'] ?? status['actionsEnabled']) == true
         : hasSavedPairing && status['rememberedActions'] == true;
     // Without the service no transport can open, so "waiting" would mislead.
     final needsAccessibility = !enabled && !connected && hasSavedPairing;
@@ -753,27 +831,30 @@ class _ConnectionPageState extends State<ConnectionPage> {
       ],
       SurfaceGroup(
         children: [
-          SwitchListTile(
-            key: const Key('actions'),
-            contentPadding: const EdgeInsets.fromLTRB(20, 8, 16, 8),
-            value: granted,
-            onChanged: connected && !busy
-                ? (v) => perform('setActionsEnabled', {'enabled': v})
-                : null,
-            title: Text(
-              tr(context, '允许操作'),
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
-            ),
-            subtitle: Text(
-              tr(
-                context,
-                !connected && granted
-                    ? '操作授权已保留，重连后恢复'
-                    : granted
-                    ? 'AI 可以操作下方已授权的应用'
-                    : 'AI 只能查看下方已授权的应用',
+          ProtectedControl(
+            name: 'actions',
+            child: SwitchListTile(
+              key: const Key('actions'),
+              contentPadding: const EdgeInsets.fromLTRB(20, 8, 16, 8),
+              value: granted,
+              onChanged: connected && !busy
+                  ? (v) => perform('setActionsEnabled', {'enabled': v})
+                  : null,
+              title: Text(
+                tr(context, '允许操作'),
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500),
               ),
-              style: const TextStyle(fontSize: 12, color: muted, height: 1.6),
+              subtitle: Text(
+                tr(
+                  context,
+                  !connected && granted
+                      ? '操作授权已保留，重连后恢复'
+                      : granted
+                      ? 'AI 可以操作下方已授权的应用'
+                      : 'AI 只能查看下方已授权的应用',
+                ),
+                style: const TextStyle(fontSize: 12, color: muted, height: 1.6),
+              ),
             ),
           ),
         ],
@@ -835,6 +916,40 @@ class _ConnectionPageState extends State<ConnectionPage> {
 
   List<Widget> settingsView() => [
     const SizedBox(height: 12),
+    if (hasSavedPairing || connected) ...[
+      ProtectedControl(
+        name: 'allow-all',
+        child: FilledButton.icon(
+          key: const Key('allow-all-automation'),
+          onPressed: busy ? null : () => perform('allowAllAutomation'),
+          icon: const Icon(Icons.done_all_rounded, size: 20),
+          label: Text(tr(context, '全部允许')),
+        ),
+      ),
+      const SizedBox(height: 12),
+    ],
+    SurfaceGroup(
+      key: ValueKey('automation-$automationRevision'),
+      children: const [
+        AutomationSetting(
+          preference: 'ClipboardAccessEnabled',
+          title: '允许 AI 使用剪贴板',
+          subtitle: '读取、复制和粘贴手机上的文字',
+        ),
+        FileReceiveSetting(),
+        AutomationSetting(
+          preference: 'SaveMediaToGallery',
+          title: '图片和视频保存到相册',
+          subtitle: '收到后可直接在其他应用中选择',
+        ),
+        AutomationSetting(
+          preference: 'ProtectConnectionControls',
+          title: '避免 AI 误断开连接',
+          subtitle: '保护连接和授权开关，防止操作中误触',
+        ),
+      ],
+    ),
+    const SizedBox(height: 12),
     const SurfaceGroup(children: [OperationTrailSetting()]),
     const SizedBox(height: 12),
     const SurfaceGroup(children: [ScreenAwakeSetting()]),
@@ -852,17 +967,20 @@ class _ConnectionPageState extends State<ConnectionPage> {
           padding: EdgeInsets.symmetric(horizontal: 20),
           child: Divider(),
         ),
-        SettingsRow(
-          icon: Icons.laptop_mac_outlined,
-          title: '已记住的电脑',
-          subtitle: computers.isNotEmpty || hasSavedPairing
-              ? computerAddress
-              : '尚未配对',
-          onTap: busy || startingDesktop
-              ? null
-              : computers.isNotEmpty || hasSavedPairing
-              ? showComputer
-              : openPairing,
+        ProtectedControl(
+          name: 'computers',
+          child: SettingsRow(
+            icon: Icons.laptop_mac_outlined,
+            title: '已记住的电脑',
+            subtitle: computers.isNotEmpty || hasSavedPairing
+                ? computerAddress
+                : '尚未配对',
+            onTap: busy || startingDesktop
+                ? null
+                : computers.isNotEmpty || hasSavedPairing
+                ? showComputer
+                : openPairing,
+          ),
         ),
         if (hasSavedPairing || connected || connecting) ...[
           const Padding(
@@ -883,7 +1001,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           title: '文件夹',
           subtitle: storage == null
               ? '下载/PhoneBridge'
-              : '${tr(context, '下载/PhoneBridge')} · ${storage!['files']} ${tr(context, '个文件')} · ${fileSize(storage!['bytes'] as num? ?? 0)}',
+              : '${tr(context, '下载/PhoneBridge')} · ${storage!['downloadFiles'] ?? storage!['files']} ${tr(context, '个文件')} · ${fileSize((storage!['downloadBytes'] ?? storage!['bytes']) as num? ?? 0)}',
           onTap: busy ? null : () => perform('openFilesFolder'),
         ),
         const Padding(
@@ -1106,15 +1224,17 @@ class _ConnectionPageState extends State<ConnectionPage> {
   }
 
   Future<void> pairAnotherComputer() async {
-    if (busy || startingDesktop) return;
-    setState(() => error = null);
-    if (connected || connecting || autoReconnect) await perform('disconnect');
-    if (!mounted || error != null) return;
+    if (busy || startingDesktop || openingScanner) return;
+    preparePairing();
+  }
+
+  void preparePairing() {
+    error = null;
     token.clear();
     consent = false;
     insecureLocal = false;
     pairingPrefilled = false;
-    packages.text = 'dev.phonebridge.phonebridge\ncom.tencent.mm';
+    packages.text = _defaultPairingPackages;
     packagesEdited = false;
     remember = true;
     openPairing();
@@ -1341,27 +1461,30 @@ class _ConnectionPageState extends State<ConnectionPage> {
                               Wrap(
                                 spacing: 8,
                                 children: [
-                                  TextButton(
-                                    key: Key('resume-${computer['id']}'),
-                                    onPressed: disabled || !enabled
-                                        ? null
-                                        : () => edit(
-                                            () => perform(
-                                              'setComputerResumeAllowed',
-                                              {
-                                                'id': computer['id'],
-                                                'enabled':
-                                                    computer['resumeAllowed'] !=
-                                                    true,
-                                              },
+                                  ProtectedControl(
+                                    name: 'computer-resume',
+                                    child: TextButton(
+                                      key: Key('resume-${computer['id']}'),
+                                      onPressed: disabled || !enabled
+                                          ? null
+                                          : () => edit(
+                                              () => perform(
+                                                'setComputerResumeAllowed',
+                                                {
+                                                  'id': computer['id'],
+                                                  'enabled':
+                                                      computer['resumeAllowed'] !=
+                                                      true,
+                                                },
+                                              ),
                                             ),
-                                          ),
-                                    child: Text(
-                                      tr(
-                                        context,
-                                        computer['resumeAllowed'] == true
-                                            ? '暂停连接'
-                                            : '恢复连接',
+                                      child: Text(
+                                        tr(
+                                          context,
+                                          computer['resumeAllowed'] == true
+                                              ? '暂停连接'
+                                              : '恢复连接',
+                                        ),
                                       ),
                                     ),
                                   ),
@@ -1379,22 +1502,25 @@ class _ConnectionPageState extends State<ConnectionPage> {
                                   ),
                                 ],
                               ),
-                              SwitchListTile(
-                                key: Key('actions-${computer['id']}'),
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(
-                                  tr(context, '允许操作'),
-                                  style: const TextStyle(fontSize: 14),
+                              ProtectedControl(
+                                name: 'computer-actions',
+                                child: SwitchListTile(
+                                  key: Key('actions-${computer['id']}'),
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(
+                                    tr(context, '允许操作'),
+                                    style: const TextStyle(fontSize: 14),
+                                  ),
+                                  value: computer['actionsEnabled'] == true,
+                                  onChanged: disabled
+                                      ? null
+                                      : (value) => edit(
+                                          () => perform('setActionsEnabled', {
+                                            'id': computer['id'],
+                                            'enabled': value,
+                                          }),
+                                        ),
                                 ),
-                                value: computer['actionsEnabled'] == true,
-                                onChanged: disabled
-                                    ? null
-                                    : (value) => edit(
-                                        () => perform('setActionsEnabled', {
-                                          'id': computer['id'],
-                                          'enabled': value,
-                                        }),
-                                      ),
                               ),
                             ],
                           ),
@@ -1414,16 +1540,19 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  FilledButton.icon(
-                    key: const Key('pair-another-computer'),
-                    onPressed: disabled
-                        ? null
-                        : () {
-                            Navigator.pop(sheetContext);
-                            pairAnotherComputer();
-                          },
-                    icon: const Icon(Icons.add_rounded, size: 20),
-                    label: Text(tr(context, '配对另一台电脑')),
+                  ProtectedControl(
+                    name: 'pair-another',
+                    child: FilledButton.icon(
+                      key: const Key('pair-another-computer'),
+                      onPressed: disabled
+                          ? null
+                          : () {
+                              Navigator.pop(sheetContext);
+                              pairAnotherComputer();
+                            },
+                      icon: const Icon(Icons.add_rounded, size: 20),
+                      label: Text(tr(context, '配对另一台电脑')),
+                    ),
                   ),
                 ],
               ),
@@ -1464,14 +1593,16 @@ class _ConnectionPageState extends State<ConnectionPage> {
     ],
     FilledButton.icon(
       key: const Key('scan-pairing'),
-      onPressed: busy || connected || connecting ? null : scanPairing,
+      onPressed: busy || openingScanner || startingDesktop ? null : scanPairing,
       icon: const Icon(Icons.qr_code_scanner_rounded),
       label: Text(tr(context, '扫描电脑配对码')),
     ),
     const SizedBox(height: 8),
     TextButton(
       key: const Key('manual-pairing'),
-      onPressed: () => setState(() => manual = !manual),
+      onPressed: busy || openingScanner
+          ? null
+          : () => setState(() => manual = !manual),
       child: Text(tr(context, manual ? '收起手动设置' : '手动输入连接信息')),
     ),
     if (pairingPrefilled) ...[
@@ -1498,8 +1629,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
       const SizedBox(height: 16),
       TextField(
         controller: endpoint,
-        onChanged: (_) => setState(() => packagesEdited = false),
-        enabled: !connected && !connecting,
+        onChanged: (_) => pairingCredentialsChanged(),
+        enabled: !busy && !openingScanner,
         autocorrect: false,
         decoration: InputDecoration(labelText: tr(context, '设备连接地址')),
         keyboardType: TextInputType.url,
@@ -1507,8 +1638,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
       const SizedBox(height: 16),
       TextField(
         controller: token,
-        onChanged: (_) => setState(() => packagesEdited = false),
-        enabled: !connected && !connecting,
+        onChanged: (_) => pairingCredentialsChanged(),
+        enabled: !busy && !openingScanner,
         obscureText: true,
         enableSuggestions: false,
         autocorrect: false,
@@ -1536,7 +1667,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           CheckboxListTile(
             key: const Key('insecure-local'),
             value: insecureLocal,
-            onChanged: connected || connecting
+            onChanged: busy || openingScanner
                 ? null
                 : (v) => setState(() => insecureLocal = v ?? false),
             title: Text(
@@ -1554,7 +1685,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           CheckboxListTile(
             key: const Key('consent'),
             value: consent,
-            onChanged: connected || connecting
+            onChanged: busy || openingScanner
                 ? null
                 : (v) => setState(() => consent = v ?? false),
             title: Text(
@@ -1572,7 +1703,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           CheckboxListTile(
             key: const Key('remember-pairing'),
             value: remember,
-            onChanged: connected || connecting
+            onChanged: busy || openingScanner
                 ? null
                 : (v) => setState(() => remember = v ?? false),
             title: Text(tr(context, '记住电脑与授权'), style: TextStyle(fontSize: 14)),
@@ -1588,11 +1719,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
       const SizedBox(height: 24),
       FilledButton.icon(
         key: const Key('connect'),
-        onPressed: busy || !consent || !enabled || connected || connecting
+        onPressed:
+            busy || openingScanner || startingDesktop || !consent || !enabled
             ? null
             : connect,
         icon: const Icon(Icons.link_rounded),
-        label: Text(tr(context, connecting ? '正在连接…' : '确认连接')),
+        label: Text(tr(context, busy ? '正在连接…' : '确认连接')),
       ),
       const SizedBox(height: 12),
       Text(

@@ -1,6 +1,6 @@
 {
   "name": "@phonebridge/desktop",
-  "version": "0.2.0",
+  "version": "0.7.1",
   "private": true,
   "type": "module",
   "description": "Owner-controlled Android accessibility bridge for MCP agents",

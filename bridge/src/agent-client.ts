@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { validateHubUrl } from './hub-url.js';
 import { BridgeError, type Method } from './protocol.js';
 import { sendLocalFile } from './send-file.js';
+import { desktopEndpointSource, type DesktopEndpointSource } from './desktop-endpoint.js';
 
 export const targetShape = {
   deviceId: z.string().min(1).max(100).optional(),
@@ -11,7 +12,7 @@ export const targetShape = {
 export type Target = { deviceId?: string; taskHandle?: string; connectionId?: string };
 export type Routing = { deviceId?: string; controlId?: string; connectionId?: string };
 export class AgentError extends Error {
-  constructor(readonly code: string, message: string, readonly outcome = 'not_dispatched') { super(message); }
+  constructor(readonly code: string, message: string, readonly outcome = 'not_dispatched', readonly details?: Record<string, unknown>) { super(message); }
 }
 const deviceSchema = z.object({
   id: z.string(), name: z.string().optional(), connected: z.boolean(),
@@ -29,9 +30,17 @@ export class AgentClient {
   private closing?: Promise<void>;
   private closingRequested = false;
   private readonly acquisitions = new Set<Promise<Record<string, unknown>>>();
-  constructor(readonly url: URL, private readonly token: string) {}
+  private deviceDetails?: Record<string, unknown>;
+  constructor(readonly url: URL, private readonly token: string, private readonly endpointSource: DesktopEndpointSource = desktopEndpointSource(url)) {}
+  get connectionDetails(): Record<string, unknown> | undefined { return this.deviceDetails; }
+
+  private async refreshEndpoint(): Promise<void> {
+    const current = await this.endpointSource();
+    if (current) { validateHubUrl(current); this.url.href = current.href; }
+  }
 
   async request(path: string, body?: unknown, timeoutMs = 18000): Promise<Record<string, any>> {
+    await this.refreshEndpoint();
     validateHubUrl(this.url);
     const response = await fetch(new URL(path, this.url), {
       method: body === undefined ? 'GET' : 'POST', redirect: 'error',
@@ -54,14 +63,18 @@ export class AgentClient {
     if (!response.ok || reply.error) {
       const code = typeof reply.error?.code === 'string' ? reply.error.code : 'HTTP_ERROR';
       const uncertain = uncertainErrors.has(code);
-      throw new AgentError(code, typeof reply.error?.message === 'string' ? reply.error.message : `Computer service returned ${response.status}.`, uncertain ? 'unknown' : response.ok ? 'device_reported_error' : 'not_dispatched');
+      throw new AgentError(code, typeof reply.error?.message === 'string' ? reply.error.message : `Computer service returned ${response.status}.`, uncertain ? 'unknown' : response.ok ? 'device_reported_error' : 'not_dispatched',
+        reply.error?.details && typeof reply.error.details === 'object' && !Array.isArray(reply.error.details) ? reply.error.details : undefined);
     }
     return reply;
   }
 
   async devices(timeoutMs?: number): Promise<AgentDevice[]> {
     const reply = await this.request('/devices', undefined, timeoutMs);
-    return z.array(deviceSchema).parse(reply.devices);
+    const devices = z.array(deviceSchema).parse(reply.devices);
+    this.deviceDetails = { ...(reply.details && typeof reply.details === 'object' && !Array.isArray(reply.details) ? reply.details : {}),
+      knownDevices: Array.isArray(reply.details?.knownDevices) ? reply.details.knownDevices : devices };
+    return devices;
   }
 
   acquire(deviceId?: string): Promise<Record<string, unknown>> {
@@ -76,7 +89,7 @@ export class AgentClient {
     const devices = (await this.devices()).filter(d => d.connected);
     if (this.closingRequested) throw new AgentError('CLIENT_CLOSED', 'The AI connection is closing.');
     const device = deviceId ? devices.find(d => d.id === deviceId) : devices.length === 1 ? devices[0] : undefined;
-    if (!device) throw new AgentError(deviceId || !devices.length ? 'NO_DEVICE' : 'DEVICE_REQUIRED', deviceId ? 'The selected phone is offline or unknown.' : 'Select a phone from phone_list_devices.');
+    if (!device) throw new AgentError(deviceId || !devices.length ? 'NO_DEVICE' : 'DEVICE_REQUIRED', deviceId ? 'The selected phone is offline or unknown.' : 'Select a phone from phone_list_devices.', 'not_dispatched', this.deviceDetails);
     if (!device.capabilities.includes('control_lease') || !device.connectionId) throw new AgentError('UNSUPPORTED', 'Upgrade the phone and computer service to use task control.');
     const controlId = randomUUID();
     const result = await this.request('/rpc', { method: 'acquire_control', params: { controlId, ...(device.capabilities.includes('control_queue') ? { queue: true } : {}) }, deviceId: device.id, connectionId: device.connectionId });
@@ -89,7 +102,7 @@ export class AgentClient {
     }
     return { ...(result.result ?? {}), taskHandle, deviceId: device.id, state, idleTimeoutMs: 60000, instruction: state === 'queued'
       ? 'Another AI is using this phone. Call phone_wait_for_control with this taskHandle; do not operate until state is active. Release to cancel waiting.'
-      : 'Pass taskHandle to every observation/action. Release it in finally when done. Expired handles require a new acquire and fresh observation.' };
+      : 'Reuse this taskHandle for the entire workflow, including clipboard/files. Do not acquire again for each command: control changes invalidate old node/screenshot IDs. Renew explicitly before a planned idle interval reaches 60 seconds. Release in finally when done. Expired handles require a new acquire and fresh observation.' };
   }
 
   async resolve(target: Target, timeoutMs?: number, allowQueued = false): Promise<Routing> {
@@ -101,7 +114,7 @@ export class AgentClient {
     const device = (await this.devices(timeoutMs)).find(d => d.id === task.deviceId);
     if (!device?.connected || device.connectionId !== task.connectionId) {
       this.tasks.delete(target.taskHandle);
-      throw new AgentError('CONTROL_EXPIRED', 'The phone connection changed. Acquire control again and observe; do not replay actions.');
+      throw new AgentError('CONTROL_EXPIRED', 'The phone connection changed. Acquire control again and observe; do not replay actions.', 'not_dispatched', this.deviceDetails);
     }
     return { deviceId: task.deviceId, controlId: task.controlId, connectionId: task.connectionId };
   }
@@ -129,6 +142,18 @@ export class AgentClient {
     } finally { this.tasks.delete(taskHandle); }
   }
 
+  async renew(taskHandle: string): Promise<Record<string, unknown>> {
+    const route = await this.resolve({ taskHandle });
+    try {
+      const reply = await this.request('/rpc', { method: 'renew_control', params: { controlId: route.controlId }, ...route });
+      if (!reply.result || reply.result.state !== 'active') throw new AgentError('INVALID_RESPONSE', 'The phone did not confirm an active lease renewal.', 'unknown');
+      return { ...reply.result, taskHandle, instruction: 'Active lease renewed. Continue using this workflow handle; release it in finally.' };
+    } catch (error) {
+      if (error instanceof AgentError && terminalErrors.has(error.code)) this.tasks.delete(taskHandle);
+      throw error;
+    }
+  }
+
   async waitForControl(taskHandle: string, timeoutMs: number): Promise<Record<string, unknown>> {
     const route = await this.resolve({ taskHandle }, timeoutMs + 3000, true);
     const endpoint = new URL('/control-events', this.url);
@@ -150,10 +175,10 @@ export class AgentClient {
   }
 
   async sendFile(path: string, target: Target): Promise<unknown> {
-    try { return await sendLocalFile(this.url, this.token, path, await this.resolve(target)); }
+    try { const routing = await this.resolve(target); await this.refreshEndpoint(); return await sendLocalFile(this.url, this.token, path, routing); }
     catch (error) {
       if (target.taskHandle && (error instanceof AgentError || error instanceof BridgeError) && terminalErrors.has(error.code)) this.tasks.delete(target.taskHandle);
-      if (error instanceof BridgeError) throw new AgentError(error.code, error.message, uncertainErrors.has(error.code) ? 'unknown' : 'not_dispatched');
+      if (error instanceof BridgeError) throw new AgentError(error.code, error.message, uncertainErrors.has(error.code) ? 'unknown' : 'not_dispatched', error.details);
       throw error;
     }
   }
@@ -214,13 +239,29 @@ export async function observeCondition(client: AgentClient, condition: Condition
     return { ...result, state, ...(!result.matched ? { code: 'ASSERTION_FAILED', message: 'Condition was not observed. No action was retried.' } : {}) };
   }
   let state: Record<string, any> | undefined;
+  let lastObservationError: AgentError | undefined;
   do {
-    try { state = await client.command('state', {}, pinned, Math.max(1, deadline - Date.now())); }
-    catch (error) { if (Date.now() >= deadline && !(error instanceof AgentError)) break; throw error; }
-    const checked = checkCondition(state, condition);
-    if (checked.matched) return { ...checked, state };
+    let observed: Record<string, any> | undefined;
+    try {
+      observed = await client.command('state', {}, pinned, Math.max(1, deadline - Date.now()));
+      state = observed; lastObservationError = undefined;
+    } catch (error) {
+      // App launches can temporarily lack an accessible, verifiable window.
+      // Only wait-mode state reads may retry these observed transition codes.
+      if (timeoutMs > 0 && error instanceof AgentError && ['NO_WINDOW', 'WINDOW_UNSAFE'].includes(error.code)) lastObservationError = error;
+      else { if (Date.now() >= deadline && !(error instanceof AgentError)) break; throw error; }
+    }
+    if (observed) {
+      const checked = checkCondition(observed, condition);
+      if (checked.matched) return { ...checked, state: observed };
+    }
     if (Date.now() >= deadline) break;
     await new Promise(resolve => setTimeout(resolve, Math.min(200, Math.max(1, deadline - Date.now()))));
   } while (Date.now() < deadline);
-  return { matched: false, code: 'WAIT_TIMEOUT', ...(state ? { evidence: checkCondition(state, condition).evidence, state } : {}), message: 'Condition was not observed. No action was retried.' };
+  return { matched: false, code: 'WAIT_TIMEOUT',
+    ...(lastObservationError ? { lastError: { code: lastObservationError.code, message: lastObservationError.message, outcome: lastObservationError.outcome,
+      ...(lastObservationError.details ? { details: lastObservationError.details } : {}) } }
+      : state ? { evidence: checkCondition(state, condition).evidence, state } : {}),
+    message: lastObservationError ? `Waiting ended after the last observation returned ${lastObservationError.code}. Inspect lastError, let the app transition settle, then observe again. No action was retried.`
+      : 'Condition was not observed. No action was retried.' };
 }

@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 const positive = z.number().int().min(1).max(16384);
 const screenshotSchema = z.object({
+  screenshotId: z.string().min(1).max(100).optional(),
   mimeType: z.literal('image/jpeg'), data: z.string().min(4).max(2796204),
   width: positive.max(1280), height: positive.max(1280),
   screenWidth: positive, screenHeight: positive,

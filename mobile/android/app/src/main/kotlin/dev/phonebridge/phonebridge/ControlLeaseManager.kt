@@ -196,6 +196,15 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
         retire("released")
         return TaskStatus(normalized, "released")
     }
+    fun renew(computerId: String, connection: Long, controlId: String): TaskStatus {
+        val normalized = validateId(controlId)
+        expire()
+        rejectQueuedAction(computerId, connection, normalized)
+        val held = lease?.takeIf { it.computerId == computerId && it.connection == connection && it.controlId == normalized }
+            ?: expired()
+        held.deadline = now() + idleMillis
+        return TaskStatus(normalized, "active", ownerName = held.name, expiresInMs = idleMillis)
+    }
     fun valid(expected: Lease): Boolean { expire(); return lease === expected }
     private fun validateId(id: String): String {
         if (id.length != 36 || try { UUID.fromString(id).toString() != id.lowercase() } catch (_: Exception) { true })

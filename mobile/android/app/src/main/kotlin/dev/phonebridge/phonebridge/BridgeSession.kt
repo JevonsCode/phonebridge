@@ -40,6 +40,10 @@ object BridgeSession {
         var timeout: Runnable? = null, var replied: Boolean = false, var invalidated: Boolean = false,
         val socket: WebSocket? = transport.socket)
     private val transports = linkedMapOf<String, Transport>()
+    private val discovery = TrustedComputerDiscovery()
+    private val discoveries = mutableMapOf<String, TrustedComputerDiscovery.Attempt>()
+    private val discoveryTimes = mutableMapOf<String, Long>()
+    private val automaticStarts = mutableMapOf<String, DesktopServiceRecovery>()
     private val control = ControlLeaseManager(SystemClock::elapsedRealtime)
     private val operationScope = SessionOperationScope()
     private var lastAuthority: ControlLeaseManager.Lease? = null
@@ -57,6 +61,8 @@ object BridgeSession {
     private var computers = TrustedComputers()
     var appAccessOpen = false
         private set
+    val appAccessBlocked: Boolean get() = AppAccessPolicy.blocksRemote(appAccessOpen,
+        context?.let { AutomationPreferences.protectConnectionControls(it) } ?: false)
     // Local editor lifetime, independent of AI operations and control handoffs.
     private var appAccessRevision = 0L
     private var globalError = ""
@@ -105,6 +111,7 @@ object BridgeSession {
     }
     fun detach(value: PhoneAccessibilityService) {
         if (service !== value) return
+        cancelAllDiscoveries()
         control.clear()
         authorityChanged()
         transports.values.toList().forEach { close(it, "Accessibility service stopped.") }
@@ -134,10 +141,17 @@ object BridgeSession {
             "connectedComputerCount" to transports.values.count { it.connected },
             "waitingCount" to control.waitingCount,
             "connecting" to transports.values.any { it.connecting }, "actionsEnabled" to actionsEnabled,
+            "selectedConnected" to (selected?.connected == true),
+            "selectedConnecting" to (selected?.connecting == true || selected?.retry != null),
+            "selectedActionsEnabled" to (selected?.record?.actionsEnabled == true),
             "lastError" to (selected?.error?.ifEmpty { null } ?: globalError), "endpoint" to (selected?.record?.endpoint ?: ""),
             "hasSavedPairing" to (saved != null), "savedEndpoint" to (saved?.endpoint ?: ""),
             "activeComputerId" to (computers.activeId ?: ""), "computerName" to (computers.active?.name ?: ""),
             "computers" to computerList(), "files" to (fileInbox?.status() ?: emptyList<Map<String, Any>>()),
+            "autoReceiveFilesEnabled" to (fileInbox?.autoReceiveEnabled ?: true),
+            "clipboardAccessEnabled" to (context?.let { AutomationPreferences.clipboardAccessEnabled(it) } ?: true),
+            "protectConnectionControls" to (context?.let { AutomationPreferences.protectConnectionControls(it) } ?: false),
+            "saveMediaToGallery" to (fileInbox?.saveMediaToGallery ?: true),
             "allowedPackages" to (saved ?: selected?.record)?.packages.orEmpty(),
             "effectiveAllowedPackages" to (if (selected?.connected == true) selected.record.packages else emptyList<String>()),
             "permissionRevision" to appAccessRevision,
@@ -181,21 +195,19 @@ object BridgeSession {
             entry(t.id)?.name ?: url.host, t.serial)
     }
     fun isFileSourceCurrent(sourceGeneration: Long): Boolean = transports.values.any { it.serial == sourceGeneration && it.connected }
-    fun offerFile(params: JSONObject) { fileInbox!!.offer(params, sourceFor(execution?.transport)) }
+    fun offerFile(params: JSONObject): Map<String, Any> = fileInbox!!.offer(params, sourceFor(execution?.transport))
 
     private fun validatePairing(record: TrustedPairing) {
         EndpointPolicy.validate(record.endpoint, record.allowInsecureLocal)
         EndpointPolicy.validateToken(record.token)
-        require(record.packages.isNotEmpty() && record.packages.size <= 64 && record.packages.all {
-            it.length <= 255 && it.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")) }) {
-            "Enter 1–64 valid allowed package names."
-        }
+        AppAccessPolicy.requirePackages(record.packages)
     }
     private fun updateTrust(update: () -> Unit) {
         try { update(); computers = store!!.list(); loaded = true }
         catch (_: Exception) { storageFailure() }
     }
     private fun storageFailure(): Nothing {
+        cancelAllDiscoveries()
         try { store?.pauseAutomaticResume(); store?.markActionsPaused() } catch (_: Exception) { }
         computers = computers.copy(entries = computers.entries.map { it.copy(pairing = it.pairing.copy(resumeAllowed = false, actionsEnabled = false)) })
         loaded = false
@@ -260,7 +272,7 @@ object BridgeSession {
         val apps = AppAccessCatalog.list(context!!, record.packages)
         appAccessOpen = true
         appAccessRevision++
-        execution?.let { it.invalidated = true; operationScope.invalidate() }
+        execution?.let { if (operationScope.invalidateForOwnerAuthorization(appAccessBlocked)) it.invalidated = true }
         service?.invalidateNodes()
         service?.clearOperationTrail()
         val computer = computers.entries.find { it.pairing.endpoint == record.endpoint && it.pairing.token == record.token }
@@ -323,11 +335,52 @@ object BridgeSession {
         if (t != null) t.record = (entry(id)?.pairing ?: t.record).copy(actionsEnabled = enabled)
         service?.invalidateNodes(); broadcastStatus(); showNotification()
     }
+    /** One local owner action configures the selected trusted computer and shared automation preferences. */
+    fun allowAllAutomation(computerId: String? = null): Map<String, Any> {
+        requireOwnerUnlocked()
+        val id = computerId ?: computers.activeId ?: "temporary"
+        val previous = entry(id)?.pairing ?: transports[id]?.record
+            ?: throw BridgeFailure("NO_SAVED_PAIRING", "Connect a computer once before enabling automation.")
+        val value = context!!
+        val packages = AppAccessCatalog.list(value, previous.packages)
+            .filter { it["protected"] != true && (it["installed"] == true || it["packageName"] in previous.packages) }
+            .map { it["packageName"] as String }.distinct()
+        val record = previous.copy(packages = packages, actionsEnabled = true, resumeAllowed = true)
+        validatePairing(record)
+        val inbox = fileInbox!!
+        val clipboard = AutomationPreferences.clipboardAccessEnabled(value)
+        val protection = AutomationPreferences.protectConnectionControls(value)
+        val gallery = inbox.saveMediaToGallery
+        val reception = inbox.autoReceiveEnabled
+        try {
+            AutomationPreferences.setClipboardAccessEnabled(value, true)
+            AutomationPreferences.setProtectConnectionControls(value, false)
+            inbox.setSaveMediaToGallery(true)
+            // Persist every setting before running downloads or changing the current transport.
+            inbox.setAutoReceiveEnabled(true, resumePending = false)
+            if (entry(id) != null) updateTrust { store!!.update(id, record) }
+        } catch (error: Exception) {
+            runCatching { AutomationPreferences.setClipboardAccessEnabled(value, clipboard) }
+            runCatching { AutomationPreferences.setProtectConnectionControls(value, protection) }
+            runCatching { inbox.setSaveMediaToGallery(gallery) }
+            runCatching { inbox.setAutoReceiveEnabled(reception, resumePending = false) }
+            throw error
+        }
+        appAccessRevision++
+        // This only expands the selected computer's grants. Its connection and other computers stay live.
+        transports[id]?.record = record
+        service?.invalidateNodes()
+        if (service != null) runCatching { ensureTransport(id, record) }
+        inbox.resumePending()
+        broadcastStatus(); showNotification()
+        return status()
+    }
     fun setComputerResumeAllowed(id: String, enabled: Boolean) {
         val c = entry(id) ?: throw IllegalArgumentException("Unknown computer.")
         if (enabled) requireReady()
         updateTrust { store!!.update(id, c.pairing.copy(resumeAllowed = enabled)) }
         if (enabled) ensureTransport(id, entry(id)!!.pairing) else {
+            cancelDiscovery(id)
             control.revoke(id); authorityChanged()
             transports[id]?.let { close(it) }
         }
@@ -353,6 +406,7 @@ object BridgeSession {
     }
     fun forgetComputer(id: String) {
         require(entry(id) != null) { "Unknown computer." }
+        cancelDiscovery(id)
         transports[id]?.let { close(it); transports.remove(id) }
         control.revoke(id); authorityChanged()
         updateTrust { store!!.forget(id) }
@@ -360,6 +414,7 @@ object BridgeSession {
     fun forgetSavedConnection() { computers.activeId?.let { forgetComputer(it) } }
     /** Global owner Stop preserves every credential and pauses every independent transport. */
     fun disconnect(error: String = "") {
+        cancelAllDiscoveries()
         control.clear(); authorityChanged()
         transports.values.toList().forEach { close(it, error) }
         try {
@@ -407,11 +462,12 @@ object BridgeSession {
                 try { native.requireUnlocked(); requireNotifications(native) }
                 catch (_: BridgeFailure) { lost(t, "Waiting for the phone to be unlocked."); return@post }
                 t.connectTimeout?.let { main.removeCallbacks(it) }; t.connectTimeout = null
+                cancelDiscovery(t.id)
                 t.connecting = false; t.connected = true; t.retryAttempt = 0; t.error = ""; globalError = ""
                 val hello = JSONObject().put("type", "hello").put("protocol", 1).put("device", "Android").put("readOnly", !t.record.actionsEnabled)
                 t.negotiatedV2 = response.header("X-PhoneBridge-Protocol") == "2"
                 if (t.negotiatedV2) hello.put("protocol", 2).put("deviceId", deviceId)
-                    .put("device", Build.MODEL).put("capabilities", JSONArray(listOf("multi_device", "control_lease", "control_queue", "element_actions", "state_v2", "display_awake")))
+                    .put("device", Build.MODEL).put("capabilities", JSONArray(listOf("multi_device", "control_lease", "control_queue", "element_actions", "state_v2", "display_awake", "clipboard", "selectors", "image_coordinates", "text_actions", "control_renew")))
                 if (!ws.send(hello.toString())) lost(t, "Connection was interrupted.") else { sendStatus(t); showNotification() }
             } }
             override fun onMessage(ws: WebSocket, text: String) { main.post {
@@ -436,6 +492,53 @@ object BridgeSession {
         t.connectTimeout = Runnable { if (current(t) && t.connecting) lost(t, "Connection timed out. Reconnecting to the trusted computer.") }
             .also { main.postDelayed(it, 12000) }
     }
+    private fun cancelDiscovery(id: String) {
+        discoveries.remove(id)?.cancel()
+        automaticStarts.remove(id)?.close()
+    }
+    private fun cancelAllDiscoveries() {
+        (discoveries.keys + automaticStarts.keys).toSet().forEach(::cancelDiscovery)
+    }
+    private fun discoverComputer(t: Transport) {
+        val saved = entry(t.id)?.pairing ?: return
+        if (!saved.resumeAllowed || !loaded || service == null || discoveries.containsKey(t.id) || automaticStarts.containsKey(t.id)) return
+        val now = SystemClock.elapsedRealtime()
+        val previous = discoveryTimes[t.id]
+        if (previous != null && now - previous < 10000) return
+        discoveryTimes[t.id] = now
+        t.error = "Saved computer address is unavailable. Finding this computer on the current network."
+        val ownerService = service
+        lateinit var attempt: TrustedComputerDiscovery.Attempt
+        attempt = discovery.discover(saved) { endpoint -> main.post {
+            if (discoveries[t.id] !== attempt) return@post
+            discoveries.remove(t.id)
+            val currentRecord = entry(t.id)?.pairing
+            if (endpoint == null || service !== ownerService || service == null ||
+                !ComputerDiscoveryProtocol.sameResumableTrust(saved, currentRecord) || transports[t.id]?.connected == true) return@post
+            val restored = currentRecord!!.copy(endpoint = endpoint)
+            try {
+                validatePairing(restored)
+                if (endpoint != saved.endpoint) {
+                    transports[t.id]?.let { close(it) }
+                    updateTrust { store!!.update(t.id, restored) }
+                }
+                val recovery = DesktopServiceRecovery()
+                automaticStarts[t.id] = recovery
+                recovery.start(restored) { _ -> main.post {
+                    if (automaticStarts[t.id] !== recovery) return@post
+                    automaticStarts.remove(t.id); recovery.close()
+                    val latest = entry(t.id)?.pairing
+                    if (service === ownerService && latest != null &&
+                        ComputerDiscoveryProtocol.sameResumableTrust(restored, latest)) {
+                        try { ensureTransport(t.id, latest) } catch (_: Exception) { transports[t.id]?.let(::scheduleReconnect) }
+                    }
+                } }
+                // The management endpoint may be an older release; reconnect independently.
+                ensureTransport(t.id, entry(t.id)!!.pairing)
+            } catch (_: Exception) { transports[t.id]?.let(::scheduleReconnect) }
+        } }
+        discoveries[t.id] = attempt
+    }
     private fun scheduleReconnect(t: Transport) {
         if (!current(t) || !transportEnabled(t) || service == null || t.connected || t.connecting || t.retry != null) return
         t.retry = Runnable {
@@ -448,10 +551,11 @@ object BridgeSession {
     }
     private fun lost(t: Transport, error: String) {
         if (!current(t)) return
-        close(t, error); scheduleReconnect(t)
+        close(t, error); discoverComputer(t); scheduleReconnect(t)
     }
     private fun pause(t: Transport, error: String) {
         if (!current(t)) return
+        cancelDiscovery(t.id)
         control.revoke(t.id); authorityChanged()
         close(t, error)
         entry(t.id)?.let { c -> updateTrust { store!!.update(t.id, c.pairing.copy(resumeAllowed = false)) } }
@@ -495,7 +599,7 @@ object BridgeSession {
             if (request.has("controlId") && request.opt("controlId") !is String) throw BridgeFailure("INVALID_ARGUMENT", "controlId must be a UUID.")
             val task = request.opt("controlId") as? String
             val name = entry(t.id)?.name ?: "Computer"
-            if (method == "acquire_control" || method == "release_control" || method == "control_status") {
+            if (method == "acquire_control" || method == "release_control" || method == "control_status" || method == "renew_control") {
                 val controlId = params.opt("controlId") as? String ?: task ?: throw BridgeFailure("INVALID_ARGUMENT", "controlId must be a UUID.")
                 if (task != null && task != controlId) throw BridgeFailure("INVALID_ARGUMENT", "Conflicting control IDs.")
                 if (method == "acquire_control") {
@@ -510,6 +614,9 @@ object BridgeSession {
                         }
                     authorityChanged()
                     send(t, id, taskStatus(result), null)
+                } else if (method == "renew_control") {
+                    send(t, id, taskStatus(control.renew(t.id, t.serial, controlId)), null)
+                    authorityChanged()
                 } else if (method == "control_status") {
                     control.status(t.id, t.serial, controlId)
                     authorityChanged()
@@ -522,9 +629,9 @@ object BridgeSession {
                 updateAwake(); return
             }
             if (method !in setOf("file_offer", "state", "screenshot", "tap", "long_press", "swipe", "set_text",
-                    "node_action", "commit_text", "global_action", "launch_app"))
+                    "node_action", "commit_text", "global_action", "launch_app", "get_clipboard", "set_clipboard"))
                 throw BridgeFailure("UNKNOWN_METHOD", "Unknown Android method.")
-            if (appAccessOpen) throw BridgeFailure("OWNER_AUTHORIZATION", "Complete app authorization locally on the phone.")
+            if (appAccessBlocked) throw BridgeFailure("OWNER_AUTHORIZATION", "Complete app authorization locally on the phone.")
             // Invalid explicit tasks must report terminal expiry even while another operation is running.
             if (execution != null) {
                 if (task != null) control.requireExistingControl(t.id, t.serial, task)
@@ -578,7 +685,8 @@ object BridgeSession {
     private fun send(t: Transport, id: String, result: JSONObject?, error: BridgeFailure?) {
         if (!current(t) || !t.connected) return
         val message = JSONObject().put("id", id)
-        if (error != null) message.put("error", JSONObject().put("code", error.code).put("message", error.message))
+        if (error != null) message.put("error", JSONObject().put("code", error.code).put("message", error.message)
+            .also { if (error.details.isNotEmpty()) it.put("details", JSONObject(error.details)) })
         else message.put("result", result ?: JSONObject())
         val encoded = message.toString()
         if (encoded.length > 3 * 1024 * 1024) pause(t, "Operation result exceeded the size limit.")

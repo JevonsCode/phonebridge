@@ -5,6 +5,36 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TrustedComputersTest {
+    @Test fun expandingOneComputersAutomationPreservesOtherTrustAndActiveSelection() {
+        val original = TrustedComputers().remember(pairing().copy(actionsEnabled = false, resumeAllowed = false))
+            .remember(pairing("b".repeat(32)))
+        val target = original.entries.first()
+        val other = original.entries.last()
+        val backend = MemoryPersistence(original)
+        val granted = target.pairing.copy(packages = target.pairing.packages + "com.android.chrome", actionsEnabled = true, resumeAllowed = true)
+        val updated = TrustedComputerRepository(backend).mutate { computers ->
+            computers.copy(entries = computers.entries.map { if (it.id == target.id) it.copy(pairing = granted) else it })
+        }
+        assertEquals(original.activeId, updated.activeId)
+        assertEquals(other, updated.entries.last())
+        assertEquals(target.id, updated.entries.first().id)
+        assertEquals(target.pairing.endpoint, updated.entries.first().pairing.endpoint)
+        assertEquals(target.pairing.token, updated.entries.first().pairing.token)
+        assertEquals(granted, TrustedComputerRepository(backend).list().entries.first().pairing)
+        assertEquals(updated, TrustedComputers.decode(updated.encode()))
+    }
+
+    @Test fun moreThan64AppGrantsSurviveSaveAndRestore() {
+        val packages = (0 until 300).map { "com.example.app$it" }
+        val stored = TrustedComputers().remember(pairing().copy(packages = packages))
+        assertEquals(packages, TrustedComputers.decode(stored.encode()).active!!.pairing.packages)
+        val legacy = JSONObject().put("version", 1).put("endpoint", pairing().endpoint)
+            .put("token", pairing().token).put("allowInsecureLocal", true)
+            .put("packages", org.json.JSONArray(packages)).put("actionsEnabled", true)
+            .put("resumeAllowed", true).toString()
+        assertEquals(packages, TrustedComputers.decode(legacy).active!!.pairing.packages)
+    }
+
     @Test fun forgettingAnotherComputerPreservesActiveTrustAndPermissions() {
         val first = TrustedComputers().remember(pairing())
         val both = first.remember(pairing("b".repeat(32), false))

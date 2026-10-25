@@ -173,7 +173,7 @@ const _english = <String, String>{
   '连接异常，请检查电脑服务或网络': 'Connection issue. Check the computer service or network.',
   '恢复连接': 'Resume connection',
   "允许访问的应用": "Allowed apps",
-  "请选择 1–64 个应用": "Select 1–64 apps.",
+  "请至少选择一个应用": "Select at least one app.",
   "无法保存应用授权，请重试": "Could not save app access. Please try again.",
   "无法读取应用授权，请重试": "Could not load app access. Please try again.",
   "连接或授权已变化，请返回后重新打开应用列表":
@@ -187,8 +187,6 @@ const _english = <String, String>{
   "已选择": "Selected",
   "全选": "Select all",
   "全选搜索结果": "Select all results",
-  "最多允许 64 个应用，请取消部分勾选":
-      "Up to 64 apps are allowed. Deselect some apps to continue.",
   "未找到应用，试试其他名称": "No apps found. Try another name.",
   "系统授权页面仅能在手机操作": "System permission screens require local interaction.",
   "当前未安装": "Not installed",
@@ -299,6 +297,27 @@ const _english = <String, String>{
   "\u65e0\u6cd5\u4fdd\u5b58\u63a5\u6536\u8bb0\u5f55\uff0c\u8bf7\u68c0\u67e5\u624b\u673a\u5b58\u50a8\u7a7a\u95f4":
       "Could not save the receipt. Check phone storage.",
   '显示操作轨迹': 'Show operation trails',
+  '全部允许': 'Allow all',
+  '图片和视频可保存到相册，其他文件保存在下载/PhoneBridge。':
+      'Images and videos can be saved to the gallery. Other files are saved in Downloads/PhoneBridge.',
+  '等待自动接收': 'Waiting for automatic reception',
+  '已保存到相册': 'Saved to gallery',
+  '已保存到下载/PhoneBridge': 'Saved to Downloads/PhoneBridge',
+  '有效至': 'Available until',
+  '允许 AI 使用剪贴板': 'Allow AI to use the clipboard',
+  '读取、复制和粘贴手机上的文字': 'Read, copy and paste text on your phone',
+  '图片和视频保存到相册': 'Save images and videos to the gallery',
+  '收到后可直接在其他应用中选择': 'Received media is ready to select in other apps',
+  '避免 AI 误断开连接': 'Prevent accidental AI disconnection',
+  '保护连接和授权开关，防止操作中误触':
+      'Protect connection and permission controls from accidental taps',
+  '无法读取设置，请重试': 'Could not read this setting. Try again.',
+  '无法保存设置，请重试': 'Could not save this setting. Try again.',
+  '自动接收电脑文件': 'Automatically receive computer files',
+  '已配对电脑发来的文件直接保存到手机':
+      'Save files from paired computers directly to your phone',
+  '无法读取自动接收设置，请重试': 'Could not load automatic reception setting. Try again.',
+  '无法保存自动接收设置，请重试': 'Could not save automatic reception setting. Try again.',
   '显示 AI 点击与滑动的位置': 'Show where AI taps and swipes',
   '无法读取操作轨迹设置，请重试': 'Could not load operation trail setting. Try again.',
   '无法保存操作轨迹设置，请重试': 'Could not save operation trail setting. Try again.',

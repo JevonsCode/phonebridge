@@ -4,14 +4,22 @@ import net, { type Socket } from 'node:net';
 import { fork, type ChildProcess } from 'node:child_process';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { networkInterfaces } from 'node:os';
 import { validateToken } from './protocol.js';
+import { TrustedDiscoveryResponder, privateDiscoveryAddress, trustedDiscoveryResponse } from './discovery.js';
 
 type Options = {
   token: string; host?: string; port?: number; allowLan?: boolean;
   tls?: { cert: Buffer; key: Buffer }; autoStart?: boolean;
   restartDelayMs?: number; startupTimeoutMs?: number;
   logFile?: string;
+  discovery?: false | { port?: number; host?: string; allowLoopback?: boolean };
 };
+
+export function supervisorOptionsForPlatform(options: Options, platform: NodeJS.Platform = process.platform): Options {
+  // Existing Windows installations may have only their TCP service permission.
+  return platform === 'win32' ? { ...options, discovery: false } : options;
+}
 
 /** The original public endpoint survives a Hub crash. No RPC is ever replayed. */
 export class DesktopSupervisor {
@@ -24,6 +32,9 @@ export class DesktopSupervisor {
   private stopping = false;
   private attempts = 0;
   private readonly streams = new Set<Socket>();
+  private publicUrl?: string;
+  private discovery?: TrustedDiscoveryResponder;
+  private discoveryError?: string;
 
   constructor(private readonly options: Options) {
     validateToken(options.token);
@@ -45,6 +56,18 @@ export class DesktopSupervisor {
 
   get managedProcessId(): number | undefined { return this.child?.pid; }
   get serviceRunning(): boolean { return !!this.hubUrl; }
+  get endpoint(): string | undefined { return this.publicUrl; }
+  get discoveryStatus(): { listening: boolean; port?: number; error?: string } {
+    return { listening: !!this.discovery?.port, ...(this.discovery?.port ? { port: this.discovery.port } : {}),
+      ...(this.discoveryError ? { error: this.discoveryError } : {}) };
+  }
+
+  private discoveryEndpoint(): string | undefined {
+    const address = this.server.address();
+    if (!this.server.listening || this.stopping || !this.publicUrl || !address || typeof address === 'string' ||
+      !Object.values(networkInterfaces()).flat().some(network => network?.address === address.address)) return;
+    return `${this.publicUrl.replace(/^http/, 'ws')}/device`;
+  }
 
   async start(): Promise<string> {
     await new Promise<void>((resolve, reject) => {
@@ -55,11 +78,19 @@ export class DesktopSupervisor {
     });
     const address = this.server.address();
     if (!address || typeof address === 'string') throw new Error('Missing listen address.');
+    this.publicUrl = `${this.options.tls ? 'https' : 'http'}://${address.family === 'IPv6' ? `[${address.address}]` : address.address}:${address.port}`;
     if (this.options.autoStart !== false) {
       // Leave management available even when the Hub cannot start yet.
       await this.ensureRunning().catch(() => undefined);
     }
-    return `${this.options.tls ? 'https' : 'http'}://${address.family === 'IPv6' ? `[${address.address}]` : address.address}:${address.port}`;
+    // Loopback-only test/development supervisors do not compete for the production UDP port.
+    if (this.options.discovery !== false && (privateDiscoveryAddress(address.address) || this.options.discovery?.allowLoopback)) {
+      const discovery = new TrustedDiscoveryResponder({ token: this.options.token, ...this.options.discovery,
+        endpoint: () => this.discoveryEndpoint() });
+      try { await discovery.start(); this.discovery = discovery; }
+      catch { this.discoveryError = 'Trusted discovery is unavailable on this network.'; }
+    }
+    return this.publicUrl;
   }
 
   private authorized(req: IncomingMessage): boolean {
@@ -77,6 +108,22 @@ export class DesktopSupervisor {
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.headers.origin) { req.resume(); this.respond(res, 403, { error: { code: 'ORIGIN_REFUSED' } }); return; }
     if (req.method === 'GET' && req.url === '/health') { this.respond(res, 200, { ok: true, protocol: 1 }); return; }
+    if (req.url?.split('?')[0] === '/discovery') {
+      req.resume();
+      let reply;
+      if (req.method === 'GET' && req.url.length <= 256) {
+        const query = new URL(req.url, 'http://localhost').searchParams;
+        if ([...query.keys()].length === 2 && query.getAll('identity').length === 1 && query.getAll('nonce').length === 1) {
+          reply = trustedDiscoveryResponse(this.options.token, { type: 'phonebridge_discover', version: 1,
+            identity: query.get('identity'), nonce: query.get('nonce') },
+          this.discoveryEndpoint(),
+          // The actual HTTP listener remains challengeable independently of UDP,
+          // including a loopback-only management listener.
+          true);
+        }
+      }
+      this.respond(res, reply ? 200 : 404, reply ?? { error: { code: 'NOT_FOUND' } }); return;
+    }
     if (!this.authorized(req)) { req.resume(); this.respond(res, 401, { error: { code: 'UNAUTHORIZED' } }); return; }
     if (req.url === '/service/start') {
       if (req.method !== 'POST') { req.resume(); this.respond(res, 405, { error: { code: 'METHOD_NOT_ALLOWED' } }); return; }
@@ -147,7 +194,8 @@ export class DesktopSupervisor {
     if (this.starting) return this.starting;
     clearTimeout(this.retry); this.retry = undefined;
     const child = fork(fileURLToPath(new URL('./hub-worker.js', import.meta.url)), [], {
-      env: { ...process.env, PHONEBRIDGE_TOKEN: this.options.token, ...(this.options.logFile ? { PHONEBRIDGE_LOG_FILE: this.options.logFile } : {}) },
+      env: { ...process.env, PHONEBRIDGE_TOKEN: this.options.token,
+        PHONEBRIDGE_PUBLIC_ENDPOINT: this.publicUrl ?? '', ...(this.options.logFile ? { PHONEBRIDGE_LOG_FILE: this.options.logFile } : {}) },
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true,
       // Do not inherit tsx loaders or debugging flags into the fixed production worker.
       execArgv: [],
@@ -192,6 +240,8 @@ export class DesktopSupervisor {
     if (this.stopping) return;
     this.stopping = true;
     clearTimeout(this.retry);
+    await this.discovery?.close();
+    this.discovery = undefined;
     const child = this.child;
     if (child && child.exitCode === null && child.signalCode === null) {
       const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
@@ -201,6 +251,6 @@ export class DesktopSupervisor {
     await this.starting?.catch(() => undefined);
     for (const socket of this.streams) socket.destroy();
     this.server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => this.server.close(error => error ? reject(error) : resolve()));
+    if (this.server.listening) await new Promise<void>((resolve, reject) => this.server.close(error => error ? reject(error) : resolve()));
   }
 }

@@ -60,3 +60,27 @@ test('unaccepted bytes expire without an unbounded retention timer', async () =>
     assert.equal(slot.status()?.state, 'expired');
   } finally { slot.clear(); }
 });
+
+test('reported expiry is the Hub TTL, is not extended by download, and disappears after confirmed receipt', async () => {
+  let now = 1000;
+  const slot = new FileTransferSlot({ ttlMs: 100, now: () => now });
+  try {
+    const offer = await slot.upload(metadata, bytes(Buffer.from('abc')));
+    assert.equal(offer.expiresAt, 1100); assert.equal(slot.status()?.expiresAt, 1100);
+    now = 1050; slot.download(offer.id);
+    assert.equal(slot.status()?.state, 'receiving'); assert.equal(slot.status()?.expiresAt, 1100);
+    slot.finish(offer.id, 'received'); assert.equal(slot.status()?.expiresAt, undefined);
+    now = 5000; assert.equal(slot.status()?.state, 'received'); assert.equal(slot.status()?.expiresAt, undefined);
+  } finally { slot.clear(); }
+});
+
+test('expired or cancelled files have terminal status rather than a live expiry deadline', async () => {
+  let now = 1000;
+  const slot = new FileTransferSlot({ ttlMs: 100, now: () => now });
+  try {
+    await slot.upload(metadata, bytes(Buffer.from('abc'))); now = 1100;
+    assert.equal(slot.status()?.state, 'expired'); assert.equal(slot.status()?.expiresAt, undefined);
+    await slot.upload(metadata, bytes(Buffer.from('abc'))); assert.equal(slot.status()?.expiresAt, 1200);
+    slot.clear(); assert.equal(slot.status()?.state, 'cancelled'); assert.equal(slot.status()?.expiresAt, undefined);
+  } finally { slot.clear(); }
+});

@@ -29,8 +29,20 @@ export async function sendLocalFile(url: URL, token: string, path: string, routi
       const text = await response.text();
       if (text.length > 8192) throw new Error('Invalid file transfer response.');
       const result = JSON.parse(text);
-      if (!response.ok) throw new BridgeError(typeof result.error?.code === 'string' ? result.error.code : 'FILE_UNAVAILABLE', typeof result.error?.message === 'string' ? result.error.message : 'The phone could not accept the file offer.', response.status);
-      return { ...result, message: 'Waiting for the phone owner to receive the file, then choose Share. No message has been sent.' };
+      if (!response.ok) throw new BridgeError(typeof result.error?.code === 'string' ? result.error.code : 'FILE_UNAVAILABLE', typeof result.error?.message === 'string' ? result.error.message : 'The phone could not accept the file offer.', response.status,
+        result.error?.details && typeof result.error.details === 'object' && !Array.isArray(result.error.details) ? result.error.details : undefined);
+      const state = result.transfer?.state;
+      const message = state === 'received' ? 'The phone confirmed file receipt. Sharing to an app or contact is a separate action.'
+        : state === 'receiving' || result.phoneState === 'receiving' ? 'The phone is receiving the file; receipt is not confirmed yet.'
+        : state === 'pending' || result.phoneState === 'pending' || result.phoneState === 'queued'
+          ? result.autoReceiveEnabled === false ? 'File queued. Automatic receipt is disabled on the phone; the owner can receive it in PhoneBridge.'
+            : 'File queued for the phone. Receipt is not confirmed yet; trusted computers are received automatically when enabled on the phone.'
+          : 'File offer submitted. Receipt is not confirmed; inspect the returned transfer state before retrying.';
+      const waiting = state === 'pending' || state === 'receiving';
+      const instruction = result.autoReceiveEnabled === true && waiting
+        ? 'Automatic receipt is enabled; no owner confirmation is required. Read phone_list_devices for the same device and transfer.id until transfer.state is received before dependent file operations. Do not resend this file while it is queued or receiving.'
+        : undefined;
+      return { ...result, message, ...(instruction ? { instruction } : {}) };
     } finally { stream.destroy(); }
   } finally { await file.close(); }
 }

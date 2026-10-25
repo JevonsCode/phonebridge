@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,6 +11,12 @@ void main() {
   late List<Map<String, dynamic>> entries;
   String? active;
   var connected = true;
+  var connecting = false, completeNewPairing = false;
+  String? temporaryEndpoint;
+  var temporaryConnected = false, temporaryConnecting = false;
+  bool? rpcActionsEnabled;
+  PlatformException? connectFailure;
+  Completer<void>? connectReply;
   var queuedTasks = 0;
 
   setUp(() {
@@ -17,6 +24,12 @@ void main() {
         const Locale('zh');
     calls.clear();
     connected = true;
+    connecting = completeNewPairing = false;
+    temporaryEndpoint = null;
+    temporaryConnected = temporaryConnecting = false;
+    rpcActionsEnabled = null;
+    connectFailure = null;
+    connectReply = null;
     queuedTasks = 0;
     active = 'first';
     entries = [
@@ -33,11 +46,91 @@ void main() {
         'actionsEnabled': false,
       },
     ];
+    Map<String, dynamic> snapshot() {
+      final selected = entries.where((e) => e['id'] == active).firstOrNull;
+      final selectedConnected = selected == null
+          ? temporaryConnected
+          : selected['connected'] ??
+                (selected['state'] == null
+                    ? connected
+                    : ['connected', 'controlling'].contains(selected['state']));
+      final selectedConnecting = selected == null
+          ? temporaryConnecting
+          : selected['connecting'] ??
+                (selected['state'] == 'connecting' ||
+                    (selected['state'] == null && connecting));
+      return {
+        'accessibilityEnabled': true,
+        'connected': connected,
+        'connecting': connecting,
+        'actionsEnabled':
+            rpcActionsEnabled ??
+            (selected?['actionsEnabled'] == true && connected),
+        'selectedConnected': selectedConnected,
+        'selectedConnecting': selectedConnecting,
+        'selectedActionsEnabled': selected?['actionsEnabled'] == true,
+        'rememberedActions': selected?['actionsEnabled'] == true,
+        'hasSavedPairing': selected != null,
+        'endpoint': selected?['endpoint'] ?? temporaryEndpoint ?? '',
+        'savedEndpoint': selected?['endpoint'] ?? '',
+        'computerName': selected?['name'] ?? '',
+        'activeComputerId': active ?? '',
+        'autoReconnectEnabled': false,
+        'lastError': '',
+        'waitingCount': queuedTasks,
+        'controlOwnerName': entries.any((e) => e['controlling'] == true)
+            ? '工作电脑'
+            : '',
+        'computers': entries
+            .map(
+              (e) => {
+                ...e,
+                'active': e['id'] == active,
+                'state':
+                    e['state'] ??
+                    (e['id'] == active
+                        ? connected
+                              ? 'connected'
+                              : 'paused'
+                        : 'saved'),
+              },
+            )
+            .toList(),
+      };
+    }
+
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
           calls.add(call);
           if (call.method == 'getLanguagePreference') return 'system';
           if (call.method == 'getShowOperationTrails') return false;
+          if (call.method == 'connect') {
+            if (connectReply != null) await connectReply!.future;
+            if (connectFailure != null) throw connectFailure!;
+            final endpoint = Uri.parse(
+              call.arguments['endpoint'] as String,
+            ).replace(path: '/device').toString();
+            if (call.arguments['remember'] == false) {
+              active = null;
+              temporaryEndpoint = endpoint;
+              temporaryConnected = completeNewPairing;
+              temporaryConnecting = !completeNewPairing;
+            } else {
+              entries.add({
+                'id': 'third',
+                'name': '新电脑',
+                'endpoint': endpoint,
+                'actionsEnabled': false,
+                'resumeAllowed': true,
+                'connected': completeNewPairing,
+                'state': completeNewPairing ? 'connected' : 'connecting',
+              });
+              active = 'third';
+            }
+            connected = connected || completeNewPairing;
+            connecting = connecting || !completeNewPairing;
+            return snapshot();
+          }
           if (call.method == 'selectComputer') {
             active = call.arguments['id'] as String;
             connected = true;
@@ -66,44 +159,7 @@ void main() {
               connected = false;
             }
           }
-          if (call.method == 'status') {
-            final selected = entries
-                .where((e) => e['id'] == active)
-                .firstOrNull;
-            return {
-              'accessibilityEnabled': true,
-              'connected': connected,
-              'connecting': false,
-              'actionsEnabled':
-                  selected?['actionsEnabled'] == true && connected,
-              'rememberedActions': selected?['actionsEnabled'] == true,
-              'hasSavedPairing': selected != null,
-              'savedEndpoint': selected?['endpoint'] ?? '',
-              'computerName': selected?['name'] ?? '',
-              'activeComputerId': active ?? '',
-              'autoReconnectEnabled': false,
-              'lastError': '',
-              'waitingCount': queuedTasks,
-              'controlOwnerName': entries.any((e) => e['controlling'] == true)
-                  ? '工作电脑'
-                  : '',
-              'computers': entries
-                  .map(
-                    (e) => {
-                      ...e,
-                      'active': e['id'] == active,
-                      'state':
-                          e['state'] ??
-                          (e['id'] == active
-                              ? connected
-                                    ? 'connected'
-                                    : 'paused'
-                              : 'saved'),
-                    },
-                  )
-                  .toList(),
-            };
-          }
+          if (call.method == 'status') return snapshot();
           return null;
         });
   });
@@ -119,6 +175,35 @@ void main() {
     await tester.pumpWidget(const PhoneBridgeApp());
     await tester.pumpAndSettle();
     await tester.tap(find.text('工作电脑'));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> pairAnother(WidgetTester tester) async {
+    await open(tester);
+    await tester.ensureVisible(find.byKey(const Key('pair-another-computer')));
+    await tester.tap(find.byKey(const Key('pair-another-computer')));
+    await tester.pumpAndSettle();
+  }
+
+  Future<void> fillNewPairing(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('manual-pairing')));
+    await tester.pumpAndSettle();
+    final endpoint = find.widgetWithText(TextField, '设备连接地址');
+    await tester.ensureVisible(endpoint);
+    await tester.pumpAndSettle();
+    await tester.enterText(endpoint, 'ws://192.168.1.30:8765/device');
+    final token = find.widgetWithText(TextField, '配对密钥');
+    await tester.ensureVisible(token);
+    await tester.pumpAndSettle();
+    await tester.enterText(token, 'c' * 40);
+    for (final key in ['insecure-local', 'consent']) {
+      final toggle = find.byKey(Key(key));
+      await tester.ensureVisible(toggle);
+      await tester.pumpAndSettle();
+      await tester.tap(toggle);
+      await tester.pump();
+    }
+    await tester.ensureVisible(find.byKey(const Key('connect')));
     await tester.pumpAndSettle();
   }
 
@@ -152,6 +237,63 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets(
+    'selecting an offline computer keeps its grant and recovery while another is online',
+    (tester) async {
+      entries.first.addAll({'connected': true, 'state': 'connected'});
+      entries.last.addAll({
+        'connected': false,
+        'connecting': false,
+        'state': 'paused',
+        'actionsEnabled': true,
+        'resumeAllowed': false,
+      });
+      await open(tester);
+      await tester.tap(find.byKey(const Key('computer-second')));
+      await tester.pumpAndSettle();
+      expect(active, 'second');
+      expect(connected, isTrue);
+      expect(entries.first['connected'], isTrue);
+      expect(find.text('连接已暂停'), findsOneWidget);
+      expect(find.text('已连接'), findsNothing);
+      final actions = tester.widget<SwitchListTile>(
+        find.byKey(const Key('actions')),
+      );
+      expect(actions.value, isTrue);
+      expect(actions.onChanged, isNull);
+      expect(find.text('操作授权已保留，重连后恢复'), findsOneWidget);
+      expect(find.byKey(const Key('stop')), findsOneWidget);
+      final recovery = find.byKey(const Key('start-desktop-service'));
+      await tester.ensureVisible(recovery);
+      await tester.pumpAndSettle();
+      expect(tester.widget<OutlinedButton>(recovery).onPressed, isNotNull);
+      await tester.tap(recovery);
+      await tester.pumpAndSettle();
+      expect(
+        calls.where((call) => call.method == 'startDesktopService'),
+        hasLength(1),
+      );
+      expect(entries.last['actionsEnabled'], isTrue);
+      expect(calls.where((call) => call.method == 'disconnect'), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('selected actions ignore a different RPC computers grant', (
+    tester,
+  ) async {
+    rpcActionsEnabled = false;
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pumpAndSettle();
+    final actions = tester.widget<SwitchListTile>(
+      find.byKey(const Key('actions')),
+    );
+    expect(actions.value, isTrue);
+    expect(actions.onChanged, isNotNull);
+    expect(calls.where((call) => call.method == 'setActionsEnabled'), isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets(
     'forget selected leaves the other computer accessible and does not connect it',
@@ -257,19 +399,278 @@ void main() {
   });
 
   testWidgets(
-    'pairing another pauses the current computer while retaining every entry',
+    'pairing another retains current connections and grants while polling',
     (tester) async {
-      await open(tester);
-      await tester.ensureVisible(
-        find.byKey(const Key('pair-another-computer')),
-      );
-      await tester.tap(find.byKey(const Key('pair-another-computer')));
+      entries.first['resumeAllowed'] = true;
+      entries.last['resumeAllowed'] = false;
+      final before = entries
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .toList();
+      await pairAnother(tester);
+      await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
-      expect(calls.where((c) => c.method == 'disconnect'), hasLength(1));
+      expect(calls.where((c) => c.method == 'disconnect'), isEmpty);
       expect(calls.where((c) => c.method == 'forgetSavedConnection'), isEmpty);
       expect(entries, hasLength(2));
+      expect(entries, before);
+      expect(connected, isTrue);
+      expect(active, 'first');
       expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      expect(
+        tester
+            .widget<FilledButton>(find.byKey(const Key('scan-pairing')))
+            .onPressed,
+        isNotNull,
+      );
       expect(find.byKey(const Key('consent')), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'canceling another pairing preserves the old connection and remembered grants',
+    (tester) async {
+      entries.first['resumeAllowed'] = true;
+      final before = entries
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .toList();
+      await pairAnother(tester);
+      await fillNewPairing(tester);
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('scan-pairing')), findsNothing);
+      expect(connected, isTrue);
+      expect(entries, before);
+      expect(
+        calls.where(
+          (call) => call.method == 'connect' || call.method == 'disconnect',
+        ),
+        isEmpty,
+      );
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'new pairing remains editable during another computers connection attempt',
+    (tester) async {
+      connecting = true;
+      await pairAnother(tester);
+      await fillNewPairing(tester);
+      expect(
+        tester
+            .widget<TextField>(find.widgetWithText(TextField, '设备连接地址'))
+            .enabled,
+        isTrue,
+      );
+      expect(
+        tester
+            .widget<TextField>(find.widgetWithText(TextField, '配对密钥'))
+            .enabled,
+        isTrue,
+      );
+      expect(
+        tester.widget<FilledButton>(find.byKey(const Key('connect'))).onPressed,
+        isNotNull,
+      );
+      final address = find.widgetWithText(TextField, '设备连接地址');
+      await tester.ensureVisible(address);
+      await tester.pumpAndSettle();
+      await tester.enterText(address, 'ws://192.168.1.40:8765/device');
+      await tester.pumpAndSettle();
+      expect(
+        tester.widget<CheckboxListTile>(find.byKey(const Key('consent'))).value,
+        isFalse,
+      );
+      expect(
+        tester
+            .widget<CheckboxListTile>(find.byKey(const Key('insecure-local')))
+            .value,
+        isFalse,
+      );
+      expect(calls.where((call) => call.method == 'disconnect'), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'only the submitted new computer connection closes the pairing form',
+    (tester) async {
+      entries.first['resumeAllowed'] = true;
+      final before = entries
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .toList();
+      await pairAnother(tester);
+      await fillNewPairing(tester);
+      await tester.tap(find.byKey(const Key('connect')));
+      await tester.pumpAndSettle();
+      expect(entries.take(2), before);
+      expect(active, 'third');
+      expect(connected, isTrue);
+      expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      entries.last['connected'] = true;
+      entries.last['state'] = 'connected';
+      connecting = false;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('scan-pairing')), findsNothing);
+      expect(calls.where((call) => call.method == 'disconnect'), isEmpty);
+      expect(calls.where((call) => call.method == 'connect').single.arguments, {
+        'endpoint': 'ws://192.168.1.30:8765/device',
+        'token': 'c' * 40,
+        'allowInsecureLocal': true,
+        'remember': true,
+        'replaceAllowedPackages': false,
+        'packages': ['dev.phonebridge.phonebridge', 'com.tencent.mm'],
+      });
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'temporary pairing waits for its selected endpoint while old computers stay online',
+    (tester) async {
+      entries.first['resumeAllowed'] = true;
+      final before = entries
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .toList();
+      await pairAnother(tester);
+      await fillNewPairing(tester);
+      final remember = find.byKey(const Key('remember-pairing'));
+      await tester.ensureVisible(remember);
+      await tester.pumpAndSettle();
+      await tester.tap(remember);
+      await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('connect')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('connect')));
+      await tester.pumpAndSettle();
+      expect(active, isNull);
+      expect(entries, before);
+      expect(connected, isTrue);
+      expect(temporaryConnected, isFalse);
+      expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      temporaryConnected = true;
+      temporaryConnecting = false;
+      temporaryEndpoint = 'ws://192.168.1.10:8765/device';
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      temporaryEndpoint = 'ws://192.168.1.30:8765/device';
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.byKey(const Key('scan-pairing')), findsNothing);
+      expect(entries, before);
+      expect(connected, isTrue);
+      expect(
+        calls
+            .where((call) => call.method == 'connect')
+            .single
+            .arguments['remember'],
+        isFalse,
+      );
+      expect(calls.where((call) => call.method == 'disconnect'), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets('accepted normalized manual endpoint closes the pairing form', (
+    tester,
+  ) async {
+    completeNewPairing = true;
+    await pairAnother(tester);
+    await fillNewPairing(tester);
+    final address = find.widgetWithText(TextField, '设备连接地址');
+    await tester.ensureVisible(address);
+    await tester.pumpAndSettle();
+    await tester.enterText(address, 'ws://192.168.1.30:8765');
+    for (final key in ['insecure-local', 'consent']) {
+      final toggle = find.byKey(Key(key));
+      await tester.ensureVisible(toggle);
+      await tester.pumpAndSettle();
+      await tester.tap(toggle);
+      await tester.pump();
+    }
+    await tester.ensureVisible(find.byKey(const Key('connect')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('connect')));
+    await tester.pumpAndSettle();
+    expect(entries.last['endpoint'], 'ws://192.168.1.30:8765/device');
+    expect(find.byKey(const Key('scan-pairing')), findsNothing);
+    expect(calls.where((call) => call.method == 'disconnect'), isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets(
+    'new pairing failure keeps the existing computer online and retains the form',
+    (tester) async {
+      connectFailure = PlatformException(code: 'INVALID_ARGUMENT');
+      final before = entries
+          .map((entry) => Map<String, dynamic>.from(entry))
+          .toList();
+      await pairAnother(tester);
+      await fillNewPairing(tester);
+      await tester.tap(find.byKey(const Key('connect')));
+      await tester.pumpAndSettle();
+      expect(entries, before);
+      expect(connected, isTrue);
+      expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      expect(find.byKey(const Key('error')), findsOneWidget);
+      expect(calls.where((call) => call.method == 'disconnect'), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'another computer going offline does not erase the new pairing draft',
+    (tester) async {
+      await pairAnother(tester);
+      await fillNewPairing(tester);
+      connected = false;
+      connecting = false;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(
+        tester
+            .widget<TextField>(find.widgetWithText(TextField, '配对密钥'))
+            .controller!
+            .text,
+        'c' * 40,
+      );
+      expect(find.byKey(const Key('scan-pairing')), findsOneWidget);
+      expect(calls.where((call) => call.method == 'disconnect'), isEmpty);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'pending new pairing disables duplicate submission and keeps the old connection',
+    (tester) async {
+      connectReply = Completer<void>();
+      await pairAnother(tester);
+      await fillNewPairing(tester);
+      final connect = tester
+          .widget<FilledButton>(find.byKey(const Key('connect')))
+          .onPressed!;
+      connect();
+      connect();
+      await tester.pump();
+      expect(
+        tester.widget<FilledButton>(find.byKey(const Key('connect'))).onPressed,
+        isNull,
+      );
+      expect(calls.where((call) => call.method == 'connect'), hasLength(1));
+      expect(connected, isTrue);
+      connectReply!.complete();
+      await tester.pumpAndSettle();
+      expect(entries, hasLength(3));
+      expect(calls.where((call) => call.method == 'disconnect'), isEmpty);
       await tester.pumpWidget(const SizedBox());
     },
   );

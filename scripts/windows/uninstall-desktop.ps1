@@ -9,6 +9,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'run-desktop.ps1') -LoadHelpers -ConfigurationPath $ConfigurationPath -ValidateOnly:$ValidateOnly
+. (Join-Path $PSScriptRoot 'atomic-config.ps1')
 $ConfigurationPath = [IO.Path]::GetFullPath($ConfigurationPath)
 $config = $null
 if (Test-Path -LiteralPath $ConfigurationPath) { $config = Read-PhoneBridgeDesktopConfiguration $ConfigurationPath }
@@ -24,6 +25,6 @@ if ($existing.Count -gt 0 -and $PSCmdlet.ShouldProcess('PhoneBridge Desktop', 'S
     Unregister-ScheduledTask -TaskName 'PhoneBridge Desktop' -TaskPath '\' -Confirm:$false -ErrorAction Stop
 }
 if ($RemoveConfiguration -and $null -ne $config -and $PSCmdlet.ShouldProcess($ConfigurationPath, 'Remove owned desktop runtime configuration')) {
-    Remove-Item -LiteralPath $ConfigurationPath -Force
+    Remove-PhoneBridgeAtomicConfiguration -ConfigurationPath $ConfigurationPath -ExpectedConfiguration $config
 }
 Write-Output 'PhoneBridge Desktop uninstall finished. Pairing credentials and configuration backups are preserved.'

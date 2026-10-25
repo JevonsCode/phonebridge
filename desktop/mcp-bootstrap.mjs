@@ -10,7 +10,7 @@ export async function mcpTarget(configFile, uid = process.getuid?.()) {
   for (const path of [config.nodePath, entry]) if (!(await lstat(path)).isFile()) throw new Error('Missing installed MCP runtime.');
   const credential = config.credentialFile ?? join(dirname(configFile), 'pairing.json');
   if (!isAbsolute(credential) || /[\r\n\0]/.test(credential)) throw new Error('Invalid credential path.');
-  const env = { ...process.env, PHONEBRIDGE_URL: `http://${config.hostAddress}:${config.port}`, PHONEBRIDGE_CREDENTIAL_FILE: credential };
+  const env = { ...process.env, PHONEBRIDGE_URL: `http://${config.hostAddress}:${config.port}`, PHONEBRIDGE_CREDENTIAL_FILE: credential, PHONEBRIDGE_DESKTOP_CONFIG: configFile };
   delete env.PHONEBRIDGE_TOKEN; delete env.NODE_OPTIONS; delete env.NODE_PATH;
   return { command: config.nodePath, args: [entry], cwd: config.projectRoot, env };
 }

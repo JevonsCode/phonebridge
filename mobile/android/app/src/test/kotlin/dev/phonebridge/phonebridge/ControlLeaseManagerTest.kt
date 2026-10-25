@@ -157,4 +157,26 @@ class ControlLeaseManagerTest {
         assertEquals(64, manager.events().size)
         assertTrue(manager.events().all { it.event == "reserved" && it.computerId == "computer" })
     }
+    @Test fun renewalExtendsOnlyTheExistingActiveTask() {
+        val owner = manager.acquire("A", 1, "A", a)
+        time += 59_000
+        val renewed = manager.renew("A", 1, a)
+        assertEquals("active", renewed.state)
+        assertEquals(60_000L, renewed.expiresInMs)
+        time += 59_999
+        assertTrue(manager.valid(owner))
+        time++
+        fails("CONTROL_EXPIRED") { manager.renew("A", 1, a) }
+        assertNull(manager.lease)
+    }
+    @Test fun waitingOrDifferentConnectionsCannotRenewTheOwnersLease() {
+        val owner = manager.acquire("A", 1, "A", a)
+        manager.request("B", 2, "B", b, true, true) { _, _ -> true }
+        val deadline = owner.deadline
+        time += 5_000
+        fails("CONTROL_QUEUED") { manager.renew("B", 2, b) }
+        fails("CONTROL_EXPIRED") { manager.renew("A", 3, a) }
+        assertEquals(deadline, owner.deadline)
+        assertSame(owner, manager.lease)
+    }
 }

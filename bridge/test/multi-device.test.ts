@@ -40,6 +40,40 @@ const answer = (phone: WebSocket, label: string) => phone.on('message', bytes =>
   const r = JSON.parse(bytes.toString()); phone.send(JSON.stringify({ id: r.id, result: { phone: label } }));
 });
 
+test('offline diagnostics expose the current endpoint and real last-known phone state', async t => {
+  const s = await setup(t);
+  const empty = await (await fetch(`${s.url}/devices`, { headers: s.headers })).json();
+  assert.equal(empty.details.publicEndpoint, s.url);
+  assert.equal(empty.details.connectionState, 'no_phone_connected');
+  assert.deepEqual(empty.details.knownDevices, []);
+  const missing = await s.rpc('state');
+  assert.equal(missing.body.error.code, 'NO_DEVICE');
+  assert.equal(missing.body.error.details.publicEndpoint, s.url);
+  assert.match(missing.body.error.message, /Current computer:/);
+  assert(missing.body.error.details.nextSteps.length > 0);
+  const a = await s.connect();
+  const live = await (await fetch(`${s.url}/devices`, { headers: s.headers })).json();
+  assert.equal(live.details.connectionState, 'connected');
+  assert.equal(live.devices[0].lastComputerEndpoint, s.url);
+  assert(Number.isFinite(Date.parse(live.devices[0].lastSeenAt)));
+  const closed = once(a.phone, 'close'); a.phone.close(); await closed;
+  await s.poll(async () => !(await s.devices())[0].connected);
+  const offline = await s.rpc('state', {}, { deviceId: a.id });
+  assert.equal(offline.body.error.details.connectionState, 'phone_offline');
+  assert.equal(offline.body.error.details.knownDevices[0].id, a.id);
+  assert.equal(offline.body.error.details.knownDevices[0].lastComputerEndpoint, s.url);
+});
+
+test('an online read-only phone stays connected in diagnostics', async t => {
+  const s = await setup(t); const a = await s.connect();
+  a.phone.send(JSON.stringify({ type: 'status', readOnly: true, controlling: false, controlOwnerName: '', waitingCount: 0 }));
+  await s.poll(async () => (await s.devices())[0].readOnly);
+  const status = await (await fetch(`${s.url}/status`, { headers: s.headers })).json();
+  assert.equal(status.connected, true);
+  assert.equal(status.details.connectionState, 'connected');
+  assert.equal(status.details.knownDevices[0].readOnly, true);
+});
+
 test('two phones run concurrently; target is explicit and attribution stays separate', async t => {
   const s = await setup(t); const a = await s.connect(); const b = await s.connect();
   assert.equal((await fetch(`${s.url}/devices`)).status, 401);

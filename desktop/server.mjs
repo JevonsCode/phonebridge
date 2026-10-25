@@ -2,12 +2,13 @@ import http from 'node:http';
 import { randomBytes, createHash } from 'node:crypto';
 import { readFile, writeFile, mkdir, unlink, lstat, link } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
-import { homedir, hostname } from 'node:os';
+import { homedir, hostname, networkInterfaces } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { lstatSync } from 'node:fs';
 import { localNetworks, privateIPv4, windowsIdentity } from './network.mjs';
-import { serializeNetworkChange } from './network-transaction.mjs';
+import { serializeNetworkChange, createNetworkRecovery, persistNetworkConfig } from './network-transaction.mjs';
+import { startLauncherMaintenance } from './launcher-maintenance.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 // Dashboard claims are separate from the hub/service identity. Legacy clients
@@ -48,8 +49,9 @@ export async function readOwnedConfig(path, sid) {
   if (!info.isFile() || info.isSymbolicLink() || info.size > 32768) throw new Error('Invalid desktop configuration file.');
   return validateConfig(JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, '')), sid);
 }
-export async function authenticatedStatus(config, token) {
-  const response = await fetch(`http://${config.hostAddress}:${config.port}/status`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2500), redirect: 'error' });
+export async function authenticatedStatus(config, token, { interfaces = networkInterfaces(), fetchImpl = fetch } = {}) {
+  if (!Object.values(interfaces).flat().some(network => network?.address === config.hostAddress)) throw new Error('The saved network is no longer local to this computer.');
+  const response = await fetchImpl(`http://${config.hostAddress}:${config.port}/status`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2500), redirect: 'error' });
   if (!response.ok) throw new Error('Existing endpoint cannot be authenticated.');
   const status = await response.json();
   if (typeof status.connected !== 'boolean') throw new Error('Unexpected endpoint identity.');
@@ -194,7 +196,7 @@ async function main() {
     }
     throw new Error('PhoneBridge is already starting. Please try again.');
   }
-  let supervisor, dashboard, stop;
+  let supervisor, dashboard, stop, recovery, maintenance;
   try {
     let config;
     try { config = await readOwnedConfig(path, sid); }
@@ -206,22 +208,41 @@ async function main() {
     const { default: QRCode } = await import('../bridge/node_modules/qrcode/lib/index.js');
     const savedCredentialFile = config.credentialFile ?? credentialPath();
     const token = await loadOrCreateSavedToken(savedCredentialFile);
+    maintenance = startLauncherMaintenance(path, { readConfig: () => readOwnedConfig(path, sid) });
+    const availableNetworks = () => {
+      const networks = localNetworks();
+      if (process.env.PHONEBRIDGE_DESKTOP_TEST === '1' && config.hostAddress === '127.0.0.1') networks.push({ address: '127.0.0.1', internal: true });
+      return networks;
+    };
+    recovery = createNetworkRecovery({ config, networks: availableNetworks,
+      readConfig: () => readOwnedConfig(path, sid),
+      createCandidate: async next => {
+        const { DesktopSupervisor, supervisorOptionsForPlatform } = await import('../bridge/dist/supervisor.js');
+        const candidate = new DesktopSupervisor(supervisorOptionsForPlatform({ token, host: next.hostAddress, port: next.port, allowLan: true,
+          logFile: process.env.PHONEBRIDGE_LOG_FILE ?? join(dirname(savedCredentialFile), 'operations.jsonl') }));
+        try { await candidate.start(); return candidate; }
+        catch (error) { await candidate.close(); throw error; }
+      },
+      persist: (next, expected) => persistNetworkConfig(path, next, expected, { readConfig: () => readOwnedConfig(path, sid) }),
+      onError: error => { startupError = error; },
+      onReady: current => { supervisor = current; startupError = undefined; },
+    });
+    const refreshConfig = async () => { Object.assign(config, await readOwnedConfig(path, sid)); };
     const start = async () => {
+      if (recovery.supervisor) { supervisor = await recovery.ensure(); return; }
+      await refreshConfig();
       try { await authenticatedStatus(config, token); return; } catch {}
-      if (!localNetworks().some(a => a.address === config.hostAddress) && !(process.env.PHONEBRIDGE_DESKTOP_TEST === '1' && config.hostAddress === '127.0.0.1')) throw new Error('The saved network is unavailable. Select your current private network.');
       // If a configured endpoint is occupied by another identity, listen fails closed; never rotate pairing.
-      if (supervisor) { await supervisor.ensureRunning(); return; }
       if (process.env.PHONEBRIDGE_DESKTOP_TEST !== '1') {
         const task = spawnSync(config.powershellPath, ['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',join(root,'desktop','task-control.ps1'),'-ConfigurationPath',path], { windowsHide:true,encoding:'utf8',timeout:15000 });
         if (task.status !== 2) {
           if (task.status !== 0) throw new Error('Cannot start the existing managed task safely. Existing configuration was preserved.');
-          for (let i=0;i<30;i++) { await new Promise(r=>setTimeout(r,300));try { await authenticatedStatus(config,token);return; } catch {} }
+          for (let i=0;i<30;i++) { await new Promise(r=>setTimeout(r,300));try { await refreshConfig(); await authenticatedStatus(config,token);return; } catch {} }
           throw new Error('The managed desktop service is starting or unavailable. Try Start desktop service again.');
         }
       }
-      const { DesktopSupervisor } = await import('../bridge/dist/supervisor.js');
-      const s = new DesktopSupervisor({ token, host: config.hostAddress, port: config.port, allowLan: true });
-      try { await s.start(); supervisor = s; } catch { throw new Error('This port is occupied or the saved network is unavailable. Existing service was preserved.'); }
+      supervisor = await recovery.ensure();
+      recovery.watch();
     };
     let startupError, startupPromise;
     const startWithFeedback=()=>{
@@ -240,17 +261,15 @@ async function main() {
         });
       } finally { requestingLan=false; }
     };
-    dashboard = await createDashboard({ config, token, clientIdentity, networks: localNetworks, status: () => authenticatedStatus(config, token), startService: startWithFeedback, startupError:()=>startupError?.message,
+    dashboard = await createDashboard({ config, token, clientIdentity, networks: localNetworks, status: async () => { await refreshConfig(); return authenticatedStatus(config, token); }, startService: startWithFeedback, startupError:()=>startupError?.message,
       changeNetwork: serializeNetworkChange(async address => {
         if(startupPromise)throw new Error('The desktop service is starting. Please wait before changing networks.');
         if (!privateIPv4(address) || !localNetworks().some(a => a.address === address)) throw new Error('Select an active private network.');
         if (!supervisor) { try { await authenticatedStatus(config, token); throw new Error('An existing desktop service is running. Stop it before changing its network.'); } catch (e) { if (e.message.startsWith('An existing')) throw e; } }
         if (address === config.hostAddress) { await startWithFeedback(); return; }
         if (supervisor) { const status = await authenticatedStatus(config, token); if (status.connected) throw new Error('Disconnect your phone before changing networks.'); }
-        await replaceNetwork(config,address,{previous:supervisor,activate:candidate=>{supervisor=candidate},
-          createCandidate: async next => { const { DesktopSupervisor }=await import('../bridge/dist/supervisor.js');const candidate=new DesktopSupervisor({token,host:next.hostAddress,port:next.port,allowLan:true});try{await candidate.start();if(!candidate.serviceRunning)throw new Error('New network service could not start.');return candidate;}catch(error){await candidate.close().catch(()=>{});throw error;} },
-          persist:async next=>{await writeFile(path+'.backup-'+Date.now(),JSON.stringify(config),{flag:'wx'});const temporary=path+'.tmp-'+process.pid;try{await writeFile(temporary,JSON.stringify(next));const {rename}=await import('node:fs/promises');await rename(temporary,path);}finally{await unlink(temporary).catch(()=>{});}}
-        });
+        supervisor = await recovery.change(address);
+        recovery.watch();
         startupError=undefined;
       }), language: process.env.LANG?.startsWith('zh') || spawnSync(config.powershellPath, ['-NoProfile', '-Command', '(Get-UICulture).Name'], { encoding: 'utf8', windowsHide: true,timeout:10000 }).stdout?.trim().startsWith('zh') ? 'zh' : 'en',
       qr: () => QRCode.toDataURL(pairingUri(`ws://${config.hostAddress}:${config.port}/device`, token), { width: 360, margin: 3 }),
@@ -259,9 +278,9 @@ async function main() {
     await writeFile(statePath, JSON.stringify({ ownerSid: sid, pid: process.pid, url: dashboard.url, clientIdentity }));
     // The private URL is emitted only to an explicitly requested native-child pipe.
     announceReady(args,dashboard.url,{});
-    let stopping = false; stop = async () => { if (stopping) return; stopping = true; await dashboard?.close(); await startupPromise?.catch(()=>{}); await supervisor?.close(); await unlink(statePath).catch(() => {}); await unlink(claimPath).catch(() => {}); };
+    let stopping = false; stop = async () => { if (stopping) return; stopping = true; await dashboard?.close(); await startupPromise?.catch(()=>{}); await recovery?.close(); await maintenance?.close(); await unlink(statePath).catch(() => {}); await unlink(claimPath).catch(() => {}); };
     process.on('SIGINT', () => void stop()); process.on('SIGTERM', () => void stop());
     void startWithFeedback().catch(()=>{});
-  } catch (e) { await dashboard?.close(); await supervisor?.close(); await unlink(claimPath).catch(() => {}); throw e; }
+  } catch (e) { await dashboard?.close(); await recovery?.close(); await maintenance?.close(); await unlink(claimPath).catch(() => {}); throw e; }
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) main().catch(e => { console.error(e instanceof Error ? e.message : 'Client failed'); process.exitCode = 1; });

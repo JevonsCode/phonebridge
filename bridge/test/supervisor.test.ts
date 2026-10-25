@@ -48,8 +48,13 @@ test('concurrent authenticated start requests share one ready Hub and retain the
   const firstPid = supervisor.managedProcessId;
   assert.ok(firstPid);
   await start(); assert.equal(supervisor.managedProcessId, firstPid);
-  assert.deepEqual(await (await fetch(`${url}/status`, { headers })).json(), { connected: false, busy: false, protocol: 1, devices: [] });
-  assert.deepEqual(await (await fetch(`${url}/devices`, { headers })).json(), { devices: [] });
+  const status = await (await fetch(`${url}/status`, { headers })).json();
+  assert.deepEqual({ ...status, details: undefined }, { connected: false, busy: false, protocol: 1, devices: [], details: undefined });
+  assert.equal(status.details.publicEndpoint, url);
+  assert.equal(status.details.connectionState, 'no_phone_connected');
+  const devices = await (await fetch(`${url}/devices`, { headers })).json();
+  assert.deepEqual(devices.devices, []);
+  assert.equal(devices.details.publicEndpoint, url);
 });
 
 test('WebSocket and RPC pass through the original port without replaying a failed operation', async t => {

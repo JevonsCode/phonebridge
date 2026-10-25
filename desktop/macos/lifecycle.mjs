@@ -6,6 +6,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import { readdir } from 'node:fs/promises';
 import { privateIPv4, selectNetworks } from '../network.mjs';
 import { installMcpLauncher } from './mcp-launcher.mjs';
+import { withConfigurationLock } from '../configuration-lock.mjs';
 
 export const agentLabel = 'dev.phonebridge.desktop';
 export const macConfigPath = () => process.env.PHONEBRIDGE_DESKTOP_CONFIG ?? join(homedir(), '.phonebridge', 'desktop-macos.json');
@@ -16,7 +17,7 @@ export async function macRuntimeRevision(resources) {
   const add = async path => {
     hash.update(path).update('\0').update(await readFile(join(resources, path))).update('\0');
   };
-  for (const path of ['package-manifest.json', 'desktop/macos/service.mjs', 'desktop/macos/lifecycle.mjs', 'desktop/network.mjs', 'bridge/package-lock.json']) await add(path);
+  for (const path of ['package-manifest.json', 'desktop/macos/service.mjs', 'desktop/macos/lifecycle.mjs', 'desktop/network.mjs', 'desktop/network-transaction.mjs', 'desktop/configuration-lock.mjs', 'bridge/package-lock.json']) await add(path);
   for (const name of (await readdir(join(resources, 'bridge', 'dist'))).sort()) {
     if (name.endsWith('.js')) await add(join('bridge', 'dist', name));
   }
@@ -43,13 +44,16 @@ export async function readPrivateFile(path, uid = process.getuid?.()) {
 export async function readMacConfig(path, uid = process.getuid?.(), options) {
   return validateMacConfig(JSON.parse(await readPrivateFile(path, uid)), uid, options);
 }
-export async function writePrivateFile(path, data, uid = process.getuid?.()) {
+export async function writePrivateFile(path, data, uid = process.getuid?.(), options = {}) {
+  return withConfigurationLock(path, async () => {
   const parent = await lstat(dirname(path));
   if (!parent.isDirectory() || parent.isSymbolicLink() || parent.uid !== uid) throw new Error('Invalid destination owner.');
-  try { await readPrivateFile(path, uid); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+  const current = await readPrivateFile(path, uid).catch(e => { if (e.code === 'ENOENT') return undefined; throw e; });
+  if ('expectedText' in options && current !== options.expectedText) throw new Error('Desktop configuration changed. The newer configuration was preserved.');
   const temp = path + '.tmp-' + randomBytes(6).toString('hex');
   try { await writeFile(temp, data, { flag: 'wx', mode: 0o600 }); await rename(temp, path); }
   finally { await unlink(temp).catch(() => {}); }
+  });
 }
 export function macNetworks(interfaces = networkInterfaces(), defaultInterface) {
   if (defaultInterface === undefined && process.platform === 'darwin') {
@@ -129,7 +133,7 @@ export async function installService({ config, previous, configFile, home = home
   const nextPlist = launchAgent({ ...config, configFile }, home);
   const oldConfigText = await readPrivateFile(configFile, uid).catch(e => { if (e.code === 'ENOENT') return undefined; throw e; });
   const unchanged = oldPlist === nextPlist && oldConfigText === JSON.stringify(config);
-  let bootedOut = false, installed = false;
+  let bootedOut = false, installed = false, configurationPublished = false, plistPublished = false;
   try {
     if (loaded.status === 0 && !unchanged) {
       requireSuccess(run(['bootout', job]));
@@ -140,8 +144,10 @@ export async function installService({ config, previous, configFile, home = home
     }
     if (!unchanged) {
       if (oldConfigText !== undefined) await writePrivateFile(configFile + '.backup', oldConfigText, uid);
-      await writePrivateFile(configFile, JSON.stringify(config), uid);
-      await writePrivateFile(plistPath, nextPlist, uid);
+      await writePrivateFile(configFile, JSON.stringify(config), uid, { expectedText: oldConfigText });
+      configurationPublished = true;
+      await writePrivateFile(plistPath, nextPlist, uid, { expectedText: oldPlist });
+      plistPublished = true;
     }
     if (loaded.status !== 0 || bootedOut) { requireSuccess(run(['bootstrap', domain, plistPath])); installed = true; }
     requireSuccess(run(['kickstart', job]));
@@ -155,8 +161,20 @@ export async function installService({ config, previous, configFile, home = home
       await waitForJobRemoval({ run, job, config: previous ?? config, configFile, plistPath, attempts, delay });
     }
     if (!unchanged) {
-      if (oldConfigText === undefined) await unlink(configFile).catch(() => {}); else await writePrivateFile(configFile, oldConfigText, uid);
-      if (oldPlist === undefined) await unlink(plistPath).catch(() => {}); else await writePrivateFile(plistPath, oldPlist, uid);
+      if (configurationPublished) {
+        if (oldConfigText === undefined) await withConfigurationLock(configFile, async () => {
+          if (await readPrivateFile(configFile, uid) !== JSON.stringify(config)) throw new Error('Desktop configuration changed. The newer configuration was preserved.');
+          await unlink(configFile);
+        });
+        else await writePrivateFile(configFile, oldConfigText, uid, { expectedText: JSON.stringify(config) });
+      }
+      if (plistPublished) {
+        if (oldPlist === undefined) await withConfigurationLock(plistPath, async () => {
+          if (await readPrivateFile(plistPath, uid) !== nextPlist) throw new Error('The newer LaunchAgent was preserved.');
+          await unlink(plistPath);
+        });
+        else await writePrivateFile(plistPath, oldPlist, uid, { expectedText: nextPlist });
+      }
       if (bootedOut && oldPlist) { requireSuccess(run(['bootstrap', domain, plistPath])); requireSuccess(run(['kickstart', job])); }
     }
     throw error;

@@ -97,21 +97,19 @@ $job = $null
 try {
     try { $ownsMutex = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $ownsMutex = $true }
     if (-not $ownsMutex) { throw 'PhoneBridge Desktop is already running for this user. Stop its scheduled task before launching another instance.' }
-    $listener = New-Object Net.Sockets.TcpListener((Assert-PhoneBridgeAddress $config.hostAddress $config.port), [int]$config.port)
-    try {
-        $listener.Start()
-    } catch {
-        throw "Cannot listen on $($config.hostAddress):$($config.port). Confirm this IP belongs to this computer and stop the old Hub or other process using the port. $($_.Exception.Message)"
-    } finally { $listener.Stop() }
+    # The supervisor validates the live address and binds the exact selected IP.
+    # A preflight bind to the saved IP would prevent recovery after DHCP changes.
 
     if (-not ('PhoneBridge.Desktop.KillOnCloseJob' -as [type])) { Add-Type -Path $jobHelper }
     $job = New-Object PhoneBridge.Desktop.KillOnCloseJob
 
     $previousHost = [Environment]::GetEnvironmentVariable('PHONEBRIDGE_HOST', 'Process')
     $previousPort = [Environment]::GetEnvironmentVariable('PHONEBRIDGE_PORT', 'Process')
+    $previousConfig = [Environment]::GetEnvironmentVariable('PHONEBRIDGE_DESKTOP_CONFIG', 'Process')
     try {
         $env:PHONEBRIDGE_HOST = [string]$config.hostAddress
         $env:PHONEBRIDGE_PORT = [string]$config.port
+        $env:PHONEBRIDGE_DESKTOP_CONFIG = $ConfigurationPath
         Push-Location -LiteralPath $config.projectRoot
         try {
             # Keep ownership across crashes; Task Scheduler remains a fallback for wrapper failures.
@@ -144,6 +142,7 @@ try {
     } finally {
         [Environment]::SetEnvironmentVariable('PHONEBRIDGE_HOST', $previousHost, 'Process')
         [Environment]::SetEnvironmentVariable('PHONEBRIDGE_PORT', $previousPort, 'Process')
+        [Environment]::SetEnvironmentVariable('PHONEBRIDGE_DESKTOP_CONFIG', $previousConfig, 'Process')
     }
     exit $supervisorExitCode
 } finally {

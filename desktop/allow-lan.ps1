@@ -18,26 +18,43 @@ function New-PhoneBridgeLanPlan($Config, [array]$Rules) {
             throw 'A foreign or modified firewall rule uses the PhoneBridge name. Nothing was changed.'
         }
     }
-    $blocks=@($Rules | Where-Object { $_.Program -eq $Config.nodePath -and $_.Action -eq 'Block' -and $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and $_.Protocol -in @('TCP','6','Any','256') })
+    $discoveryName="PhoneBridge-LAN-$($Config.ownerSid)-UDP-8766"
+    $discoveryMarker="PhoneBridge LAN managed rule v1; owner=$($Config.ownerSid); protocol=UDP; port=8766"
+    $existingDiscovery=@($Rules | Where-Object Name -eq $discoveryName)
+    if ($existingDiscovery.Count -gt 1) { throw 'Ambiguous PhoneBridge discovery firewall rule.' }
+    if ($existingDiscovery.Count -eq 1) {
+        $r=$existingDiscovery[0]
+        if ($r.Description -ne $discoveryMarker -or $r.Action -ne 'Allow' -or $r.Direction -ne 'Inbound' -or
+            $r.Source -ne 'Local' -or $r.Enabled -ne 'True' -or $r.Profile -ne 'Private' -or
+            $r.Protocol -notin @('UDP','17') -or $r.LocalPort -ne '8766' -or
+            $r.RemoteAddress -ne 'LocalSubnet' -or $r.LocalAddress -ne 'Any' -or $r.Program -ne 'Any') {
+            throw 'A foreign or modified firewall rule uses the PhoneBridge discovery name. Nothing was changed.'
+        }
+    }
+    $blocks=@($Rules | Where-Object { $_.Program -eq $Config.nodePath -and $_.Action -eq 'Block' -and $_.Direction -eq 'Inbound' -and $_.Enabled -eq 'True' -and $_.Protocol -in @('TCP','6','UDP','17','Any','256') })
     foreach ($r in $blocks) {
         # Only Windows' automatic application-prompt rules, never custom or policy-managed blocks.
-        if ($r.Name -notmatch '^TCP Query User\{[0-9a-f-]{36}\}(.+)$' -or $Matches[1] -ne $Config.nodePath -or
+        if ($r.Name -notmatch '^(TCP|UDP) Query User\{[0-9a-f-]{36}\}(.+)$' -or $Matches[2] -ne $Config.nodePath -or
+            ($Matches[1] -eq 'TCP' -and $r.Protocol -notin @('TCP','6')) -or ($Matches[1] -eq 'UDP' -and $r.Protocol -notin @('UDP','17')) -or
             $r.Source -ne 'Local' -or $r.Profile -notin @('Private','Public','Private, Public') -or
-            $r.Protocol -notin @('TCP','6') -or $r.LocalPort -ne 'Any' -or
+            $r.Protocol -notin @('TCP','6','UDP','17') -or $r.LocalPort -ne 'Any' -or
             $r.RemoteAddress -ne 'Any' -or $r.LocalAddress -ne 'Any') {
             throw 'A custom or policy firewall block affects this runtime. Ask the Windows owner to review it; nothing was changed.'
         }
     }
-    return [pscustomobject]@{Name=$name;Description=$marker;Port=[int]$Config.port;Create=($existing.Count -eq 0);RemoveNames=@($blocks | ForEach-Object Name)}
+    return [pscustomobject]@{Name=$name;Description=$marker;Port=[int]$Config.port;Protocol='TCP';Create=($existing.Count -eq 0);
+        Discovery=[pscustomobject]@{Name=$discoveryName;Description=$discoveryMarker;Port=8766;Protocol='UDP';Create=($existingDiscovery.Count -eq 0)};
+        RemoveNames=@($blocks | ForEach-Object Name)}
 }
 function Get-PhoneBridgeFirewallRows($Config) {
     $name="PhoneBridge-LAN-$($Config.ownerSid)-TCP-$($Config.port)"
+    $discoveryName="PhoneBridge-LAN-$($Config.ownerSid)-UDP-8766"
     # -Program reports a CIM error when no application rules exist, which is normal
     # on first install. Enumerate once and then query only exact matching filters.
     $applications=@(Get-NetFirewallApplicationFilter -PolicyStore ActiveStore -ErrorAction Stop | Where-Object Program -eq $Config.nodePath)
     $relevant=@()
     if ($applications.Count -gt 0) { $relevant=@($applications | Get-NetFirewallRule -ErrorAction Stop) }
-    $relevant+=@(Get-NetFirewallRule -PolicyStore ActiveStore -Name $name -ErrorAction SilentlyContinue)
+    $relevant+=@(Get-NetFirewallRule -PolicyStore ActiveStore -Name @($name,$discoveryName) -ErrorAction SilentlyContinue)
     foreach ($rule in @($relevant | Sort-Object Name -Unique)) {
         $app=$rule | Get-NetFirewallApplicationFilter -ErrorAction Stop
         $port=$rule | Get-NetFirewallPortFilter -ErrorAction Stop
@@ -51,6 +68,7 @@ function Invoke-PhoneBridgeLanPlan($Plan, [scriptblock]$Add, [scriptblock]$Remov
     # Establish the narrow allow rule before removing any automatic block. A failure leaves
     # remaining blocks intact and reports failure; firewall policy is never disabled.
     if ($Plan.Create) { & $Add $Plan }
+    if ($Plan.Discovery.Create) { & $Add $Plan.Discovery }
     foreach ($name in $Plan.RemoveNames) { & $Remove $name }
 }
 if ($LoadHelpers) { return }
@@ -73,7 +91,7 @@ if ($lanMode -eq 'RequestElevation') {
     try { $process=Start-Process -FilePath $osPowerShell -ArgumentList $arguments -Verb RunAs -WindowStyle Hidden -Wait -PassThru }
     catch { throw 'Windows permission was cancelled or unavailable. No LAN permission was granted.' }
     if ($process.ExitCode -ne 0) { throw 'Windows could not grant the narrow LAN permission. A custom firewall policy or different administrator account may require owner review.' }
-    Write-Output 'LAN permission granted: TCP, Private profile, LocalSubnet.'
+    Write-Output 'LAN permission granted: service TCP and discovery UDP 8766, Private profile, LocalSubnet.'
     return
 }
 $plan=New-PhoneBridgeLanPlan $config @(Get-PhoneBridgeFirewallRows $config)
@@ -82,7 +100,7 @@ $principal=New-Object Security.Principal.WindowsPrincipal([Security.Principal.Wi
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Owner-approved Windows elevation is required.' }
 Invoke-PhoneBridgeLanPlan $plan {
     param($p)
-    New-NetFirewallRule -PolicyStore PersistentStore -Name $p.Name -DisplayName "PhoneBridge LAN TCP $($p.Port)" -Description $p.Description -Direction Inbound -Action Allow -Enabled True -Protocol TCP -LocalPort $p.Port -Profile Private -RemoteAddress LocalSubnet -ErrorAction Stop | Out-Null
+    New-NetFirewallRule -PolicyStore PersistentStore -Name $p.Name -DisplayName "PhoneBridge LAN $($p.Protocol) $($p.Port)" -Description $p.Description -Direction Inbound -Action Allow -Enabled True -Protocol $p.Protocol -LocalPort $p.Port -Profile Private -RemoteAddress LocalSubnet -ErrorAction Stop | Out-Null
 } {
     param($name)
     # Recheck the exact rule immediately before deletion to avoid touching a replacement rule.
@@ -90,4 +108,4 @@ Invoke-PhoneBridgeLanPlan $plan {
     if ($fresh.RemoveNames -notcontains $name) { throw 'Firewall rules changed during approval. Retry the button.' }
     Remove-NetFirewallRule -PolicyStore PersistentStore -Name $name -ErrorAction Stop
 }
-Write-Output 'LAN permission granted: TCP, Private profile, LocalSubnet.'
+Write-Output 'LAN permission granted: service TCP and discovery UDP 8766, Private profile, LocalSubnet.'

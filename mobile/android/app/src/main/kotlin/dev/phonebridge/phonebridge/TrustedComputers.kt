@@ -85,10 +85,11 @@ data class TrustedComputers(val entries: List<TrustedComputer> = emptyList(), va
             .put("resumeAllowed", pairing.resumeAllowed)
 
         private fun pairingFrom(json: JSONObject): TrustedPairing {
-            val packages = json.getJSONArray("packages")
-            require(packages.length() in 1..64)
+            val savedPackages = json.getJSONArray("packages")
+            val packages = (0 until savedPackages.length()).map { savedPackages.getString(it) }
+            AppAccessPolicy.requirePackages(packages)
             return TrustedPairing(json.getString("endpoint"), json.getString("token"), json.getBoolean("allowInsecureLocal"),
-                (0 until packages.length()).map { packages.getString(it) }, json.getBoolean("actionsEnabled"), json.getBoolean("resumeAllowed"))
+                packages, json.getBoolean("actionsEnabled"), json.getBoolean("resumeAllowed"))
         }
     }
 }

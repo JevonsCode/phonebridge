@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { writeFile, lstat, readFile } from 'node:fs/promises';
 import { createDashboard, createMcpConfiguration, authenticatedStatus, nativeReady } from '../server.mjs';
-import { serializeNetworkChange } from '../network-transaction.mjs';
+import { serializeNetworkChange, recoveryAddress } from '../network-transaction.mjs';
 import { macConfigPath, macNetworks, macRuntimeRevision, privateDirectory, readMacConfig, validateInstalledApp, installService, uninstallService } from './lifecycle.mjs';
 import { loadOrCreateSavedToken, credentialPath } from '../../bridge/dist/credentials.js';
 import { pairingUri } from '../../bridge/dist/pairing.js';
@@ -37,28 +37,33 @@ export async function main(args = process.argv.slice(2)) {
   config = { ...config, projectRoot: root, nodePath: process.execPath, credentialFile: config.credentialFile ?? credentialPath(), runtimeRevision: await macRuntimeRevision(root) };
   const token = await loadOrCreateSavedToken(config.credentialFile);
   let errorMessage, starting;
-  const start = () => {
+  const start = requestedAddress => {
     if (starting) return starting;
     starting = (async () => {
-      if (!macNetworks().some(net => net.address === config.hostAddress)) throw new Error('The saved network is unavailable. Select your current network.');
+      const latest = await readMacConfig(path, uid).catch(error => { if (error.code === 'ENOENT') return undefined; throw error; });
+      if (latest) saved = latest;
+      const next = { ...config, hostAddress: recoveryAddress(requestedAddress ?? latest?.hostAddress ?? config.hostAddress, macNetworks()) };
       // A non-owned/occupied endpoint is never stopped. Registration checks exact job ownership.
-      const current = await authenticatedStatus(config, token).catch(() => undefined);
+      const current = await authenticatedStatus(saved ?? config, token).catch(() => undefined);
       if (current?.connected && saved && (saved.projectRoot !== config.projectRoot || saved.nodePath !== config.nodePath || saved.runtimeRevision !== config.runtimeRevision)) throw new Error('Disconnect the phone before moving or upgrading the desktop App.');
-      const result = await installService({ config, previous:saved, configFile:path, probe: next => authenticatedStatus(next,token) });
+      const result = await installService({ config: next, previous:saved, configFile:path, probe: next => authenticatedStatus(next,token) });
+      Object.assign(config, next);
       config.mcpLauncherPath = join(dirname(path), 'bin', 'phonebridge-mcp');
       saved = { ...config }; errorMessage = undefined; return result;
     })().catch(error => { errorMessage=error.message; throw error; }).finally(() => { starting=undefined; });
     return starting;
   };
-  const dashboard = await createDashboard({ config, token, networks:macNetworks, status:()=>authenticatedStatus(config,token), startService:start,
+  const dashboard = await createDashboard({ config, token, networks:macNetworks, status:async()=>{
+    const latest = await readMacConfig(path, uid); config.hostAddress = latest.hostAddress; config.port = latest.port;
+    return authenticatedStatus(config,token);
+  }, startService:start,
     changeNetwork:serializeNetworkChange(async address => {
       if (!macNetworks().some(net => net.address === address)) throw new Error('Select an active private network.');
       if (address === config.hostAddress) { await start(); return; }
       if (starting) throw new Error('The service is starting. Please wait.');
       const current = await authenticatedStatus(config,token).catch(()=>undefined);
       if (current?.connected) throw new Error('Disconnect the phone before changing networks.');
-      const previousAddress = config.hostAddress; config.hostAddress=address;
-      try { await start(); } catch(error) {config.hostAddress=previousAddress;throw error;}
+      await start(address);
     }), language:process.env.LANG?.startsWith('zh')?'zh':'en',
     qr:()=>QRCode.toDataURL(pairingUri(`ws://${config.hostAddress}:${config.port}/device`,token),{width:360,margin:3}),
     mcpConfiguration:()=>createMcpConfiguration(config,config.credentialFile),startupError:()=>errorMessage });

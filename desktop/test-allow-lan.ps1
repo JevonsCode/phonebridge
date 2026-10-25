@@ -12,20 +12,24 @@ function Block([string]$protocol='TCP',[string]$program=$config.nodePath) {
 $own=Block; $foreign=Block 'TCP' 'C:\Other\node.exe';$ownUdp=Block 'UDP'
 $plan=New-PhoneBridgeLanPlan $config @($own,$foreign,$ownUdp)
 Assert $plan.Create 'First approval should create rule.'
-Assert ($plan.RemoveNames.Count -eq 1 -and $plan.RemoveNames[0] -eq $own.Name) 'Foreign runtime rule selected.'
-Assert ($plan.RemoveNames -notcontains $ownUdp.Name) 'UDP block must remain untouched.'
+Assert ($plan.RemoveNames.Count -eq 2 -and $plan.RemoveNames -contains $own.Name -and $plan.RemoveNames -contains $ownUdp.Name) 'Only owned automatic TCP/UDP blocks may be selected.'
+Assert ($plan.Discovery.Create -and $plan.Discovery.Port -eq 8766 -and $plan.Discovery.Protocol -eq 'UDP') 'Discovery needs a narrow UDP 8766 rule in the existing approval.'
 $managed=[pscustomobject]@{Name=$plan.Name;Description=$plan.Description;Program='Any';Action='Allow';Direction='Inbound';Enabled='True';Source='Local';Profile='Private';Protocol='TCP';LocalPort='8767';RemoteAddress='LocalSubnet';LocalAddress='Any'}
 Assert (-not (New-PhoneBridgeLanPlan $config @($managed)).Create) 'Idempotent approval created duplicate.'
+$managedUdp=$managed.PSObject.Copy();$managedUdp.Name=$plan.Discovery.Name;$managedUdp.Description=$plan.Discovery.Description;$managedUdp.Protocol='UDP';$managedUdp.LocalPort='8766'
+Assert (-not (New-PhoneBridgeLanPlan $config @($managed,$managedUdp)).Discovery.Create) 'Idempotent discovery approval created duplicate.'
 foreach ($field in @('Description','Source','Profile','Protocol','LocalPort','RemoteAddress','Program')) {
     $modified=$managed.PSObject.Copy();$modified.$field='foreign'
     Reject { New-PhoneBridgeLanPlan $config @($modified) }
+    $modifiedUdp=$managedUdp.PSObject.Copy();$modifiedUdp.$field='foreign'
+    Reject { New-PhoneBridgeLanPlan $config @($modifiedUdp) }
 }
 $custom=$own.PSObject.Copy();$custom.Name='Company policy';Reject {New-PhoneBridgeLanPlan $config @($custom)}
 $policy=$own.PSObject.Copy();$policy.Source='GroupPolicy';Reject {New-PhoneBridgeLanPlan $config @($policy)}
 $portBlock=$own.PSObject.Copy();$portBlock.LocalPort='443';Reject {New-PhoneBridgeLanPlan $config @($portBlock)}
 $script:changes=New-Object 'System.Collections.Generic.List[string]'
 Invoke-PhoneBridgeLanPlan $plan {param($p)$script:changes.Add("allow:$($p.Port)")} {param($n)$script:changes.Add("remove:$n")}
-Assert ($changes.Count -eq 2 -and $changes[0] -eq 'allow:8767' -and $changes[1] -eq "remove:$($own.Name)") 'Plan did not establish narrow allow before exact deletion.'
+Assert ($changes.Count -eq 4 -and $changes[0] -eq 'allow:8767' -and $changes[1] -eq 'allow:8766' -and $changes[2] -eq "remove:$($own.Name)" -and $changes[3] -eq "remove:$($ownUdp.Name)") 'Plan did not establish both narrow allows before exact deletion.'
 $script:changes.Clear()
 Reject {Invoke-PhoneBridgeLanPlan $plan {throw 'Access denied'} {param($n)$script:changes.Add($n)}}
 Assert ($changes.Count -eq 0) 'Block removed after rule creation failed.'

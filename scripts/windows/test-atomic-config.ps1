@@ -51,6 +51,37 @@ try {
     if (-not $failed) { throw 'Expected a sharing violation to reject atomic publication.' }
     Assert-Content $active $old
     Assert-Content $temporary $next
+    # Real cross-process mutex contention is bounded; killing the owner releases
+    # the OS mutex automatically, and the next publisher can recover it.
+    $holderScript = Join-Path $fixture 'hold-lock.ps1'
+    $ready = Join-Path $fixture 'lock-ready'
+    @'
+param($Helper,$Config,$Ready)
+$ErrorActionPreference='Stop'
+. $Helper
+Invoke-PhoneBridgeConfigurationLock $Config { [IO.File]::WriteAllText($Ready,'held'); Start-Sleep -Seconds 30 }
+'@ | Set-Content -LiteralPath $holderScript -Encoding UTF8
+    $osPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" "{1}" "{2}" "{3}"' -f $holderScript,(Join-Path $PSScriptRoot 'atomic-config.ps1'),$active,$ready
+    $holder = Start-Process -FilePath $osPowerShell -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    try {
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        while (-not [IO.File]::Exists($ready) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 20 }
+        if (-not [IO.File]::Exists($ready)) { throw 'Fixture mutex holder did not become ready.' }
+        $busy = $false
+        try { Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporary -ConfigurationPath $active -ExpectedConfiguration ($old | ConvertFrom-Json) }
+        catch { if ($_.Exception.Message -notmatch 'publication is busy') { throw }; $busy = $true }
+        if (-not $busy) { throw 'Concurrent publisher bypassed the shared Windows mutex.' }
+        Assert-Content $active $old
+    } finally { if (-not $holder.HasExited) { $holder.Kill(); [void]$holder.WaitForExit(5000) }; $holder.Dispose() }
+    Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporary -ConfigurationPath $active -ExpectedConfiguration ($old | ConvertFrom-Json)
+    Assert-Content $active $next
+    [IO.File]::WriteAllText($temporary, $old)
+    $changed = $false
+    try { Publish-PhoneBridgeAtomicConfiguration -TemporaryPath $temporary -ConfigurationPath $active -ExpectedConfiguration ($old | ConvertFrom-Json) }
+    catch { if ($_.Exception.Message -notmatch 'configuration changed') { throw }; $changed = $true }
+    if (-not $changed) { throw 'A stale publisher overwrote a newer configuration.' }
+    Assert-Content $active $next
     Write-Output "PowerShell $($PSVersionTable.PSVersion): real atomic first install, upgrade, rollback, and failed-publication preservation passed. No live configuration changed."
 } finally {
     $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'

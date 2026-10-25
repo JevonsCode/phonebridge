@@ -69,7 +69,7 @@ cp "$node_root/LICENSE" "$resources/runtime/LICENSE"
 cp -R "$project/bridge/dist" "$resources/bridge/dist"
 cp "$project/bridge/package.json" "$project/bridge/package-lock.json" "$resources/bridge/"
 (cd "$resources/bridge" && "$node" "$npm" ci --omit=dev --ignore-scripts)
-for name in server.mjs network.mjs network-transaction.mjs dashboard.html dashboard.js mcp-bootstrap.mjs; do
+for name in server.mjs network.mjs network-transaction.mjs configuration-lock.mjs launcher-maintenance.mjs dashboard.html dashboard.js mcp-bootstrap.mjs; do
   cp "$project/desktop/$name" "$resources/desktop/$name"
 done
 for name in server.mjs service.mjs lifecycle.mjs phonebridge-mcp.sh mcp-launcher.mjs; do

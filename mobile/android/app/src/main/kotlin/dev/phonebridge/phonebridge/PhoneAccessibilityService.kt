@@ -6,6 +6,8 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.app.KeyguardManager
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
@@ -35,6 +37,7 @@ class PhoneAccessibilityService : AccessibilityService() {
     private val nodes = mutableMapOf<String, AccessibilityNodeInfo>()
     private val imageWorker = Executors.newSingleThreadExecutor()
     private var uiEpoch = 0L
+    private var lastScreenshot: ScreenshotPolicy.Frame? = null
     private val operationTrail by lazy { OperationTrail(this) }
 
     override fun onServiceConnected() {
@@ -81,6 +84,7 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         clearOperationTrail()
+        AccessibilityFocusedOperation.cancel(this)
         BridgeSession.detach(this)
         imageWorker.shutdown()
         super.onDestroy()
@@ -89,12 +93,13 @@ class PhoneAccessibilityService : AccessibilityService() {
     fun invalidateNodes() {
         nodes.values.forEach { it.recycle() }
         nodes.clear()
+        lastScreenshot = null
     }
 
     fun clearOperationTrail() = operationTrail.clear()
 
     fun requireUnlocked() {
-        if (!isUnlocked()) throw BridgeFailure("DEVICE_LOCKED", "Unlock the phone before using PhoneBridge.")
+        if (!isUnlocked()) throw BridgeFailure("DEVICE_LOCKED", "Unlock the phone before using PhoneBridge.", mapOf("obscuredBy" to "lockscreen"))
     }
 
     private fun isUnlocked(): Boolean {
@@ -109,13 +114,13 @@ class PhoneAccessibilityService : AccessibilityService() {
             throw BridgeFailure("CONTROL_EXPIRED", "The control task has ended. Acquire control and observe again.")
         }
         OperationPolicy.requireSession(BridgeSession.connected, BridgeSession.isOperationCurrent(generation),
-            BridgeSession.service === this, isUnlocked(), BridgeSession.actionsEnabled, mutation, BridgeSession.appAccessOpen)
+            BridgeSession.service === this, isUnlocked(), BridgeSession.actionsEnabled, mutation, BridgeSession.appAccessBlocked)
     }
 
     /** Never operate Android's authorization/settings surfaces, even if allowlisted. */
     private fun requireOrdinaryApp(packageName: String) {
         if (packageName in AppAccessCatalog.protectedPackages(this)) {
-            throw BridgeFailure("PROTECTED_APP", "Android permission and settings screens must be operated locally.")
+            throw BridgeFailure("PROTECTED_APP", "Android permission and settings screens must be operated locally.", mapOf("foregroundPackage" to packageName))
         }
     }
 
@@ -127,7 +132,9 @@ class PhoneAccessibilityService : AccessibilityService() {
         val screenHeight: Int,
         val foreign: List<Rect>,
         val excludedSystemWindowIds: Set<Int>,
+        val occlusions: List<Occlusion>,
     )
+    private data class Occlusion(val bounds: Rect, val details: Map<String, Any>, val toast: Boolean)
 
     /**
      * Fail closed for split-screen, PIP, inaccessible windows and focused system UI.
@@ -146,17 +153,19 @@ class PhoneAccessibilityService : AccessibilityService() {
         } finally {
             root.recycle()
         }
-        if (!BridgeSession.isAllowed(activePackage)) {
-            throw BridgeFailure("PACKAGE_BLOCKED", "The active application is not in the phone allowlist.")
-        }
-        requireOrdinaryApp(activePackage)
         val visible = windows
         try {
             val active = visible.firstOrNull { it.id == rootId }
                 ?: throw BridgeFailure("WINDOW_UNSAFE", "Cannot verify the active window.")
+            if (!BridgeSession.isAllowed(activePackage)) {
+                throw BridgeFailure("PACKAGE_BLOCKED", "The active application is not in the phone allowlist.",
+                    mapOf("foregroundPackage" to activePackage, "windowType" to active.type))
+            }
+            requireOrdinaryApp(activePackage)
             if (active.type != AccessibilityWindowInfo.TYPE_APPLICATION ||
                 active.displayId != Display.DEFAULT_DISPLAY || active.isInPictureInPictureMode) {
-                throw BridgeFailure("WINDOW_UNSAFE", "Only a normal application on the primary display is supported.")
+                throw BridgeFailure("WINDOW_UNSAFE", "Only a normal application on the primary display is supported.",
+                    mapOf("foregroundPackage" to activePackage, "windowType" to active.type))
             }
             val metrics = getSystemService(WindowManager::class.java).maximumWindowMetrics
             val screen = metrics.bounds
@@ -172,19 +181,34 @@ class PhoneAccessibilityService : AccessibilityService() {
                     bars.left + "," + bars.top + "," + bars.right + "," + bars.bottom + "]")
             val bounds = Rect(crop.left, crop.top, crop.right, crop.bottom)
             val foreign = mutableListOf<Rect>()
+            val occlusions = mutableListOf<Occlusion>()
             for (window in visible) {
                 if (window.id == rootId || window.displayId != Display.DEFAULT_DISPLAY) continue
                 val area = Rect().also { window.getBoundsInScreen(it) }
                 if (area.isEmpty) continue
                 val otherRoot = window.root
-                val owner = try { otherRoot?.packageName?.toString() } finally { otherRoot?.recycle() }
+                var rootClass: String? = null
+                var interactive = true
+                val owner = try {
+                    rootClass = otherRoot?.className?.toString()
+                    if (otherRoot != null && WindowOcclusionPolicy.isNonInteractiveToast(window.type, window.isFocused, window.isActive,
+                            rootClass, window.title?.toString(), false)) interactive = interactiveTree(otherRoot)
+                    otherRoot?.packageName?.toString()
+                } finally { otherRoot?.recycle() }
                 if (owner == activePackage && window.type == AccessibilityWindowInfo.TYPE_APPLICATION) continue
+                val toast = owner in setOf(activePackage, "android", "com.android.systemui", "com.miui.systemui") &&
+                    WindowOcclusionPolicy.isNonInteractiveToast(window.type, window.isFocused, window.isActive,
+                        rootClass, window.title?.toString(), interactive)
+                val details = WindowOcclusionPolicy.details(activePackage, window.type, owner, toast)
+                // A lower, unfocused system window cannot cover this application's input area.
+                if (window.layer < active.layer && !window.isFocused && !window.isActive && window.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
                 if (window.type == AccessibilityWindowInfo.TYPE_APPLICATION ||
                     window.isFocused || window.isActive ||
                     window.type == AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY) {
-                    throw BridgeFailure("WINDOW_UNSAFE", "Dismiss other apps, focused panels, and accessibility overlays first.")
+                    throw BridgeFailure("WINDOW_UNSAFE", "Another application or focused system panel is in front. Dismiss it and observe again.", details)
                 }
-                foreign.add(area)
+                occlusions.add(Occlusion(area, details, toast))
+                if (!toast) foreign.add(area)
             }
             // Service window metrics can omit ROM system-bar insets. Use actual
             // OS window rectangles to exclude edge bars/IME from the app crop.
@@ -199,17 +223,39 @@ class PhoneAccessibilityService : AccessibilityService() {
                     !window.isFocused && !window.isActive && !area.isEmpty &&
                     !Rect.intersects(area, bounds)
             }.map { it.id }.toSet()
-            return WindowScope(activePackage, rootId, bounds, screen.width(), screen.height(), foreign, excludedSystemWindowIds)
+            return WindowScope(activePackage, rootId, bounds, screen.width(), screen.height(), foreign, excludedSystemWindowIds, occlusions)
         } finally {
             visible.forEach { it.recycle() }
         }
     }
 
     private fun requireClearCrop(scope: WindowScope) {
-        if (scope.foreign.any { Rect.intersects(it, scope.bounds) }) {
-            throw BridgeFailure("WINDOW_OBSCURED", "Dismiss the keyboard or other overlapping windows first.")
-        }
+        val covering = scope.occlusions.firstOrNull { Rect.intersects(it.bounds, scope.bounds) } ?: return
+        throw BridgeFailure("WINDOW_OBSCURED", if (covering.toast) "A temporary toast covers the screenshot. Wait for it to disappear and capture again."
+            else "A system window covers part of the application. Dismiss it or choose an unobscured target.", covering.details)
     }
+
+    private fun interactiveTree(root: AccessibilityNodeInfo): Boolean {
+        var visited = 0
+        fun walk(node: AccessibilityNodeInfo, depth: Int): Boolean {
+            if (++visited > 500 || depth > 30) return true
+            if (node.isClickable || node.isLongClickable || node.isEditable || node.isFocusable || node.isScrollable) return true
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                try { if (walk(child, depth + 1)) return true } finally { child.recycle() }
+            }
+            return false
+        }
+        return walk(root, 0)
+    }
+
+    private fun requireClearGesture(scope: WindowScope, x1: Float, y1: Float, x2: Float, y2: Float) {
+        val covering = scope.occlusions.firstOrNull { !it.toast && ProtectedControlPolicy.touches(geometry(it.bounds), x1, y1, x2, y2) } ?: return
+        throw BridgeFailure("WINDOW_OBSCURED", "A system window covers this gesture. Choose an unobscured target or dismiss the indicated window.", covering.details)
+    }
+
+    private fun screenshotWindow(scope: WindowScope) = ScreenshotPolicy.Window(scope.packageName, scope.windowId,
+        geometry(scope.bounds), scope.screenWidth, scope.screenHeight)
 
     private fun requireSameWindow(before: WindowScope, after: WindowScope) {
         if (before.packageName != after.packageName || before.windowId != after.windowId ||
@@ -230,12 +276,29 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     private fun executeReady(method: String, params: JSONObject, generation: Long,
                              complete: (JSONObject?, BridgeFailure?) -> Unit) {
-        val mutation = method in setOf("tap", "long_press", "swipe", "set_text", "node_action", "commit_text", "global_action", "launch_app")
+        val mutation = method in setOf("tap", "long_press", "swipe", "set_text", "node_action", "commit_text", "global_action", "launch_app", "set_clipboard")
         requireSession(generation, mutation)
         when (method) {
+            "get_clipboard" -> {
+                validateKeys(params, emptySet())
+                ClipboardPolicy.requireEnabled(AutomationPreferences.clipboardAccessEnabled(this))
+                invalidateNodes()
+                ClipboardBridge.read(this, {
+                    requireSession(generation)
+                    ClipboardPolicy.requireEnabled(AutomationPreferences.clipboardAccessEnabled(this))
+                }, complete)
+            }
+            "set_clipboard" -> {
+                validateKeys(params, setOf("text"))
+                val text = params.opt("text") as? String ?: throw BridgeFailure("INVALID_ARGUMENT", "text must be a string.")
+                ClipboardPolicy.requireEnabled(AutomationPreferences.clipboardAccessEnabled(this))
+                requireSession(generation, true)
+                try { getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("PhoneBridge", text)) }
+                catch (_: Exception) { throw BridgeFailure("CLIPBOARD_UNAVAILABLE", "Android could not write clipboard text.") }
+                complete(completed(), null)
+            }
             "file_offer" -> {
-                BridgeSession.offerFile(params)
-                complete(JSONObject().put("queued", true), null)
+                complete(JSONObject(BridgeSession.offerFile(params)), null)
             }
             "state" -> {
                 validateKeys(params, emptySet())
@@ -253,7 +316,7 @@ class PhoneAccessibilityService : AccessibilityService() {
                 complete(completed(), null)
             }
             "node_action" -> {
-                validateKeys(params, setOf("nodeId", "action"))
+                validateKeys(params, setOf("nodeId", "selector", "action"))
                 nodeAction(params, generation)
                 complete(completed(), null)
             }
@@ -280,6 +343,7 @@ class PhoneAccessibilityService : AccessibilityService() {
                 val recheck = windowScope()
                 requireSameWindow(scope, recheck)
                 requireClearCrop(recheck)
+                requireFocusedInputProtection(recheck)
                 if (!ime.currentInputStarted || ime.currentInputEditorInfo !== editor)
                     throw BridgeFailure("FOCUS_REQUIRED", "Input focus changed. Observe again.")
                 invalidateNodes()
@@ -308,13 +372,24 @@ class PhoneAccessibilityService : AccessibilityService() {
                 requireOrdinaryApp(target)
                 val launch = packageManager.getLaunchIntentForPackage(target)
                     ?: throw BridgeFailure("APP_UNAVAILABLE", "Application is not installed or has no launch activity.")
-                requireSession(generation, true)
-                invalidateNodes()
                 launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                try { startActivity(launch) } catch (_: Exception) {
-                    throw BridgeFailure("ACTION_REJECTED", "Android could not launch that application.")
-                }
-                complete(completed(), null)
+                AccessibilityFocusedOperation.run(this, {
+                    requireSession(generation, true)
+                    if (!BridgeSession.isAllowed(target)) throw BridgeFailure("PACKAGE_BLOCKED", "Target application is not allowed.")
+                    requireOrdinaryApp(target)
+                }, { stage ->
+                    val message = when (stage) {
+                        FocusedOperationFailure.OPERATION_FAILED -> "Android could not launch that application."
+                        FocusedOperationFailure.FOCUS_TIMEOUT -> "Android did not grant focus for launching the application. Observe before retrying."
+                        FocusedOperationFailure.CLEANUP_FAILED -> "The temporary launch focus window could not be removed. Observe before retrying."
+                        else -> "Application launch focus changed. Observe before retrying."
+                    }
+                    BridgeFailure("ACTION_REJECTED", message)
+                }, {
+                    invalidateNodes()
+                    startActivity(launch)
+                    completed()
+                }, complete)
             }
             else -> throw BridgeFailure("UNKNOWN_METHOD", "Unsupported operation.")
         }
@@ -343,6 +418,7 @@ class PhoneAccessibilityService : AccessibilityService() {
                     .put("id", id)
                     .put("text", if (password) "" else node.text?.toString()?.take(512) ?: "")
                     .put("description", if (password) "" else node.contentDescription?.toString()?.take(256) ?: "")
+                    .put("stateDescription", if (password) "" else node.stateDescription?.toString() ?: "")
                     .put("className", node.className?.toString()?.take(128) ?: "")
                     .put("resourceId", node.viewIdResourceName?.take(256) ?: "")
                     .put("bounds", rectJson(area))
@@ -354,6 +430,8 @@ class PhoneAccessibilityService : AccessibilityService() {
                     .put("checked", node.isChecked)
                     .put("checkable", node.isCheckable)
                     .put("focused", node.isFocused)
+                    .put("selectionStart", if (password) -1 else node.textSelectionStart)
+                    .put("selectionEnd", if (password) -1 else node.textSelectionEnd)
                     .put("supportedActions", JSONArray(supportedNodeActions(node).toList()))
                     .put("password", password))
             }
@@ -378,16 +456,13 @@ class PhoneAccessibilityService : AccessibilityService() {
     }
 
     private fun nodeAction(params: JSONObject, generation: Long) {
-        val id = params.opt("nodeId") as? String
-            ?: throw BridgeFailure("INVALID_ARGUMENT", "nodeId must be a string.")
         val action = params.opt("action") as? String
             ?: throw BridgeFailure("INVALID_ARGUMENT", "action must be a string.")
         if (action !in NodeActionPolicy.actions) throw BridgeFailure("INVALID_ARGUMENT", "Unsupported node action.")
-        val cached = nodes[id] ?: throw BridgeFailure("STALE_NODE", "Node ID expired. Request state again.")
-        val observed = nodeTarget(cached)
-        val node = AccessibilityNodeInfo.obtain(cached)
+        val scope = windowScope()
+        val node = targetNode(params, scope)
+        val observed = nodeTarget(node)
         try {
-            val scope = windowScope()
             if (!node.refresh() || node.windowId != scope.windowId ||
                 node.packageName?.toString() != scope.packageName) {
                 throw BridgeFailure("STALE_NODE", "The target is no longer in the active window. Request state again.")
@@ -395,9 +470,10 @@ class PhoneAccessibilityService : AccessibilityService() {
             NodeActionPolicy.requireUnchanged(observed, nodeTarget(node))
             NodeActionPolicy.requireAction(action, supportedNodeActions(node), node.isVisibleToUser,
                 node.isEnabled, hasPasswordAncestry(node, scope))
+            requireTextAction(action, node)
+            requireNodeProtection(scope, node, action)
             val area = nodeTarget(node).bounds
-            NodeActionPolicy.safeActionBounds(action, area, geometry(scope.bounds),
-                WindowGeometry.Bounds(0, 0, scope.screenWidth, scope.screenHeight), scope.foreign.map(::geometry))
+            safeNodeBounds(action, area, scope)
             requireSession(generation, true)
             val recheck = windowScope()
             requireSameWindow(scope, recheck)
@@ -405,22 +481,123 @@ class PhoneAccessibilityService : AccessibilityService() {
             NodeActionPolicy.requireUnchanged(observed, nodeTarget(node))
             NodeActionPolicy.requireAction(action, supportedNodeActions(node), node.isVisibleToUser,
                 node.isEnabled, hasPasswordAncestry(node, recheck))
-            NodeActionPolicy.safeActionBounds(action, area, geometry(recheck.bounds),
-                WindowGeometry.Bounds(0, 0, recheck.screenWidth, recheck.screenHeight), recheck.foreign.map(::geometry))
+            requireTextAction(action, node)
+            requireNodeProtection(recheck, node, action)
+            safeNodeBounds(action, area, recheck)
             requireSession(generation, true)
             // Every attempted dispatch consumes the snapshot, including a negative Android response.
             invalidateNodes()
-            if (!node.performAction(nodeActionId(action))) {
+            val arguments = if (action == "select_all") Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, node.text?.length ?: 0)
+            } else null
+            if (!node.performAction(nodeActionId(action), arguments)) {
                 throw BridgeFailure("ACTION_REJECTED", "The application rejected the node action.")
             }
         } finally { node.recycle() }
+    }
+
+    private fun requireTextAction(action: String, node: AccessibilityNodeInfo) {
+        if (action in setOf("copy", "cut", "paste")) ClipboardPolicy.requireEnabled(AutomationPreferences.clipboardAccessEnabled(this))
+        NodeActionPolicy.requireTextAction(action, node.isEditable, node.isFocused, node.text?.length ?: 0,
+            node.textSelectionStart, node.textSelectionEnd)
+    }
+
+    private fun safeNodeBounds(action: String, area: WindowGeometry.Bounds, scope: WindowScope): WindowGeometry.Bounds {
+        try {
+            return NodeActionPolicy.safeActionBounds(action, area, geometry(scope.bounds),
+                WindowGeometry.Bounds(0, 0, scope.screenWidth, scope.screenHeight), scope.foreign.map(::geometry))
+        } catch (error: BridgeFailure) {
+            if (error.code != "WINDOW_OBSCURED") throw error
+            val covering = scope.occlusions.firstOrNull { !it.toast && Rect.intersects(it.bounds, Rect(area.left, area.top, area.right, area.bottom)) }
+            throw BridgeFailure(error.code, error.message, covering?.details ?: mapOf("foregroundPackage" to scope.packageName))
+        }
+    }
+
+    private fun targetNode(params: JSONObject, scope: WindowScope): AccessibilityNodeInfo {
+        if (params.has("nodeId") == params.has("selector")) throw BridgeFailure("INVALID_ARGUMENT", "Choose exactly one target: nodeId or selector.")
+        if (params.has("selector")) {
+            val value = params.opt("selector") as? JSONObject ?: throw BridgeFailure("INVALID_ARGUMENT", "selector must be an object.")
+            return resolveSelector(NodeSelector.parse(value), scope)
+        }
+        val id = params.opt("nodeId") as? String ?: throw BridgeFailure("INVALID_ARGUMENT", "nodeId must be a string.")
+        val cached = nodes[id] ?: throw BridgeFailure("STALE_NODE", "Node ID expired. Request state again or use a current selector.")
+        return AccessibilityNodeInfo.obtain(cached)
+    }
+
+    private fun resolveSelector(selector: NodeSelector, scope: WindowScope): AccessibilityNodeInfo {
+        val root = rootInActiveWindow ?: throw BridgeFailure("NO_WINDOW", "No accessible application window.")
+        val matches = mutableListOf<AccessibilityNodeInfo>()
+        var visited = 0
+        var truncated = false
+        fun walk(node: AccessibilityNodeInfo, depth: Int, inheritedPassword: Boolean) {
+            if (visited >= 500 || depth > 30) { truncated = true; return }
+            visited++
+            if (node.windowId != scope.windowId || node.packageName?.toString()?.let { it != scope.packageName } == true) return
+            val password = inheritedPassword || node.isPassword
+            val area = Rect().also { node.getBoundsInScreen(it) }
+            if (!password && node.isVisibleToUser && Rect.intersects(area, scope.bounds) && selector.matches(nodeTarget(node))) {
+                matches.add(AccessibilityNodeInfo.obtain(node))
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                try { walk(child, depth + 1, password) } finally { child.recycle() }
+                if (truncated) break
+            }
+        }
+        try {
+            if (root.windowId != scope.windowId) throw BridgeFailure("WINDOW_CHANGED", "The active window changed. Observe again.")
+            walk(root, 0, false)
+            requireSameWindow(scope, windowScope())
+            val position = SelectorPolicy.choose(selector, matches.size, truncated)
+            return matches.removeAt(position)
+        } finally { root.recycle(); matches.forEach { it.recycle() } }
+    }
+
+    private fun protectedBounds(scope: WindowScope): List<WindowGeometry.Bounds> {
+        if (scope.packageName != packageName || !AutomationPreferences.protectConnectionControls(this)) return emptyList()
+        val root = rootInActiveWindow ?: throw BridgeFailure("NO_WINDOW", "No accessible application window.")
+        val result = mutableListOf<WindowGeometry.Bounds>()
+        var visited = 0
+        fun walk(node: AccessibilityNodeInfo, depth: Int) {
+            if (++visited > 500 || depth > 30) throw BridgeFailure("PROTECTED_CONTROL", "Cannot verify all PhoneBridge control boundaries. Scroll to a smaller view or change protection locally.")
+            if (node.windowId != scope.windowId || node.packageName?.toString()?.let { it != packageName } == true) return
+            if (node.isVisibleToUser && ProtectedControlPolicy.isProtected(node.viewIdResourceName)) {
+                result.add(nodeTarget(node).bounds)
+            }
+            for (i in 0 until node.childCount) {
+                val child = node.getChild(i) ?: continue
+                try { walk(child, depth + 1) } finally { child.recycle() }
+            }
+        }
+        try {
+            if (root.windowId != scope.windowId) throw BridgeFailure("WINDOW_CHANGED", "The active window changed. Observe again.")
+            walk(root, 0)
+            return result
+        } finally { root.recycle() }
+    }
+
+    private fun requireNodeProtection(scope: WindowScope, node: AccessibilityNodeInfo, action: String = "click") {
+        ProtectedControlPolicy.requireNode(AutomationPreferences.protectConnectionControls(this), scope.packageName == packageName,
+            nodeTarget(node).bounds, protectedBounds(scope), action)
+    }
+
+    private fun requireFocusedInputProtection(scope: WindowScope) {
+        if (scope.packageName != packageName || !AutomationPreferences.protectConnectionControls(this)) return
+        val root = rootInActiveWindow ?: throw BridgeFailure("NO_WINDOW", "No accessible application window.")
+        try {
+            val focused = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+                ?: throw BridgeFailure("PROTECTED_CONTROL", "Cannot verify this PhoneBridge input field. Choose another target.")
+            try { requireNodeProtection(scope, focused) } finally { focused.recycle() }
+        } finally { root.recycle() }
     }
 
     private fun nodeTarget(node: AccessibilityNodeInfo): NodeActionPolicy.Target {
         val area = Rect().also { node.getBoundsInScreen(it) }
         return NodeActionPolicy.Target(node.windowId, node.packageName?.toString(), geometry(area),
             node.className?.toString(), node.viewIdResourceName, node.text?.toString(), node.contentDescription?.toString(),
-            node.isSelected, node.isChecked, node.isCheckable, node.isFocused)
+            node.isSelected, node.isChecked, node.isCheckable, node.isFocused, node.stateDescription?.toString(),
+            node.isEditable, node.textSelectionStart, node.textSelectionEnd)
     }
 
     private fun hasPasswordAncestry(node: AccessibilityNodeInfo, scope: WindowScope): Boolean {
@@ -444,6 +621,10 @@ class PhoneAccessibilityService : AccessibilityService() {
         "scroll_forward" -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
         "scroll_backward" -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
         "focus" -> AccessibilityNodeInfo.ACTION_FOCUS
+        "paste" -> AccessibilityNodeInfo.ACTION_PASTE
+        "copy" -> AccessibilityNodeInfo.ACTION_COPY
+        "cut" -> AccessibilityNodeInfo.ACTION_CUT
+        "select_all" -> AccessibilityNodeInfo.ACTION_SET_SELECTION
         "set_text" -> AccessibilityNodeInfo.ACTION_SET_TEXT
         else -> throw BridgeFailure("INVALID_ARGUMENT", "Unsupported node action.")
     }
@@ -483,6 +664,7 @@ class PhoneAccessibilityService : AccessibilityService() {
                 throw BridgeFailure("NODE_BLOCKED", "Only enabled, non-password editable nodes accept text.")
             }
             OperationPolicy.requireInputFocus(node.isFocused)
+            requireNodeProtection(scope, node)
             val area = Rect().also { node.getBoundsInScreen(it) }
             if (area != observedBounds || cached.className?.toString() != node.className?.toString() ||
                 cached.viewIdResourceName != node.viewIdResourceName ||
@@ -512,46 +694,91 @@ class PhoneAccessibilityService : AccessibilityService() {
         validateKeys(params, when (method) {
             "swipe" -> setOf("x1", "y1", "x2", "y2", "durationMs")
             "long_press" -> setOf("x", "y", "durationMs")
-            else -> setOf("x", "y")
+            else -> setOf("x", "y", "selector", "imageX", "imageY", "screenshotId")
         })
-        val x1 = number(params, if (method == "swipe") "x1" else "x")
-        val y1 = number(params, if (method == "swipe") "y1" else "y")
-        val x2 = if (method == "swipe") number(params, "x2") else x1
-        val y2 = if (method == "swipe") number(params, "y2") else y1
-        val duration = when (method) {
-            "long_press" -> duration(params, 600, 400)
-            "swipe" -> duration(params, 400, 100)
-            else -> 80L
-        }
         val scope = windowScope()
-        requireClearCrop(scope)
-        if (!contains(scope.bounds, x1, y1) || !contains(scope.bounds, x2, y2)) {
-            throw BridgeFailure("OUT_OF_BOUNDS", "Gesture coordinates must be inside the allowed application window.")
+        var selected: AccessibilityNodeInfo? = null
+        var observed: NodeActionPolicy.Target? = null
+        try {
+            val mode = if (method == "tap") SelectorPolicy.tapMode(params.keys().asSequence().toSet()) else SelectorPolicy.TapMode.PHYSICAL
+            val point = when (mode) {
+                SelectorPolicy.TapMode.SELECTOR -> {
+                    val node = targetNode(JSONObject().put("selector", params.get("selector")), scope)
+                    selected = node
+                    requirePointerNode(node, scope)
+                    val target = nodeTarget(node)
+                    observed = target
+                    safeNodeBounds("click", target.bounds, scope)
+                    Pair((target.bounds.left + target.bounds.right) / 2f, (target.bounds.top + target.bounds.bottom) / 2f)
+                }
+                SelectorPolicy.TapMode.IMAGE -> screenshotPoint(params, scope)
+                SelectorPolicy.TapMode.PHYSICAL -> Pair(number(params, if (method == "swipe") "x1" else "x"),
+                    number(params, if (method == "swipe") "y1" else "y"))
+            }
+            val x1 = point.first; val y1 = point.second
+            val x2 = if (method == "swipe") number(params, "x2") else x1
+            val y2 = if (method == "swipe") number(params, "y2") else y1
+            val duration = when (method) {
+                "long_press" -> duration(params, 600, 400)
+                "swipe" -> duration(params, 400, 100)
+                else -> 80L
+            }
+            requireClearGesture(scope, x1, y1, x2, y2)
+            if (!contains(scope.bounds, x1, y1) || !contains(scope.bounds, x2, y2)) {
+                throw BridgeFailure("OUT_OF_BOUNDS", "Gesture coordinates must be inside the allowed application window.")
+            }
+            ProtectedControlPolicy.requireGesture(AutomationPreferences.protectConnectionControls(this), scope.packageName == packageName,
+                x1, y1, x2, y2, protectedBounds(scope))
+            val path = Path().apply { moveTo(x1, y1); if (method == "swipe") lineTo(x2, y2) }
+            val gesture = GestureDescription.Builder()
+                .addStroke(GestureDescription.StrokeDescription(path, 0, duration)).build()
+            requireSession(generation, true)
+            val recheck = windowScope()
+            requireSameWindow(scope, recheck)
+            requireClearGesture(recheck, x1, y1, x2, y2)
+            selected?.let { node ->
+                requirePointerNode(node, recheck)
+                NodeActionPolicy.requireUnchanged(observed!!, nodeTarget(node))
+                requireNodeProtection(recheck, node)
+            }
+            if (mode == SelectorPolicy.TapMode.IMAGE) screenshotPoint(params, recheck)
+            ProtectedControlPolicy.requireGesture(AutomationPreferences.protectConnectionControls(this), recheck.packageName == packageName,
+                x1, y1, x2, y2, protectedBounds(recheck))
+            requireSession(generation, true)
+            invalidateNodes()
+            val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
+                override fun onCompleted(gestureDescription: GestureDescription?) {
+                    if (BridgeSession.isOperationCurrent(generation)) { invalidateNodes(); complete(completed(), null) }
+                    else complete(null, BridgeFailure("CONTROL_EXPIRED", "The control task ended during the gesture."))
+                }
+                override fun onCancelled(gestureDescription: GestureDescription?) {
+                    if (BridgeSession.isOperationCurrent(generation)) {
+                        clearOperationTrail(); invalidateNodes()
+                        complete(null, BridgeFailure("GESTURE_CANCELLED", "Android cancelled the gesture; observe before retrying."))
+                    } else complete(null, BridgeFailure("CONTROL_EXPIRED", "The control task ended during the gesture."))
+                }
+            }, BridgeSession.main)
+            if (!accepted) throw BridgeFailure("ACTION_REJECTED", "Android rejected gesture dispatch.")
+            BridgeSession.recordGestureDispatch(generation, duration)
+            operationTrail.show(TrailMotion(method, x1, y1, x2, y2, duration))
+        } finally { selected?.recycle() }
+    }
+
+    private fun requirePointerNode(node: AccessibilityNodeInfo, scope: WindowScope) {
+        if (!node.refresh() || node.windowId != scope.windowId || node.packageName?.toString() != scope.packageName)
+            throw BridgeFailure("STALE_NODE", "The selected target changed. Refine the selector and observe again.")
+        if (!node.isVisibleToUser || !node.isEnabled || hasPasswordAncestry(node, scope))
+            throw BridgeFailure("NODE_BLOCKED", "Only visible, enabled, non-password targets accept taps.")
+    }
+
+    private fun screenshotPoint(params: JSONObject, scope: WindowScope): Pair<Float, Float> {
+        val id = params.opt("screenshotId") as? String ?: throw BridgeFailure("INVALID_ARGUMENT", "screenshotId must be a string.")
+        fun coordinate(key: String): Double {
+            val value = (params.opt(key) as? Number)?.toDouble() ?: throw BridgeFailure("INVALID_ARGUMENT", "Image coordinates must be integers.")
+            if (!value.isFinite() || value != value.toLong().toDouble()) throw BridgeFailure("INVALID_ARGUMENT", "Image coordinates must be integers.")
+            return value
         }
-        val path = Path().apply { moveTo(x1, y1); if (method == "swipe") lineTo(x2, y2) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, duration)).build()
-        requireSession(generation, true)
-        val recheck = windowScope()
-        requireSameWindow(scope, recheck)
-        requireClearCrop(recheck)
-        invalidateNodes()
-        val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
-            override fun onCompleted(gestureDescription: GestureDescription?) {
-                if (BridgeSession.isOperationCurrent(generation)) { invalidateNodes(); complete(completed(), null) }
-                else complete(null, BridgeFailure("CONTROL_EXPIRED", "The control task ended during the gesture."))
-            }
-            override fun onCancelled(gestureDescription: GestureDescription?) {
-                if (BridgeSession.isOperationCurrent(generation)) {
-                    clearOperationTrail()
-                    invalidateNodes()
-                    complete(null, BridgeFailure("GESTURE_CANCELLED", "Android cancelled the gesture; observe before retrying."))
-                } else complete(null, BridgeFailure("CONTROL_EXPIRED", "The control task ended during the gesture."))
-            }
-        }, BridgeSession.main)
-        if (!accepted) throw BridgeFailure("ACTION_REJECTED", "Android rejected gesture dispatch.")
-        BridgeSession.recordGestureDispatch(generation, duration)
-        operationTrail.show(TrailMotion(method, x1, y1, x2, y2, duration))
+        return ScreenshotPolicy.point(lastScreenshot, id, coordinate("imageX"), coordinate("imageY"), uiEpoch, screenshotWindow(scope))
     }
 
     private fun screenshot(generation: Long, complete: (JSONObject?, BridgeFailure?) -> Unit) {
@@ -586,6 +813,9 @@ class PhoneAccessibilityService : AccessibilityService() {
                                 requireSameWindow(scope, latest)
                                 requireClearCrop(latest)
                                 if (encoded == null) throw BridgeFailure("SCREENSHOT_UNAVAILABLE", "Screenshot could not be encoded within the size limit.")
+                                val id = UUID.randomUUID().toString()
+                                lastScreenshot = ScreenshotPolicy.Frame(id, epoch, screenshotWindow(latest), encoded.getInt("width"), encoded.getInt("height"))
+                                encoded.put("screenshotId", id)
                                 complete(encoded, null)
                             } catch (e: BridgeFailure) { complete(null, e) }
                             catch (_: Exception) { complete(null, BridgeFailure("SCREENSHOT_UNAVAILABLE", "Screenshot is unavailable.")) }
