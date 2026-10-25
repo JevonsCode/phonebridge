@@ -86,7 +86,7 @@ $zip=Join-Path $OutputDirectory "phonebridge-$Version-windows-x64.zip"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
 $installerSource=Join-Path $OutputDirectory 'Installer.generated.cs'
-(Get-Content -LiteralPath (Join-Path $project 'desktop\Installer.cs') -Raw).Replace('__VERSION__',$Version) | Set-Content -LiteralPath $installerSource -Encoding UTF8
+(Get-Content -LiteralPath (Join-Path $project 'desktop\Installer.cs') -Raw -Encoding UTF8).Replace('__VERSION__',$Version) | Set-Content -LiteralPath $installerSource -Encoding UTF8
 $installer=Join-Path $OutputDirectory "phonebridge-$Version-windows-setup.exe"
 & $csc /nologo /target:winexe /optimize+ /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/win32icon:$(Join-Path $project 'assets\brand\phonebridge.ico')" "/resource:$zip,PhoneBridgePackage" "/out:$installer" $installerSource
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
