@@ -90,6 +90,34 @@ class NodeActionPolicyTest {
         }
     }
 
+    @Test fun semanticTextActionsUseTheVerifiedNodeDespiteAnOverlappingSmartTextWindow() {
+        val input = WindowGeometry.Bounds(20, 60, 380, 120)
+        val smartTextWindow = WindowGeometry.Bounds(10, 50, 390, 180)
+        for (action in listOf("paste", "copy", "cut", "select_all")) {
+            NodeActionPolicy.requireAction(action, setOf(action), true, true, false)
+            NodeActionPolicy.requireTextAction(action, true, true, 5, 0, 5)
+            assertEquals(input, NodeActionPolicy.safeActionBounds(action, input, safe, screen, listOf(smartTextWindow)))
+            // The focused node may also extend outside a crop trimmed for pointer input.
+            assertEquals(input, NodeActionPolicy.safeActionBounds(action, input,
+                WindowGeometry.Bounds(0, 200, 400, 750), screen, listOf(smartTextWindow)))
+            assertFailure("NODE_BLOCKED") { NodeActionPolicy.requireAction(action, setOf(action), false, true, false) }
+            assertFailure("NODE_BLOCKED") { NodeActionPolicy.requireAction(action, setOf(action), true, true, true) }
+        }
+        assertFailure("FOCUS_REQUIRED") { NodeActionPolicy.requireTextAction("paste", true, false, 5, 0, 5) }
+        assertFailure("FOCUS_REQUIRED") { NodeActionPolicy.requireTextAction("cut", true, false, 5, 0, 5) }
+        assertFailure("SELECTION_REQUIRED") { NodeActionPolicy.requireTextAction("copy", true, true, 5, 0, 0) }
+    }
+
+    @Test fun theSameSmartTextWindowStillBlocksPointerAndScrollNodeActions() {
+        val input = WindowGeometry.Bounds(20, 60, 380, 120)
+        val smartTextWindow = WindowGeometry.Bounds(10, 50, 390, 180)
+        for (action in listOf("click", "long_click", "focus", "scroll_forward", "scroll_backward")) {
+            assertFailure("WINDOW_OBSCURED") {
+                NodeActionPolicy.safeActionBounds(action, input, safe, screen, listOf(smartTextWindow))
+            }
+        }
+    }
+
     @Test fun scrollCannotUseOffScreenOrEmptyOrFullyExcludedNodes() {
         for (bounds in listOf(WindowGeometry.Bounds(-1, 0, 400, 800), WindowGeometry.Bounds(0, 0, 401, 800),
             WindowGeometry.Bounds(10, 10, 10, 20), WindowGeometry.Bounds(0, 0, 400, 30),

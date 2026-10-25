@@ -14,6 +14,7 @@ async function fixture(t: TestContext) {
   let connectionId = 'connection-1'; let connected = true; let expire = false;
   let devices = ['phone-a']; let observations = 0; let switchOnAcquire = false; let switchOnState = false; let fileError = 'CONTROL_EXPIRED';
   let queued = false; let waitingState = 'queued';
+  let stateErrorCodes: string[] = []; let persistentStateError: string | undefined;
   let acquireDelay = 0; let receivedAcquire!: () => void;
   const acquireReceived = new Promise<void>(resolve => { receivedAcquire = resolve; });
   const service = http.createServer(async (req, res) => {
@@ -43,6 +44,8 @@ async function fixture(t: TestContext) {
     if (command.method === 'state') {
       observations++;
       if (switchOnState && observations === 1) connectionId = 'connection-2';
+      const code = stateErrorCodes.shift() ?? persistentStateError;
+      if (code) { res.end(JSON.stringify({ error: { code, message: 'No accessible window during the app transition.', details: { transition: 'app_launch', targetPackage: 'dev.example.app' } } })); return; }
       res.end(JSON.stringify({ result: { packageName: 'dev.example.app', snapshotId: `s-${observations}`, truncated: false,
         nodes: [{ id: `s-${observations}:1`, resourceId: 'app:id/send', text: observations >= 2 ? 'Ready' : 'Loading', description: 'Send' }] } })); return;
     }
@@ -56,6 +59,7 @@ async function fixture(t: TestContext) {
   return { client, url, requests, reconnect: () => { connectionId = 'connection-2'; }, offline: () => { connected = false; },
     reconnectDuringAcquire: () => { switchOnAcquire = true; }, reconnectDuringWait: () => { switchOnState = true; },
     fileError: (code: string) => { fileError = code; },
+    stateErrors: (...codes: string[]) => { stateErrorCodes = [...codes]; }, stateError: (code: string) => { persistentStateError = code; },
     queue: () => { queued = true; }, grant: () => { waitingState = 'active'; },
     delayAcquire: (ms: number) => { acquireDelay = ms; }, acquireReceived,
     expire: () => { expire = true; }, multiple: () => { devices = ['phone-a', 'phone-b']; }, observations: () => observations };
@@ -125,6 +129,48 @@ test('assert observes once and a bounded wait returns its last observed state', 
   assert.equal(timed.code, 'WAIT_TIMEOUT'); assert(timed.state);
   assert(f.requests.every(r => r.method === 'state'));
 });
+
+test('wait retries only read-only NO_WINDOW during an app transition and returns the later matching state', async t => {
+  const f = await fixture(t); f.stateErrors('NO_WINDOW');
+  const task = await f.client.acquire('phone-a');
+  const result = await observeCondition(f.client, conditionSchema.parse({ packageName: 'dev.example.app' }), task, 1500);
+  assert.equal(result.matched, true); assert.equal(f.observations(), 2);
+  assert.deepEqual(f.requests.map(request => request.method), ['acquire_control', 'state', 'state']);
+  assert(f.requests.every(request => request.deviceId === 'phone-a' && request.connectionId === 'connection-1'));
+  assert(f.requests.slice(1).every(request => request.controlId === f.requests[0]!.params.controlId));
+  await f.client.release(task.taskHandle as string);
+});
+
+test('assert returns the original NO_WINDOW immediately without retrying', async t => {
+  const f = await fixture(t); f.stateErrors('NO_WINDOW');
+  await assert.rejects(observeCondition(f.client, conditionSchema.parse({ packageName: 'dev.example.app' }), { deviceId: 'phone-a' }, 0),
+    (error: AgentError) => error.code === 'NO_WINDOW' && error.message === 'No accessible window during the app transition.' && error.details?.transition === 'app_launch');
+  assert.equal(f.observations(), 1); assert.deepEqual(f.requests.map(request => request.method), ['state']);
+});
+
+test('wait timeout retains the final NO_WINDOW diagnosis without reporting stale screen evidence', async t => {
+  const f = await fixture(t); f.stateError('NO_WINDOW');
+  const result = await observeCondition(f.client, conditionSchema.parse({ packageName: 'dev.example.app' }), { deviceId: 'phone-a' }, 260);
+  assert.equal(result.matched, false); assert.equal(result.code, 'WAIT_TIMEOUT');
+  assert.deepEqual(result.lastError, { code: 'NO_WINDOW', message: 'No accessible window during the app transition.', outcome: 'device_reported_error', details: { transition: 'app_launch', targetPackage: 'dev.example.app' } });
+  assert.equal(result.state, undefined); assert.equal(result.evidence, undefined);
+  assert.match(result.message as string, /NO_WINDOW/); assert(f.requests.every(request => request.method === 'state'));
+});
+
+test('a later real observation clears an earlier transitional NO_WINDOW diagnosis', async t => {
+  const f = await fixture(t); f.stateErrors('NO_WINDOW');
+  const result = await observeCondition(f.client, conditionSchema.parse({ text: 'Not present' }), { deviceId: 'phone-a' }, 260);
+  assert.equal(result.code, 'WAIT_TIMEOUT'); assert.equal(result.lastError, undefined);
+  assert.equal((result.state as any).packageName, 'dev.example.app');
+});
+
+for (const code of ['NO_DEVICE', 'CONTROL_EXPIRED', 'DEVICE_LOCKED', 'READ_ONLY', 'PACKAGE_BLOCKED', 'NOTIFICATIONS_DISABLED', 'OWNER_AUTHORIZATION', 'ACCESSIBILITY_DISABLED', 'WINDOW_OBSCURED']) {
+  test(`wait does not retry non-transient ${code}`, async t => {
+    const f = await fixture(t); f.stateErrors(code);
+    await assert.rejects(observeCondition(f.client, conditionSchema.parse({ packageName: 'dev.example.app' }), { deviceId: 'phone-a' }, 1000), (error: AgentError) => error.code === code);
+    assert.equal(f.observations(), 1); assert.deepEqual(f.requests.map(request => request.method), ['state']);
+  });
+}
 
 test('literal conditions match the same node; truncated observations cannot prove absence', () => {
   const state = { packageName: 'p', truncated: false, nodes: [{ text: 'Ready', resourceId: 'first' }, { text: 'Other', resourceId: 'second' }] };

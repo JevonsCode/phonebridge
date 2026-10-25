@@ -54,6 +54,10 @@ object NodeActionPolicy {
     /** Edge-to-edge app widgets may include system-bar padding; require a safe visible action area. */
     fun safeActionBounds(action: String, target: WindowGeometry.Bounds, safe: WindowGeometry.Bounds,
                          screen: WindowGeometry.Bounds, foreign: List<WindowGeometry.Bounds>): WindowGeometry.Bounds {
+        // These actions address the already verified node, not a screen point.
+        // Identity, visibility, password, selection/focus and authority checks
+        // remain required by the caller even when a smart-text overlay is open.
+        if (action in setOf("paste", "copy", "cut", "select_all")) return target
         fun nonempty(area: WindowGeometry.Bounds) = area.left < area.right && area.top < area.bottom
         fun contains(outer: WindowGeometry.Bounds, inner: WindowGeometry.Bounds) =
             outer.left <= inner.left && outer.top <= inner.top && outer.right >= inner.right && outer.bottom >= inner.bottom

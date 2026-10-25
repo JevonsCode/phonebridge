@@ -12,6 +12,7 @@ void main() {
   var allowed = <String>['dev.phonebridge.phonebridge'];
   var failSave = false;
   var mismatchedReadBack = false;
+  var protectConnectionControls = false;
   var extraApps = <Map<String, Object>>[];
   Map<String, Object> status() => {
     'accessibilityEnabled': true,
@@ -24,12 +25,14 @@ void main() {
     'allowedPackages': allowed,
     'effectiveAllowedPackages': allowed,
     'permissionRevision': 7,
+    'protectConnectionControls': protectConnectionControls,
   };
   setUp(() {
     calls.clear();
     allowed = ['dev.phonebridge.phonebridge'];
     failSave = false;
     mismatchedReadBack = false;
+    protectConnectionControls = false;
     extraApps = [];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (call) async {
@@ -75,6 +78,21 @@ void main() {
     await tester.ensureVisible(entry);
     await tester.tap(entry);
     await tester.pumpAndSettle();
+  }
+
+  for (final protection in [false, true]) {
+    testWidgets(
+      'remote pause notice follows the native protection snapshot $protection',
+      (tester) async {
+        protectConnectionControls = protection;
+        await open(tester);
+        expect(
+          find.byKey(const Key('app-access-remote-pause-notice')),
+          protection ? findsOneWidget : findsNothing,
+        );
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
   }
 
   testWidgets(

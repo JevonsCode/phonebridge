@@ -120,11 +120,15 @@ class _AppAccessPageState extends State<AppAccessPage> {
                         const SizedBox(height: 8),
                       ],
                       Text(tr(context, '仅允许电脑读取所选应用；开启“允许操作”后，也可以点击、滑动和输入。')),
-                      const SizedBox(height: 8),
-                      Text(
-                        tr(context, '编辑期间暂停远程操作，返回后恢复。'),
-                        style: const TextStyle(color: muted),
-                      ),
+                      if (widget.snapshot['protectConnectionControls'] ==
+                          true) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          tr(context, '编辑期间暂停远程操作，返回后恢复。'),
+                          key: const Key('app-access-remote-pause-notice'),
+                          style: const TextStyle(color: muted),
+                        ),
+                      ],
                       const SizedBox(height: 16),
                       TextField(
                         key: const Key('search-app-access'),

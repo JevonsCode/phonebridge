@@ -239,13 +239,29 @@ export async function observeCondition(client: AgentClient, condition: Condition
     return { ...result, state, ...(!result.matched ? { code: 'ASSERTION_FAILED', message: 'Condition was not observed. No action was retried.' } : {}) };
   }
   let state: Record<string, any> | undefined;
+  let lastObservationError: AgentError | undefined;
   do {
-    try { state = await client.command('state', {}, pinned, Math.max(1, deadline - Date.now())); }
-    catch (error) { if (Date.now() >= deadline && !(error instanceof AgentError)) break; throw error; }
-    const checked = checkCondition(state, condition);
-    if (checked.matched) return { ...checked, state };
+    let observed: Record<string, any> | undefined;
+    try {
+      observed = await client.command('state', {}, pinned, Math.max(1, deadline - Date.now()));
+      state = observed; lastObservationError = undefined;
+    } catch (error) {
+      // App launches can temporarily have no accessible window. Only wait-mode
+      // state reads may retry this exact device-reported transition error.
+      if (timeoutMs > 0 && error instanceof AgentError && error.code === 'NO_WINDOW') lastObservationError = error;
+      else { if (Date.now() >= deadline && !(error instanceof AgentError)) break; throw error; }
+    }
+    if (observed) {
+      const checked = checkCondition(observed, condition);
+      if (checked.matched) return { ...checked, state: observed };
+    }
     if (Date.now() >= deadline) break;
     await new Promise(resolve => setTimeout(resolve, Math.min(200, Math.max(1, deadline - Date.now()))));
   } while (Date.now() < deadline);
-  return { matched: false, code: 'WAIT_TIMEOUT', ...(state ? { evidence: checkCondition(state, condition).evidence, state } : {}), message: 'Condition was not observed. No action was retried.' };
+  return { matched: false, code: 'WAIT_TIMEOUT',
+    ...(lastObservationError ? { lastError: { code: lastObservationError.code, message: lastObservationError.message, outcome: lastObservationError.outcome,
+      ...(lastObservationError.details ? { details: lastObservationError.details } : {}) } }
+      : state ? { evidence: checkCondition(state, condition).evidence, state } : {}),
+    message: lastObservationError ? 'Waiting ended after the last observation returned NO_WINDOW. Inspect lastError, let the app transition settle, then observe again. No action was retried.'
+      : 'Condition was not observed. No action was retried.' };
 }

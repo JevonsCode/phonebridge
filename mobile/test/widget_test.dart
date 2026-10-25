@@ -550,6 +550,8 @@ void main() {
     await tester.ensureVisible(field);
     await tester.pumpAndSettle();
     await tester.enterText(field, 'private-session-token-do-not-retain');
+    await tester.binding.handlePopRoute();
+    await tester.pumpAndSettle();
     connected = true;
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();
