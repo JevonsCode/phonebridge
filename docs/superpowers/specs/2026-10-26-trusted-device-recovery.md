@@ -26,9 +26,9 @@ Provide clipboard get/set and native paste/copy/cut/select-all without per-opera
 
 Resolve text/description/resource/class selectors against the current tree, require explicit index for ambiguity, and support screenshotId plus image coordinates using the original crop. Preserve Android stateDescription and selection ranges. Add foreground package/window/occlusion diagnostics without recording screen or clipboard contents in operation history. Explicit task renewal extends only the current active task and cannot revive an expired or queued task.
 
-Default received images/videos into the media gallery, retaining the option to use Downloads. Expose actual transfer expiry and saved location. Mark precise PhoneBridge connection/authorization controls with semantics IDs and prevent accidental remote changes while its user switch is enabled; file navigation remains usable.
+Default received images/videos into the media gallery, retaining the option to use Downloads. Expose actual transfer expiry and saved location. Mark precise PhoneBridge connection/authorization controls with semantics IDs. Connection-control protection is optional and defaults off; only an explicitly enabled saved switch prevents accidental remote changes. Clipboard, automatic receipt, and gallery remain enabled by default.
 
-Provide one owner “Allow all” action for the selected computer: all eligible applications, actions, resume, clipboard, automatic file receipt and gallery. Preserve existing computer identities and other computers' grants. The currently connected test phone should have these capabilities enabled. Install both desktop and phone, then have the existing Grok Bot Echo publish one FULI item using the updated tools and report the resulting link and observed issues.
+Provide one owner “Allow all” action for the selected computer: all eligible applications, actions, resume, clipboard, automatic file receipt and gallery, with connection-control protection disabled so the AI can also change its own settings. Preserve existing computer identities and other computers' grants. The currently connected test phone should have these capabilities enabled. Install both desktop and phone, then have the existing Grok Bot Echo publish one FULI item using the updated tools and report the resulting link and observed issues.
 
 ## Validation and delivery
 

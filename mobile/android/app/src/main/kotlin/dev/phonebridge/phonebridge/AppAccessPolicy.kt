@@ -4,6 +4,9 @@ package dev.phonebridge.phonebridge
 object AppAccessPolicy {
     private val packageName = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
 
+    fun blocksRemote(editorOpen: Boolean, protectConnectionControls: Boolean): Boolean =
+        editorOpen && protectConnectionControls
+
     fun requirePackages(packages: List<String>) {
         require(packages.isNotEmpty() && packages.all { it.length <= 255 && packageName.matches(it) }) {
             "Select at least one app with a valid package name."

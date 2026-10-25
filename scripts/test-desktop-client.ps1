@@ -28,6 +28,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Desktop self-test failed.' }
     & $runtime --test (Join-Path $project 'desktop\test\stable-mcp.test.mjs')
     if ($LASTEXITCODE -ne 0) { throw 'Stable MCP bootstrap checks failed.' }
+    & $runtime --test (Join-Path $project 'scripts\test\installer-package.test.mjs')
+    if ($LASTEXITCODE -ne 0) { throw 'Installer ZIP separator and path validation checks failed.' }
 } finally { $env:PHONEBRIDGE_TEST_PACKAGE = $previousTestPackage }
 if ($PackageDirectory) {
     $priorPath=$env:PATH

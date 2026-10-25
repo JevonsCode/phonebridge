@@ -2,6 +2,10 @@ package dev.phonebridge.phonebridge
 
 import android.content.Context
 
+internal object AutomationPreferenceDefaults {
+    fun value(key: String): Boolean = key != "protectConnectionControls"
+}
+
 internal class AutomationPreferenceState {
     private val restored = mutableMapOf<String, Boolean>()
     fun read(key: String, stored: () -> Boolean): Boolean = restored[key] ?: stored()
@@ -22,10 +26,10 @@ internal class AutomationPreferenceState {
 object AutomationPreferences {
     private val state = AutomationPreferenceState()
     private fun preferences(context: Context) = context.getSharedPreferences("phonebridge_automation", Context.MODE_PRIVATE)
-    private fun read(context: Context, key: String) = state.read(key) { preferences(context).getBoolean(key, true) }
+    private fun read(context: Context, key: String) = state.read(key) { preferences(context).getBoolean(key, AutomationPreferenceDefaults.value(key)) }
     private fun save(context: Context, key: String, value: Boolean) {
         val preferences = preferences(context)
-        state.save(key, value, { preferences.getBoolean(key, true) }) { preferences.edit().putBoolean(key, it).commit() }
+        state.save(key, value, { preferences.getBoolean(key, AutomationPreferenceDefaults.value(key)) }) { preferences.edit().putBoolean(key, it).commit() }
     }
     fun clipboardAccessEnabled(context: Context): Boolean = read(context, "clipboardAccessEnabled")
     fun setClipboardAccessEnabled(context: Context, enabled: Boolean) = save(context, "clipboardAccessEnabled", enabled)

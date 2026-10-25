@@ -114,7 +114,7 @@ class PhoneAccessibilityService : AccessibilityService() {
             throw BridgeFailure("CONTROL_EXPIRED", "The control task has ended. Acquire control and observe again.")
         }
         OperationPolicy.requireSession(BridgeSession.connected, BridgeSession.isOperationCurrent(generation),
-            BridgeSession.service === this, isUnlocked(), BridgeSession.actionsEnabled, mutation, BridgeSession.appAccessOpen)
+            BridgeSession.service === this, isUnlocked(), BridgeSession.actionsEnabled, mutation, BridgeSession.appAccessBlocked)
     }
 
     /** Never operate Android's authorization/settings surfaces, even if allowlisted. */

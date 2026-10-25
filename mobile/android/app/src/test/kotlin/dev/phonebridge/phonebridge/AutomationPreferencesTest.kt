@@ -4,6 +4,22 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AutomationPreferencesTest {
+    @Test fun optionalConnectionProtectionDefaultsOffWhileAutomationCapabilitiesStayOn() {
+        assertFalse(AutomationPreferenceDefaults.value("protectConnectionControls"))
+        assertTrue(AutomationPreferenceDefaults.value("clipboardAccessEnabled"))
+        assertTrue(AutomationPreferenceDefaults.value("autoReceiveFilesEnabled"))
+        assertTrue(AutomationPreferenceDefaults.value("saveMediaToGallery"))
+    }
+
+    @Test fun explicitSavedProtectionChoiceOverridesItsDefault() {
+        val preferences = AutomationPreferenceState()
+        assertTrue(preferences.read("protectConnectionControls") { true })
+        assertFalse(preferences.read("clipboardAccessEnabled") { false })
+        var stored = AutomationPreferenceDefaults.value("protectConnectionControls")
+        preferences.save("protectConnectionControls", true, { stored }) { stored = it; true }
+        assertTrue(AutomationPreferenceState().read("protectConnectionControls") { stored })
+    }
+
     @Test fun settingsRemainIndependentAndSuccessfulSavesCanBeReadByANewInstance() {
         val stored = mutableMapOf("clipboard" to true, "protect" to true)
         val preferences = AutomationPreferenceState()

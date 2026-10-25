@@ -84,12 +84,14 @@ Remove-Item -LiteralPath (Join-Path $stage 'desktop\integration-test.mjs')
 Get-ChildItem -LiteralPath (Join-Path $stage 'desktop') -Filter 'test-*.ps1' -File | Remove-Item
 $zip=Join-Path $OutputDirectory "phonebridge-$Version-windows-x64.zip"
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
+. (Join-Path $PSScriptRoot 'windows\package-archive.ps1')
+New-PhoneBridgePackageArchive -SourceDirectory $stage -ArchivePath $zip
 $installerSource=Join-Path $OutputDirectory 'Installer.generated.cs'
 (Get-Content -LiteralPath (Join-Path $project 'desktop\Installer.cs') -Raw -Encoding UTF8).Replace('__VERSION__',$Version) | Set-Content -LiteralPath $installerSource -Encoding UTF8
 $installer=Join-Path $OutputDirectory "phonebridge-$Version-windows-setup.exe"
 & $csc /nologo /target:winexe /optimize+ /reference:System.Windows.Forms.dll /reference:System.Web.Extensions.dll /reference:System.IO.Compression.dll /reference:System.IO.Compression.FileSystem.dll "/win32icon:$(Join-Path $project 'assets\brand\phonebridge.ico')" "/resource:$zip,PhoneBridgePackage" "/out:$installer" $installerSource
 if ($LASTEXITCODE -ne 0) { throw 'Installer compilation failed.' }
+[void](Test-PhoneBridgeInstallerPackage -InstallerPath $installer -ReportPath (Join-Path $OutputDirectory "phonebridge-$Version-windows-setup.diagnostics.json") -Version $Version)
 foreach ($file in @($zip,$installer)) { $hash=(Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant(); [IO.File]::WriteAllText("$file.sha256", "$hash  $([IO.Path]::GetFileName($file))`n", (New-Object Text.UTF8Encoding($false))) }
 Write-Output $zip
 Write-Output $installer

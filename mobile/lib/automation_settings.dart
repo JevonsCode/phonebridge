@@ -38,6 +38,7 @@ class _AutomationSettingState extends State<AutomationSetting> {
   @override
   void initState() {
     super.initState();
+    enabled = widget.preference != 'ProtectConnectionControls';
     unawaited(load());
   }
 

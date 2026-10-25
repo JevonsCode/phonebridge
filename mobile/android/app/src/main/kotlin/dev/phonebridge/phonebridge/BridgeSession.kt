@@ -61,6 +61,8 @@ object BridgeSession {
     private var computers = TrustedComputers()
     var appAccessOpen = false
         private set
+    val appAccessBlocked: Boolean get() = AppAccessPolicy.blocksRemote(appAccessOpen,
+        context?.let { AutomationPreferences.protectConnectionControls(it) } ?: false)
     // Local editor lifetime, independent of AI operations and control handoffs.
     private var appAccessRevision = 0L
     private var globalError = ""
@@ -145,7 +147,7 @@ object BridgeSession {
             "computers" to computerList(), "files" to (fileInbox?.status() ?: emptyList<Map<String, Any>>()),
             "autoReceiveFilesEnabled" to (fileInbox?.autoReceiveEnabled ?: true),
             "clipboardAccessEnabled" to (context?.let { AutomationPreferences.clipboardAccessEnabled(it) } ?: true),
-            "protectConnectionControls" to (context?.let { AutomationPreferences.protectConnectionControls(it) } ?: true),
+            "protectConnectionControls" to (context?.let { AutomationPreferences.protectConnectionControls(it) } ?: false),
             "saveMediaToGallery" to (fileInbox?.saveMediaToGallery ?: true),
             "allowedPackages" to (saved ?: selected?.record)?.packages.orEmpty(),
             "effectiveAllowedPackages" to (if (selected?.connected == true) selected.record.packages else emptyList<String>()),
@@ -267,7 +269,7 @@ object BridgeSession {
         val apps = AppAccessCatalog.list(context!!, record.packages)
         appAccessOpen = true
         appAccessRevision++
-        execution?.let { it.invalidated = true; operationScope.invalidate() }
+        execution?.let { if (operationScope.invalidateForOwnerAuthorization(appAccessBlocked)) it.invalidated = true }
         service?.invalidateNodes()
         service?.clearOperationTrail()
         val computer = computers.entries.find { it.pairing.endpoint == record.endpoint && it.pairing.token == record.token }
@@ -349,7 +351,7 @@ object BridgeSession {
         val reception = inbox.autoReceiveEnabled
         try {
             AutomationPreferences.setClipboardAccessEnabled(value, true)
-            AutomationPreferences.setProtectConnectionControls(value, true)
+            AutomationPreferences.setProtectConnectionControls(value, false)
             inbox.setSaveMediaToGallery(true)
             // Persist every setting before running downloads or changing the current transport.
             inbox.setAutoReceiveEnabled(true, resumePending = false)
@@ -626,7 +628,7 @@ object BridgeSession {
             if (method !in setOf("file_offer", "state", "screenshot", "tap", "long_press", "swipe", "set_text",
                     "node_action", "commit_text", "global_action", "launch_app", "get_clipboard", "set_clipboard"))
                 throw BridgeFailure("UNKNOWN_METHOD", "Unknown Android method.")
-            if (appAccessOpen) throw BridgeFailure("OWNER_AUTHORIZATION", "Complete app authorization locally on the phone.")
+            if (appAccessBlocked) throw BridgeFailure("OWNER_AUTHORIZATION", "Complete app authorization locally on the phone.")
             // Invalid explicit tasks must report terminal expiry even while another operation is running.
             if (execution != null) {
                 if (task != null) control.requireExistingControl(t.id, t.serial, task)

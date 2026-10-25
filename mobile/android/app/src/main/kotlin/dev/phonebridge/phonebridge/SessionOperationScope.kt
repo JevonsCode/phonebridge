@@ -33,6 +33,13 @@ class SessionOperationScope {
         if (pending == null) generation++
     }
 
+    /** Opening an unprotected editor changes the screen, not the executing task's authority. */
+    fun invalidateForOwnerAuthorization(blocked: Boolean): Boolean {
+        if (!blocked) return false
+        invalidate()
+        return true
+    }
+
     fun isCurrent(expectedGeneration: Long) = pending != null && valid && generation == expectedGeneration
 
     fun markGestureDispatched(expectedGeneration: Long) {

@@ -170,7 +170,7 @@ Mac 固定入口使用 `"command": "/bin/sh"` 和 `"args": ["/Users/Owner/.phone
 
 可以先让 AI 读取允许应用的当前界面，再点击一个明确的控件并检查结果。`set_text` 会替换输入框内容，不会自动发送；未聚焦的输入框会返回 FOCUS_REQUIRED。
 
-`phone_get_clipboard` 可读取手机复制的链接，`phone_set_clipboard` 可设置文本；`phone_node_action` 支持 `paste`、`copy`、`cut`、`select_all`。剪贴板能力默认开启，手机可保存关闭设置，无需逐次确认。`phone_tap` 和 `phone_node_action` 可按文字、描述或资源 ID 等 selector 定位；多项匹配会返回 `AMBIGUOUS_SELECTOR`，需缩小条件或明确指定从 0 开始的 `index`。截图返回 `screenshotId` 时，`phone_tap` 可直接传 `imageX`、`imageY`、`screenshotId`，由手机换算当前裁剪坐标。`phone_state` 保留 Android 提供的 `stateDescription`。
+`phone_get_clipboard` 可读取手机复制的链接，`phone_set_clipboard` 可设置文本；`phone_node_action` 支持 `paste`、`copy`、`cut`、`select_all`。剪贴板能力默认开启，手机可保存关闭设置，无需逐次确认。防误断开保护为可选项、默认关闭；“全部允许”会关闭该保护，剪贴板、自动接收和相册保存保持开启。`phone_tap` 和 `phone_node_action` 可按文字、描述或资源 ID 等 selector 定位；多项匹配会返回 `AMBIGUOUS_SELECTOR`，需缩小条件或明确指定从 0 开始的 `index`。截图返回 `screenshotId` 时，`phone_tap` 可直接传 `imageX`、`imageY`、`screenshotId`，由手机换算当前裁剪坐标。`phone_state` 保留 Android 提供的 `stateDescription`。
 
 部分应用（包括本次实测的微信）不提供控件节点，此时使用截图定位并点击输入框，再调用 Android 13+ 的 `commit_text` 向已聚焦的非密码输入框插入文字；它不会自动发送，也不读取或修改剪贴板。已实测 Android 16 微信中文消息发送，并通过发送后的气泡及空输入框确认。
 
