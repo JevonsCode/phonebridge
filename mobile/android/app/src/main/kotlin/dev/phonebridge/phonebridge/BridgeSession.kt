@@ -186,10 +186,7 @@ object BridgeSession {
     private fun validatePairing(record: TrustedPairing) {
         EndpointPolicy.validate(record.endpoint, record.allowInsecureLocal)
         EndpointPolicy.validateToken(record.token)
-        require(record.packages.isNotEmpty() && record.packages.size <= 64 && record.packages.all {
-            it.length <= 255 && it.matches(Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")) }) {
-            "Enter 1–64 valid allowed package names."
-        }
+        AppAccessPolicy.requirePackages(record.packages)
     }
     private fun updateTrust(update: () -> Unit) {
         try { update(); computers = store!!.list(); loaded = true }

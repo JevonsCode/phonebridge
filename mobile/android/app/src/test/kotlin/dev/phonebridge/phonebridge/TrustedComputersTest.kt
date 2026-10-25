@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TrustedComputersTest {
+    @Test fun moreThan64AppGrantsSurviveSaveAndRestore() {
+        val packages = (0 until 300).map { "com.example.app$it" }
+        val stored = TrustedComputers().remember(pairing().copy(packages = packages))
+        assertEquals(packages, TrustedComputers.decode(stored.encode()).active!!.pairing.packages)
+        val legacy = JSONObject().put("version", 1).put("endpoint", pairing().endpoint)
+            .put("token", pairing().token).put("allowInsecureLocal", true)
+            .put("packages", org.json.JSONArray(packages)).put("actionsEnabled", true)
+            .put("resumeAllowed", true).toString()
+        assertEquals(packages, TrustedComputers.decode(legacy).active!!.pairing.packages)
+    }
+
     @Test fun forgettingAnotherComputerPreservesActiveTrustAndPermissions() {
         val first = TrustedComputers().remember(pairing())
         val both = first.remember(pairing("b".repeat(32), false))

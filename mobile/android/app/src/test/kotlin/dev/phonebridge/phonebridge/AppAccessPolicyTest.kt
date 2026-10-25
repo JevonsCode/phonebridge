@@ -4,6 +4,18 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class AppAccessPolicyTest {
+    @Test fun packageValidationHasNoAppCountCeiling() {
+        AppAccessPolicy.requirePackages((0 until 300).map { "com.example.app$it" })
+    }
+
+    @Test fun emptyOrMalformedPackagesRemainInvalid() {
+        for (packages in listOf(emptyList(), listOf("invalid"), listOf("com.example.bad-name"),
+                listOf("com." + "a".repeat(252)))) {
+            try { AppAccessPolicy.requirePackages(packages); fail("Expected invalid package rejection") }
+            catch (_: IllegalArgumentException) { }
+        }
+    }
+
     @Test fun switchedComputerOrChangedGenerationOrGrantsRejectsStaleEditor() {
         val original = listOf("com.android.chrome")
         for ((id, revision, packages) in listOf(

@@ -27,8 +27,8 @@ class _AppAccessPageState extends State<AppAccessPage> {
 
   Future<void> save() async {
     if (saving) return;
-    if (selected.isEmpty || selected.length > 64) {
-      setState(() => error = '请选择 1–64 个应用');
+    if (selected.isEmpty) {
+      setState(() => error = '请至少选择一个应用');
       return;
     }
     if (widget.draft) {
@@ -79,8 +79,16 @@ class _AppAccessPageState extends State<AppAccessPage> {
         .where((app) => app['protected'] != true && app['installed'] != false)
         .map((app) => app['packageName'] as String)
         .toSet();
-    final allSelected = selected.containsAll(selectable);
-    final displayError = selected.length > 64 ? '最多允许 64 个应用，请取消部分勾选' : error;
+    final visiblePackages = visible
+        .map((app) => app['packageName'] as String)
+        .toSet();
+    // Existing grants can be cleared even if an app is no longer selectable.
+    final bulkTargets = selectable.union(
+      selected.intersection(visiblePackages),
+    );
+    final allSelected =
+        bulkTargets.isNotEmpty && selected.containsAll(bulkTargets);
+    final someSelected = bulkTargets.any(selected.contains);
     final name = widget.snapshot['computerName'] as String? ?? '';
     return PopScope(
       canPop: !saving,
@@ -127,32 +135,36 @@ class _AppAccessPageState extends State<AppAccessPage> {
                         ),
                       ),
                       const SizedBox(height: 12),
-                      Wrap(
-                        spacing: 16,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Text('${tr(context, '已选择')} ${selected.length} / 64'),
-                          TextButton(
-                            key: const Key('select-all-apps'),
-                            onPressed: saving || allSelected
-                                ? null
-                                : () => setState(() {
-                                    selected.addAll(selectable);
-                                    error = null;
-                                  }),
-                            child: Text(
-                              tr(context, search.isEmpty ? '全选' : '全选搜索结果'),
-                            ),
-                          ),
-                        ],
+                      Text('${tr(context, '已选择')} ${selected.length}'),
+                      CheckboxListTile(
+                        key: const Key('select-all-apps'),
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.trailing,
+                        tristate: true,
+                        value: allSelected
+                            ? true
+                            : (someSelected ? null : false),
+                        onChanged: saving || bulkTargets.isEmpty
+                            ? null
+                            : (_) => setState(() {
+                                if (allSelected) {
+                                  selected.removeAll(visiblePackages);
+                                } else {
+                                  selected.addAll(selectable);
+                                }
+                                error = null;
+                              }),
+                        title: Text(
+                          tr(context, search.isEmpty ? '全选' : '全选搜索结果'),
+                        ),
                       ),
-                      if (displayError != null)
+                      if (error != null)
                         Padding(
                           padding: const EdgeInsets.only(top: 12),
                           child: Semantics(
                             liveRegion: true,
                             child: Text(
-                              tr(context, displayError),
+                              tr(context, error!),
                               key: const Key('app-access-error'),
                               style: TextStyle(
                                 color: Theme.of(context).colorScheme.error,
