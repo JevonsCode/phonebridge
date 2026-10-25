@@ -215,9 +215,9 @@ void main() {
     expect(calls.where((c) => c.method == 'setAllowedPackages'), isEmpty);
     expect(
       tester
-          .widget<TextButton>(find.byKey(const Key('select-all-apps')))
-          .onPressed,
-      isNull,
+          .widget<CheckboxListTile>(find.byKey(const Key('select-all-apps')))
+          .value,
+      isTrue,
     );
     final chrome = find.byKey(const Key('app-com.android.chrome'));
     await tester.ensureVisible(chrome);
@@ -266,43 +266,159 @@ void main() {
     await tester.pumpWidget(const SizedBox());
   });
 
+  testWidgets('select all saves more than 64 apps without a count ceiling', (
+    tester,
+  ) async {
+    extraApps = List.generate(
+      100,
+      (i) => {
+        'packageName': 'com.example.app$i',
+        'name': 'App $i',
+        'installed': true,
+      },
+    );
+    await open(tester);
+    await tester.tap(find.byKey(const Key('select-all-apps')));
+    await tester.pumpAndSettle();
+    expect(find.text('Selected 102'), findsOneWidget);
+    expect(find.byKey(const Key('app-access-error')), findsNothing);
+    await tester.tap(find.byKey(const Key('save-app-access')));
+    await tester.pumpAndSettle();
+    expect(allowed.length, 102);
+    expect(find.byKey(const Key('save-app-access')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('bulk checkbox toggles mixed, checked and unchecked', (
+    tester,
+  ) async {
+    await open(tester);
+    final bulk = find.byKey(const Key('select-all-apps'));
+    CheckboxListTile box() => tester.widget<CheckboxListTile>(bulk);
+    expect(box().tristate, isTrue);
+    expect(box().value, isNull);
+    await tester.tap(bulk);
+    await tester.pumpAndSettle();
+    expect(box().value, isTrue);
+    expect(box().onChanged, isNotNull);
+    await tester.tap(bulk);
+    await tester.pumpAndSettle();
+    expect(box().value, isFalse);
+    await tester.tap(find.byKey(const Key('save-app-access')));
+    await tester.pumpAndSettle();
+    expect(find.text('Select at least one app.'), findsOneWidget);
+    expect(calls.where((c) => c.method == 'setAllowedPackages'), isEmpty);
+    await tester.tap(bulk);
+    await tester.tap(find.byKey(const Key('save-app-access')));
+    await tester.pumpAndSettle();
+    expect(
+      allowed,
+      unorderedEquals(['dev.phonebridge.phonebridge', 'com.android.chrome']),
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('clearing filtered results preserves hidden grants', (
+    tester,
+  ) async {
+    allowed = ['dev.phonebridge.phonebridge', 'com.android.chrome'];
+    await open(tester);
+    await tester.enterText(
+      find.byKey(const Key('search-app-access')),
+      'Chrome',
+    );
+    await tester.pumpAndSettle();
+    final bulk = find.byKey(const Key('select-all-apps'));
+    expect(tester.widget<CheckboxListTile>(bulk).value, isTrue);
+    await tester.tap(bulk);
+    await tester.tap(find.byKey(const Key('save-app-access')));
+    await tester.pumpAndSettle();
+    expect(allowed, ['dev.phonebridge.phonebridge']);
+    await tester.pumpWidget(const SizedBox());
+  });
+
+  testWidgets('empty results disable unchecked bulk checkbox', (tester) async {
+    await open(tester);
+    await tester.enterText(
+      find.byKey(const Key('search-app-access')),
+      'no-such-package',
+    );
+    await tester.pumpAndSettle();
+    final box = tester.widget<CheckboxListTile>(
+      find.byKey(const Key('select-all-apps')),
+    );
+    expect(box.value, isFalse);
+    expect(box.onChanged, isNull);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
-    'over-limit select all is explicit and can be reduced before save',
+    'only unavailable results can revoke old grants but not add them',
     (tester) async {
-      extraApps = List.generate(
-        63,
-        (i) => {
-          'packageName': 'com.example.app$i',
-          'name': 'App $i',
-          'installed': true,
+      allowed = ['dev.phonebridge.phonebridge', 'com.example.removed'];
+      extraApps = [
+        {
+          'packageName': 'com.example.removed',
+          'name': 'Removed',
+          'installed': false,
         },
-      );
+        {
+          'packageName': 'com.android.settings',
+          'name': 'Settings',
+          'installed': true,
+          'protected': true,
+        },
+      ];
       await open(tester);
-      await tester.tap(find.byKey(const Key('select-all-apps')));
-      await tester.pumpAndSettle();
-      expect(find.text('Selected 65 / 64'), findsOneWidget);
-      expect(
-        find.text('Up to 64 apps are allowed. Deselect some apps to continue.'),
-        findsOneWidget,
-      );
-      await tester.tap(find.byKey(const Key('save-app-access')));
-      await tester.pumpAndSettle();
-      expect(calls.where((c) => c.method == 'setAllowedPackages'), isEmpty);
       await tester.enterText(
         find.byKey(const Key('search-app-access')),
-        'Chrome',
+        'Removed',
       );
       await tester.pumpAndSettle();
-      final chrome = find.byKey(const Key('app-com.android.chrome'));
-      await tester.ensureVisible(chrome);
-      await tester.tap(chrome);
+      final bulk = find.byKey(const Key('select-all-apps'));
+      expect(tester.widget<CheckboxListTile>(bulk).value, isTrue);
+      await tester.tap(bulk);
       await tester.pumpAndSettle();
-      expect(find.byKey(const Key('app-access-error')), findsNothing);
+      expect(tester.widget<CheckboxListTile>(bulk).value, isFalse);
+      expect(tester.widget<CheckboxListTile>(bulk).onChanged, isNull);
+      await tester.enterText(
+        find.byKey(const Key('search-app-access')),
+        'Settings',
+      );
+      await tester.pumpAndSettle();
+      expect(tester.widget<CheckboxListTile>(bulk).value, isFalse);
+      expect(tester.widget<CheckboxListTile>(bulk).onChanged, isNull);
       await tester.tap(find.byKey(const Key('save-app-access')));
       await tester.pumpAndSettle();
-      expect(allowed.length, 64);
-      expect(allowed, isNot(contains('com.android.chrome')));
+      expect(allowed, ['dev.phonebridge.phonebridge']);
       await tester.pumpWidget(const SizedBox());
     },
   );
+
+  testWidgets('bulk clear removes existing unavailable grants', (tester) async {
+    allowed = ['dev.phonebridge.phonebridge', 'com.example.removed'];
+    extraApps = [
+      {
+        'packageName': 'com.example.removed',
+        'name': 'Removed',
+        'installed': false,
+      },
+    ];
+    await open(tester);
+    final bulk = find.byKey(const Key('select-all-apps'));
+    await tester.tap(bulk);
+    await tester.pumpAndSettle();
+    expect(tester.widget<CheckboxListTile>(bulk).value, isTrue);
+    await tester.tap(bulk);
+    await tester.pumpAndSettle();
+    expect(tester.widget<CheckboxListTile>(bulk).value, isFalse);
+    await tester.tap(bulk);
+    await tester.tap(find.byKey(const Key('save-app-access')));
+    await tester.pumpAndSettle();
+    expect(
+      allowed,
+      unorderedEquals(['dev.phonebridge.phonebridge', 'com.android.chrome']),
+    );
+    await tester.pumpWidget(const SizedBox());
+  });
 }

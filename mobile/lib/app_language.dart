@@ -173,7 +173,7 @@ const _english = <String, String>{
   '连接异常，请检查电脑服务或网络': 'Connection issue. Check the computer service or network.',
   '恢复连接': 'Resume connection',
   "允许访问的应用": "Allowed apps",
-  "请选择 1–64 个应用": "Select 1–64 apps.",
+  "请至少选择一个应用": "Select at least one app.",
   "无法保存应用授权，请重试": "Could not save app access. Please try again.",
   "无法读取应用授权，请重试": "Could not load app access. Please try again.",
   "连接或授权已变化，请返回后重新打开应用列表":
@@ -187,8 +187,6 @@ const _english = <String, String>{
   "已选择": "Selected",
   "全选": "Select all",
   "全选搜索结果": "Select all results",
-  "最多允许 64 个应用，请取消部分勾选":
-      "Up to 64 apps are allowed. Deselect some apps to continue.",
   "未找到应用，试试其他名称": "No apps found. Try another name.",
   "系统授权页面仅能在手机操作": "System permission screens require local interaction.",
   "当前未安装": "Not installed",
