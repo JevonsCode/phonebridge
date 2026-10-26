@@ -93,20 +93,43 @@ class ControlQueueTest {
         advance(scope.pending == null)
         assertEquals(id(2), manager.lease!!.controlId)
     }
-    @Test fun localSelectionReservesAndGrantsFirstEligibleTicket() {
+    @Test fun localSelectionCannotInterruptTheOwnerOrMoveAComputerAheadOfTheQueue() {
         request("A", 1, 1); request("B", 2, 2); request("C", 3, 3)
+        val owner = manager.lease
+        manager.drainControlEvents()
         manager.select("C")
         advance()
-        assertEquals(id(3), manager.lease!!.controlId)
-        assertEquals(1, manager.waitingCount)
-        manager.release("C", 3, id(3)); advance()
+        assertSame(owner, manager.lease)
+        assertEquals(2, manager.waitingCount)
+        assertTrue(manager.drainControlEvents().isEmpty())
+        manager.release("A", 1, id(1)); advance()
         assertEquals(id(2), manager.lease!!.controlId)
+        assertEquals(1, manager.waitingCount)
+        manager.release("B", 2, id(2)); advance()
+        assertEquals(id(3), manager.lease!!.controlId)
     }
-    @Test fun reservationWithNoEligibleWaiterExpiresBeforeFifoGrant() {
+    @Test fun selectingANonRequestingComputerNeverDelaysFifoHandoff() {
         request("A", 1, 1); request("B", 2, 2)
         manager.select("D"); advance()
-        assertNull(manager.lease)
-        time = 60_000; advance()
+        assertEquals(id(1), manager.lease!!.controlId)
+        manager.release("A", 1, id(1)); advance()
+        assertEquals(id(2), manager.lease!!.controlId)
+        assertEquals(0L, time)
+    }
+    @Test fun selectingAComputerDuringAnAcceptedGesturePreservesAuthorityUntilCompletion() {
+        val scope = SessionOperationScope()
+        request("A", 1, 1); request("B", 2, 2)
+        val owner = manager.lease!!
+        assertTrue(scope.begin("gesture"))
+        val generation = scope.generation
+        scope.markGestureDispatched(generation)
+        manager.select("B")
+        advance(scope.pending == null)
+        assertTrue(manager.valid(owner))
+        assertTrue(scope.isCurrent(generation))
+        assertEquals(1, manager.waitingCount)
+        assertTrue(scope.complete("gesture", generation))
+        manager.release("A", 1, id(1)); advance(scope.pending == null)
         assertEquals(id(2), manager.lease!!.controlId)
     }
     @Test fun disconnectAndQueuedReleaseCancelOnlyMatchingTickets() {

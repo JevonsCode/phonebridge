@@ -36,7 +36,6 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
     } }
     private var serial = 0L
     private val retired = mutableSetOf<String>()
-    private var reservation: Pair<String, Long>? = null
     var lease: Lease? = null
         private set
     private fun key(id: String, connection: Long, control: String?) =
@@ -69,14 +68,13 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
         return removed.isNotEmpty()
     }
     fun expire(): Boolean {
-        var changed = lease?.let { now() >= it.deadline } == true
+        val changed = lease?.let { now() >= it.deadline } == true
         if (changed) retire("expired")
-        if (reservation?.let { now() >= it.second } == true) { reservation = null; changed = true }
         return removeTickets("expired") { now() >= it.deadline } || changed
     }
+    /** Selecting a computer only changes the local settings view, never task authority or FIFO order. */
     fun select(computerId: String) {
-        retire("handoff"); reservation = computerId to now() + idleMillis
-        record("reserved", computerId); positions()
+        record("selected", computerId)
     }
     fun disconnect(computerId: String, connection: Long) {
         if (lease?.let { it.computerId == computerId && it.connection == connection } == true) retire("disconnected")
@@ -84,17 +82,15 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
     }
     fun revoke(computerId: String) {
         if (lease?.computerId == computerId) retire("revoked")
-        if (reservation?.first == computerId) reservation = null
         removeTickets("cancelled") { it.computerId == computerId }
     }
-    fun clear() { retire("stopped"); reservation = null; removeTickets("cancelled") { true } }
+    fun clear() { retire("stopped"); removeTickets("cancelled") { true } }
     private fun requireCapacity() {
         if (retired.size + waiters.size + (if (lease?.controlId != null) 1 else 0) >= maximumRetired)
             throw BridgeFailure("TASK_LIMIT", "Control task limit reached. Restart PhoneBridge locally before acquiring a new task.")
     }
-    private fun reservedForOther(id: String) = reservation?.first?.let { it != id } == true
     private fun ownerBusy(): Nothing = throw BridgeFailure("CONTROL_BUSY", lease?.let { "Control is held by ${it.name}." }
-        ?: "Control is reserved or another task is waiting.")
+        ?: "Another task is waiting for control.")
     fun acquire(computerId: String, connection: Long, name: String, controlId: String): Lease =
         claim(computerId, connection, name, validateId(controlId), true)
     fun authorize(computerId: String, connection: Long, name: String, controlId: String?): Lease {
@@ -125,12 +121,11 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
             return current
         }
         if (control != null && !acquire) expired()
-        if (reservedForOther(id) || waiters.any { !reservedForOther(it.computerId) }) ownerBusy()
+        if (waiters.isNotEmpty()) ownerBusy()
         if (control != null) requireCapacity()
         return grant(id, connection, name, control)
     }
     private fun grant(id: String, connection: Long, name: String, control: String?): Lease {
-        reservation = null
         return Lease(id, connection, control, name, ++serial, now() + idleMillis).also {
             lease = it; record("acquired", id)
             if (control != null) push(id, connection, control, "active")
@@ -142,9 +137,8 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
         lease?.let { if (!isLive(it.computerId, it.connection)) retire("disconnected") }
         removeTickets("cancelled") { !isLive(it.computerId, it.connection) }
         if (lease != null || !executorSettled) return false
-        val next = waiters.indexOfFirst { !reservedForOther(it.computerId) }
-        if (next < 0) return false
-        val t = waiters.removeAt(next)
+        if (waiters.isEmpty()) return false
+        val t = waiters.removeAt(0)
         grant(t.computerId, t.connection, t.name, t.controlId)
         positions()
         return true
@@ -161,7 +155,7 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
             ?.let { return TaskStatus(normalized, "active", ownerName = it.name, expiresInMs = it.deadline - now()) }
         waiters.indexOfFirst { it.computerId == computerId && it.connection == connection && it.controlId == normalized }
             .takeIf { it >= 0 }?.let { return TaskStatus(normalized, "queued", it + 1, lease?.name, waiters[it].deadline - now()) }
-        if (lease == null && executorSettled && !reservedForOther(computerId) && waiters.none { !reservedForOther(it.computerId) }) {
+        if (lease == null && executorSettled && waiters.isEmpty()) {
             requireCapacity()
             grant(computerId, connection, name, normalized)
             return TaskStatus(normalized, "active", ownerName = name, expiresInMs = idleMillis)

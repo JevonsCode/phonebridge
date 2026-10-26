@@ -39,22 +39,23 @@ class ControlLeaseManagerTest {
         manager.disconnect("A", 1)
         fails("CONTROL_EXPIRED") { manager.acquire("A", 3, "A", b) }
     }
-    @Test fun selectionReservesForSixtySecondsAndDoesNotCountAsControl() {
-        val old = manager.acquire("A", 1, "A", a)
+    @Test fun selectingAnotherComputerPreservesTheActiveTaskAndItsDeadline() {
+        val owner = manager.acquire("A", 1, "A", a)
+        val deadline = owner.deadline
+        time += 10_000
         manager.select("B")
-        assertNull(manager.lease)
-        assertFalse(manager.valid(old))
-        fails("CONTROL_EXPIRED") { manager.authorize("A", 1, "A", a) }
-        fails("CONTROL_BUSY") { manager.authorize("A", 1, "A", null) }
-        time += 60_000
-        assertNotNull(manager.authorize("A", 1, "A", null))
-    }
-    @Test fun selectedComputerCanClaimReservationWithoutDisconnectingAnotherSocket() {
-        manager.select("B")
-        val owner = manager.authorize("B", 2, "B", null)
-        manager.disconnect("A", 1)
+        assertSame(owner, manager.lease)
         assertTrue(manager.valid(owner))
-        fails("CONTROL_BUSY") { manager.acquire("A", 1, "A", a) }
+        assertEquals(deadline, owner.deadline)
+        assertSame(owner, manager.authorize("A", 1, "A", a))
+        assertEquals("queued", manager.request("B", 2, "B", b, true, true) { _, _ -> true }.state)
+    }
+    @Test fun selectingAnIdleComputerDoesNotReserveThePhoneFromTheFirstRequester() {
+        manager.select("B")
+        val owner = manager.acquire("A", 1, "A", a)
+        manager.disconnect("B", 2)
+        assertTrue(manager.valid(owner))
+        fails("CONTROL_BUSY") { manager.acquire("B", 2, "B", b) }
     }
     @Test fun expiryWhileExecutingDoesNotOpenExecutorFence() {
         val scope = SessionOperationScope()
@@ -155,7 +156,7 @@ class ControlLeaseManagerTest {
     @Test fun arbitrationDiagnosticsAreBoundedAndContainNoCommandContent() {
         repeat(100) { manager.select("computer") }
         assertEquals(64, manager.events().size)
-        assertTrue(manager.events().all { it.event == "reserved" && it.computerId == "computer" })
+        assertTrue(manager.events().all { it.event == "selected" && it.computerId == "computer" })
     }
     @Test fun renewalExtendsOnlyTheExistingActiveTask() {
         val owner = manager.acquire("A", 1, "A", a)
