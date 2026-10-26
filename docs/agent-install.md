@@ -62,7 +62,7 @@ The owner enables PhoneBridge in Android's Accessibility settings and chooses al
 
 With explicit owner authorization for USB debugging and APK installation, an Agent can verify `adb devices`, compare the APK hash, run `adb install -r <verified-apk>`, and launch the app. The owner must approve the device's USB debugging prompt and any installation/security prompts. Do not use an unapproved device or silently grant accessibility.
 
-To remember another computer, scan that computer once. Current source keeps saved enabled computers connected independently. An AI can request the phone itself; the owner does not need to switch computers for each task. Tapping a computer in the phone list remains an explicit local handoff and leaves other transports connected. Global Stop pauses all connections; per-computer pause/forget affects its target. Keep action consent and allowed Apps scoped to each computer. Older released packages can have different connection behavior; do not claim a feature from the current branch was installed merely because pairing succeeded.
+To remember another computer, scan that computer once. Current source keeps saved enabled computers connected independently. An AI can request the phone itself; the owner does not need to switch computers for each task. Tapping a computer only opens its settings and resumes its saved connection; it does not interrupt the active workflow or change FIFO order. Global Stop pauses all connections; per-computer pause/forget affects its target. Keep action consent and allowed Apps scoped to each computer. Older released packages can have different connection behavior; do not claim a feature from the current branch was installed merely because pairing succeeded.
 
 ## Connect an AI client
 
