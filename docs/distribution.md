@@ -4,10 +4,10 @@ Release and developer-console status rechecked on 2026-10-26. Policy references 
 
 | Channel | Current status | Next step |
 |---|---|---|
-| GitHub Releases | v0.7.1 published with a direct ARM64 APK, Windows installer/portable ZIP and Apple Silicon/Intel Mac DMG/ZIP packages | Continue verified releases with the existing preview signer |
+| GitHub Releases | v0.7.2 published with a direct ARM64 APK, Windows installer/portable ZIP and Apple Silicon/Intel Mac DMG/ZIP packages | Continue verified releases with the existing preview signer |
 | Obtainium direct source | Official-source configuration prepared; it requires no directory listing | Import the configuration or use the README link; physical Obtainium import is not yet tested |
 | Obtainium directory | Not eligible yet: repository created 2026-10-09, with 0 stars at this check | Its current criteria require 4 months and 35 stars for GitHub sources |
-| GitHub-based store discovery | Public repository description/topics updated; v0.7.1 is the latest stable GitHub release | Availability in individual store clients is not verified |
+| GitHub-based store discovery | Public repository description/topics updated; v0.7.2 is the latest stable GitHub release | Availability in individual store clients is not verified |
 | F-Droid main repository | Text metadata, project icon and [packaging request draft](fdroid-packaging-request.md) prepared; not submitted or listed | Provide screenshots, validate a release build recipe, adapt the updater's distribution notice/variant, and sign in to GitLab for submission |
 | Uptodown | The old submission was rejected on 2026-10-15 for not meeting minimum quality standards. A 0.7.1 upload on 2026-10-26 was blocked with “This app has been banned as it does not meet our publication criteria.” | This channel cannot accept the new APK in its current console state. Use GitHub or Obtainium; no public Uptodown listing is claimed |
 | IzzyOnDroid | Not a suitable submission target | Current policy rejects generative-AI-produced App code; this project is AI-assisted. Other blockers include the debug preview binary and its size |
@@ -17,7 +17,7 @@ F-Droid normally builds from public source and signs with its own App key unless
 
 Prepared Fastlane text metadata under `fastlane/metadata/android/` is not a statement that any market has accepted the App. Never mark it as listed until the public listing is actually verified.
 
-Published releases dispatch `release-distribution.yml` on main to validate packages, synchronize the public update manifest and download links, and deploy GitHub Pages. It also generates an Uptodown submission kit. The kit does not upload to the store or override its editorial decisions. The 0.7.1 packages are published on [GitHub Releases](https://github.com/JevonsCode/phonebridge/releases/tag/v0.7.1); the Uptodown upload was blocked as recorded above.
+Published releases dispatch `release-distribution.yml` on main to validate packages, synchronize the public update manifest and download links, and deploy GitHub Pages. It also generates an Uptodown submission kit. The kit does not upload to the store or override its editorial decisions. The 0.7.2 packages are published on [GitHub Releases](https://github.com/JevonsCode/phonebridge/releases/tag/v0.7.2); the Uptodown upload was blocked as recorded above.
 
 Official references:
 
