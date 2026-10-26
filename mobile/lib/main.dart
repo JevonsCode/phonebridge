@@ -1340,7 +1340,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                       style: const TextStyle(color: muted, fontSize: 12),
                     ),
                   Text(
-                    tr(context, '点击电脑可将控制权交给它，其他电脑保持连接。'),
+                    tr(context, 'AI 按顺序排队，用完自动交接；点选电脑仅查看设置。'),
                     style: const TextStyle(color: muted, fontSize: 12),
                   ),
                   const SizedBox(height: 12),

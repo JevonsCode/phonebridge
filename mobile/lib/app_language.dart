@@ -167,8 +167,8 @@ const _english = <String, String>{
   '无法保存屏幕常亮设置，请重试': 'Could not save the screen awake setting. Try again.',
   '台电脑在线': 'computers online',
   '当前控制方': 'Controlled by',
-  '点击电脑可将控制权交给它，其他电脑保持连接。':
-      'Tap a computer to hand over control. Other computers stay connected.',
+  'AI 按顺序排队，用完自动交接；点选电脑仅查看设置。':
+      'AI tasks queue and hand over automatically. Tap a computer to view its settings.',
   '正在控制': 'Controlling',
   '连接异常，请检查电脑服务或网络': 'Connection issue. Check the computer service or network.',
   '恢复连接': 'Resume connection',
