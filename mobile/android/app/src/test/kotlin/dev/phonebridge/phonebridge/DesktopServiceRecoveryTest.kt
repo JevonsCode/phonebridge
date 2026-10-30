@@ -9,8 +9,8 @@ import java.util.concurrent.atomic.AtomicReference
 
 class DesktopServiceRecoveryTest {
     @Test fun endpointPreservesAuthorityAndTls() {
-        assertEquals("http://192.168.31.159:8767/service/start",
-            DesktopServiceRecovery.startEndpoint("ws://192.168.31.159:8767/device", true))
+        assertEquals("http://192.168.1.20:8767/service/start",
+            DesktopServiceRecovery.startEndpoint("ws://192.168.1.20:8767/device", true))
         assertEquals("https://desktop.example:443/service/start",
             DesktopServiceRecovery.startEndpoint("wss://desktop.example:443/device", false))
         assertEquals("http://[::1]:8767/service/start",

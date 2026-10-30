@@ -2,7 +2,7 @@
 
 让现有 AI 助手通过你授权的安卓应用，看界面、点击、滑动和输入。
 
-[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [English website](https://xn--8ovp9s.xn--m8txu.com/phonebridge/en/) · [下载 Windows 客户端](https://github.com/JevonsCode/phonebridge/releases/download/v0.7.2/phonebridge-0.7.2-windows-setup.exe) · [下载 Mac 客户端](https://github.com/JevonsCode/phonebridge/releases/tag/v0.7.0) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.7.2/phonebridge-0.7.2-arm64.apk) · [用 Obtainium 跟踪更新](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.phonebridge.phonebridge%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FJevonsCode%2Fphonebridge%22%2C%22author%22%3A%22JevonsCode%22%2C%22name%22%3A%22PhoneBridge%22%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Atrue%7D%22%7D) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
+[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [English website](https://xn--8ovp9s.xn--m8txu.com/phonebridge/en/) · [下载 Windows 客户端](https://github.com/JevonsCode/phonebridge/releases/download/v0.7.2/phonebridge-0.7.2-windows-setup.exe) · [下载 Mac 客户端](https://github.com/JevonsCode/phonebridge/releases/latest) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.7.2/phonebridge-0.7.2-arm64.apk) · [用 Obtainium 跟踪更新](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.phonebridge.phonebridge%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FJevonsCode%2Fphonebridge%22%2C%22author%22%3A%22JevonsCode%22%2C%22name%22%3A%22PhoneBridge%22%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Atrue%7D%22%7D) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
 
 这是一个早期开发者预览版。它提供手机执行工具，不内置大模型，也不承诺“完全控制手机”。无障碍权限需要机主在系统设置中亲自开启。微信功能基于可见界面，不读取私有聊天数据库。真机兼容性与验证范围见 [验证记录](docs/verification.md)。
 
@@ -25,6 +25,7 @@ PhoneBridge MCP → 本机 Hub ← 经过配对的 Android 手机
 - 默认只读；手机端单独开启操作；通知栏和 App 内均可停止。
 - 点击、长按和滑动会显示短暂的操作轨迹，可在设置关闭；轨迹不挡点击，也不进入截图。
 - 手机可记住多台电脑；每台电脑分别保存操作开关与允许应用。
+- 电脑可随时显示二维码继续添加手机，并对已保存的手机改名、断开/恢复连接或删除。
 - Mac「连接」页或 AI 的 `phone_send_file` 可通过局域网发送文件；手机默认自动接收可信电脑的文件，也可关闭自动接收后手动接收。接收后可另行分享给微信、WhatsApp 等应用。每次一个文件，最大 50 MiB。详见 [文件传输](docs/file-transfer.md)。
 - 手机「设置」底部提供操作日志时间线，合并当前电脑操作与本机文件传输记录。
 - 电脑保存操作日志，AI 可用 `phone_operation_history` 读取时间、动作与结果；重启后仍保留。输入内容、界面文字、截图和密钥不写入日志。详见 [操作日志](docs/operation-logs.md)。
@@ -43,7 +44,7 @@ AI 应先申请控制，等待获准后将返回的任务句柄传给观察、�
 
 ### 选择允许访问的应用
 
-在手机首页打开「允许访问的应用」，搜索后可点「全选」选中当前结果里的可授权应用，再逐项取消不需要的勾选，最后点「保存」。每台电脑分别保存授权；一次最多允许 64 个应用，超出时会提示，不会静默截断。未点保存的修改不生效。授权编辑期间远程查看和操作会被阻止，权限只能由机主在手机上调整。
+在手机首页打开「允许访问的应用」，搜索后可点「全选」选中当前结果里的可授权应用，再逐项取消不需要的勾选，最后点「保存」。每台电脑分别保存授权；全选后可以逐项取消不需要的应用。未点保存的修改不生效。授权编辑期间远程查看和操作会被阻止，权限只能由机主在手机上调整。
 
 ### 手机扫码下载
 
