@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TrustedComputersTest {
+    @Test fun explicitPairingRegistrationSurvivesEncryptionPayloadRoundTrip() {
+        val original = TrustedComputers().remember(pairing())
+        val json = org.json.JSONObject(original.encode())
+        val registration = java.util.UUID.randomUUID().toString()
+        json.getJSONArray("computers").getJSONObject(0).put("registrationId", registration)
+        val decoded = TrustedComputers.decode(json.toString())
+        assertEquals(registration, org.json.JSONObject(decoded.encode()).getJSONArray("computers").getJSONObject(0).optString("registrationId"))
+        json.getJSONArray("computers").getJSONObject(0).put("registrationId", "invalid")
+        assertThrows(IllegalArgumentException::class.java) { TrustedComputers.decode(json.toString()) }
+    }
+
     @Test fun connectedSystemSurvivesRestartWithoutChangingConsentOrSelection() {
         val original = TrustedComputers().remember(pairing()).remember(pairing("b".repeat(32)))
         val first = original.entries.first()

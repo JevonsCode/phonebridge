@@ -530,6 +530,8 @@ const _english = <String, String>{
   '语言': 'Language',
   '跟随系统': 'Follow system',
   '无法保存语言设置，请重试': 'Could not save language preference. Retry.',
+  '电脑已断开连接': 'Disconnected by the computer',
+  '在电脑端恢复连接后即可继续使用。': 'Resume the connection on your computer to continue.',
   '正在恢复连接': 'Restoring connection',
   '授权仍然保留，正在等待系统恢复无障碍服务。':
       'Authorization is retained. Waiting for Android to reconnect the accessibility service.',

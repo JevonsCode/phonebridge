@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { PhoneHub } from './hub.js';
 import { startPairingDisplay } from './pairing.js';
 import { credentialPath, loadOrCreateSavedToken } from './credentials.js';
@@ -19,7 +20,7 @@ async function main(): Promise<void> {
   if (!!cert !== !!key) throw new Error('Provide both TLS certificate and key paths.');
   const port = Number(process.env.PHONEBRIDGE_PORT ?? 8765);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Invalid port.');
-  const hub = new PhoneHub({ token, host: process.env.PHONEBRIDGE_HOST, port, allowLan: args.includes('--allow-lan'), tls: cert && key ? { cert: readFileSync(cert), key: readFileSync(key) } : undefined });
+  const hub = new PhoneHub({ token, phoneDirectoryPath: remember ? join(dirname(credentialPath()), 'phones.json') : undefined, host: process.env.PHONEBRIDGE_HOST, port, allowLan: args.includes('--allow-lan'), tls: cert && key ? { cert: readFileSync(cert), key: readFileSync(key) } : undefined });
   const url = await hub.start();
   let pairing: Awaited<ReturnType<typeof startPairingDisplay>> | undefined;
   try {

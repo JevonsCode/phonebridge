@@ -237,7 +237,7 @@ object BridgeSession {
                 replaceAllowedPackages: Boolean = false) {
         val native = requireReady(); initialize(native)
         val record = computers.forConnection(TrustedPairing(EndpointPolicy.validate(url, allowInsecureLocal), token,
-            allowInsecureLocal, allowed.distinct(), false, true), replaceAllowedPackages)
+            allowInsecureLocal, allowed.distinct(), false, true, UUID.randomUUID().toString()), replaceAllowedPackages)
         validatePairing(record)
         transports.remove("temporary")?.let { close(it) }
         if (remember) {
@@ -478,6 +478,7 @@ object BridgeSession {
                 t.negotiatedV2 = response.header("X-PhoneBridge-Protocol") == "2"
                 if (t.negotiatedV2) hello.put("protocol", 2).put("deviceId", deviceId)
                     .put("device", Build.MODEL).put("capabilities", JSONArray(listOf("multi_device", "control_lease", "control_queue", "element_actions", "state_v2", "display_awake", "clipboard", "selectors", "image_coordinates", "text_actions", "control_renew")))
+                if (t.negotiatedV2 && response.header("X-PhoneBridge-Device-Management") == "1" && t.record.registrationId.isNotEmpty()) hello.put("registrationId", t.record.registrationId)
                 if (!ws.send(hello.toString())) lost(t, "Connection was interrupted.") else { sendStatus(t); showNotification() }
             } }
             override fun onMessage(ws: WebSocket, text: String) { main.post {
@@ -488,7 +489,13 @@ object BridgeSession {
             override fun onMessage(ws: WebSocket, bytes: ByteString) { main.post { if (current(t) && t.socket === ws) pause(t, "Binary commands are not supported.") } }
             override fun onClosing(ws: WebSocket, code: Int, reason: String) { main.post {
                 if (!current(t) || t.socket !== ws) return@post
-                if (code in setOf(1002, 1003, 1007, 1008, 1009)) pause(t, "Desktop rejected this session. Resume locally after checking pairing.")
+                if (code == 4004) {
+                    try {
+                        if (entry(t.id) != null) forgetComputer(t.id)
+                        else close(t, "This computer removed the phone. Pair again to reconnect.")
+                    } catch (_: Exception) { close(t, "Saved pairing could not be removed. Try again.") }
+                } else if (code == 4003) lost(t, "Computer paused this phone. Resume it on the computer.")
+                else if (code in setOf(1002, 1003, 1007, 1008, 1009)) pause(t, "Desktop rejected this session. Resume locally after checking pairing.")
                 else lost(t, "Desktop disconnected. Reconnecting to the trusted computer.")
             } }
             override fun onClosed(ws: WebSocket, code: Int, reason: String) { main.post { if (current(t) && t.socket === ws) lost(t, "Desktop disconnected. Reconnecting to the trusted computer.") } }

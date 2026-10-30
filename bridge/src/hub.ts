@@ -6,17 +6,18 @@ import { z } from 'zod';
 import { BridgeError, parseCommand, validateToken, type Method, type Reply } from './protocol.js';
 import { FileOperationJournal, historyQuerySchema, journalErrorCode, operationParams, type OperationJournal, type OperationRecord } from './operation-journal.js';
 
+import { PhoneDirectory } from './phone-directory.js';
 import { FileTransferSlot, fileMetadataSchema } from './file-transfer.js';
 
-type Options = { token: string; host?: string; port?: number; allowLan?: boolean; timeoutMs?: number; heartbeatIntervalMs?: number; tls?: { cert: Buffer; key: Buffer }; journal?: OperationJournal; publicEndpoint?: string };
+type Options = { token: string; host?: string; port?: number; allowLan?: boolean; timeoutMs?: number; heartbeatIntervalMs?: number; tls?: { cert: Buffer; key: Buffer }; journal?: OperationJournal; publicEndpoint?: string; phoneDirectory?: PhoneDirectory; phoneDirectoryPath?: string };
 export type Routing = { deviceId?: string; controlId?: string; connectionId?: string };
-type DisconnectReason = 'SOCKET_CLOSED' | 'SOCKET_ABNORMAL_CLOSE' | 'SOCKET_ERROR' | 'HEARTBEAT_TIMEOUT' | 'COMMAND_TIMEOUT' | 'SEND_FAILED' | 'PROTOCOL_ERROR' | 'HUB_SHUTDOWN' | 'JOURNAL_UNAVAILABLE';
+type DisconnectReason = 'SOCKET_CLOSED' | 'SOCKET_ABNORMAL_CLOSE' | 'SOCKET_ERROR' | 'HEARTBEAT_TIMEOUT' | 'COMMAND_TIMEOUT' | 'SEND_FAILED' | 'PROTOCOL_ERROR' | 'HUB_SHUTDOWN' | 'JOURNAL_UNAVAILABLE' | 'OWNER_DISCONNECTED' | 'OWNER_REMOVED';
 type Device = { id: string; name: string; protocol: number; capabilities: string[]; readOnly: boolean; controlling: boolean; controlOwnerName: string; waitingCount: number; connectionId: string; ws?: WebSocket; ready: boolean; alive: boolean; lastSeenAt: string; lastComputerEndpoint: string; lastDisconnectedAt?: string; lastDisconnectReason?: DisconnectReason; pending?: Pending; dispatching: boolean; managementPending: Map<string, Pending>; managementDispatching: number; controlEvents: Map<string, CachedControlEvent>; controlEventSequence: number; controlWaiters: Set<ControlWaiter>; eventTail: Promise<void>; eventWrites: number; files: FileTransferSlot };
 type Pending = { id: string; resolve: (reply: Reply) => void; reject: (error: BridgeError) => void; timer: NodeJS.Timeout };
 type ControlWaiter = { controlId: string; event: (event: ControlEvent) => void; reject: (error: BridgeError) => void };
 const responseSchema = z.object({ id: z.string().max(100), result: z.record(z.unknown()).optional(), error: z.object({ code: z.string().max(100), message: z.string().max(500), details: z.record(z.unknown()).optional() }).strict().optional() }).strict().refine(r => (r.result !== undefined) !== (r.error !== undefined));
 const helloSchema = z.object({ type: z.literal('hello'), protocol: z.literal(1), device: z.string().max(120).optional(), readOnly: z.boolean().optional() }).strict();
-const hello2Schema = z.object({ type: z.literal('hello'), protocol: z.literal(2), deviceId: z.string().uuid(), device: z.string().min(1).max(120), readOnly: z.boolean(), capabilities: z.array(z.string().min(1).max(100)).max(100) }).strict();
+const hello2Schema = z.object({ type: z.literal('hello'), protocol: z.literal(2), deviceId: z.string().uuid(), device: z.string().min(1).max(120), registrationId: z.string().uuid().optional(), readOnly: z.boolean(), capabilities: z.array(z.string().min(1).max(100)).max(100) }).strict();
 const statusSchema = z.object({ type: z.literal('status'), readOnly: z.boolean(), controlling: z.boolean(), controlOwnerName: z.string().max(80), waitingCount: z.number().int().min(0).max(64).default(0) }).strict();
 const controlStateFields = { state: z.enum(['queued', 'active', 'released', 'expired', 'cancelled']), position: z.number().int().min(1).max(64).optional(), ownerName: z.string().max(80).optional() } as const;
 const controlEventSchema = z.object({ type: z.literal('control_event'), controlId: z.string().uuid(), ...controlStateFields }).strict();
@@ -31,12 +32,14 @@ export class PhoneHub {
   private wss = new WebSocketServer({ noServer: true, maxPayload: 4 * 1024 * 1024, perMessageDeflate: false });
   private devices = new Map<string, Device>();
   private heartbeat?: NodeJS.Timeout;
+  private phones: PhoneDirectory;
   private digest: Buffer;
   private journal: OperationJournal;
   private controlWaiterCount = 0;
   private disconnectReasons = new WeakMap<WebSocket, DisconnectReason>();
   constructor(private options: Options) {
     validateToken(options.token);
+    this.phones = options.phoneDirectory ?? new PhoneDirectory(options.phoneDirectoryPath);
     this.journal = options.journal ?? new FileOperationJournal();
     this.digest = createHash('sha256').update(`Bearer ${options.token}`).digest();
     const host = options.host ?? '127.0.0.1';
@@ -44,7 +47,7 @@ export class PhoneHub {
     this.server = options.tls ? https.createServer(options.tls, (q, s) => void this.handle(q, s)) : http.createServer((q, s) => void this.handle(q, s));
     this.server.requestTimeout = 60000;
     this.server.headersTimeout = 5000;
-    this.wss.on('headers', headers => headers.push('X-PhoneBridge-Protocol: 2',
+    this.wss.on('headers', headers => headers.push('X-PhoneBridge-Protocol: 2', 'X-PhoneBridge-Device-Management: 1',
       `X-PhoneBridge-System: ${process.platform === 'darwin' ? 'macOS' : process.platform === 'win32' ? 'Windows' : process.platform === 'linux' ? 'Linux' : 'Other'}`));
     this.server.on('upgrade', (req, socket, head) => {
       if (req.url !== '/device' || req.headers.origin || !this.authorized(req)) {
@@ -69,6 +72,33 @@ export class PhoneHub {
     if (req.headers.origin) { this.respond(res, 403, { error: { code: 'ORIGIN_REFUSED', message: 'Browser origins are not supported.' } }); return; }
     if (req.method === 'GET' && req.url === '/health') { this.respond(res, 200, { ok: true, protocol: 1 }); return; }
     if (!this.authorized(req)) { this.respond(res, 401, { error: { code: 'UNAUTHORIZED', message: 'Authentication required.' } }); return; }
+    if (req.method === 'POST' && req.url === '/device-management') {
+      try {
+        if (!req.headers['content-type']?.startsWith('application/json')) throw new BridgeError('CONTENT_TYPE', 'Use application/json.', 415);
+        let size = 0; const chunks: Buffer[] = [];
+        for await (const chunk of req) { const bytes = Buffer.from(chunk); size += bytes.length; if (size > 2048) throw new BridgeError('INVALID_PARAMS', 'Request too large.'); chunks.push(bytes); }
+        const text = Buffer.concat(chunks).toString('utf8');
+        const parsed = z.object({ id: z.string().min(1).max(120), action: z.enum(['rename', 'disconnect', 'resume', 'delete']), name: z.string().max(80).optional() }).strict().safeParse(JSON.parse(text));
+        if (!parsed.success) throw new BridgeError('INVALID_PARAMS', 'Invalid phone action.');
+        const { id, action, name } = parsed.data;
+        if (!this.phones.get(id) || this.phones.get(id)?.removed) throw new BridgeError('NO_DEVICE', 'The phone record no longer exists.', 404);
+        if (action === 'rename' && (!name?.trim() || /[\x00-\x1f\x7f]/u.test(name))) throw new BridgeError('INVALID_PARAMS', 'Enter a phone name of up to 80 characters.');
+        this.phones.update(id, action, name);
+        const device = this.devices.get(id);
+        if (device?.ws && (action === 'disconnect' || action === 'delete')) {
+          this.recordDisconnect(device, device.ws, action === 'delete' ? 'OWNER_REMOVED' : 'OWNER_DISCONNECTED');
+          device.files.clear();
+          this.rejectControlWaiters(device, new BridgeError('DISCONNECTED', 'Connection ended by the computer owner.', 503));
+          this.rejectPending(device, new BridgeError('DISCONNECTED', 'Connection ended by the computer owner.', 503));
+          device.ws.close(action === 'delete' ? 4004 : 4003, action === 'delete' ? 'Pair again to reconnect' : 'Paused by computer owner');
+        }
+        this.respond(res, 200, { ok: true });
+      } catch (error) {
+        const e = error instanceof BridgeError ? error : new BridgeError('DEVICE_UPDATE_FAILED', 'Could not save phone settings. Try again.', 409);
+        this.respond(res, e.status, this.errorBody(e));
+      }
+      return;
+    }
     if (req.method === 'GET' && req.url === '/devices') { this.respond(res, 200, { devices: this.listDevices(), details: this.diagnostics() }); return; }
     if (req.method === 'GET' && req.url === '/status') {
       const online = [...this.devices.values()].filter(d => this.online(d));
@@ -170,7 +200,7 @@ export class PhoneHub {
       ? `${this.options.tls ? 'https' : 'http'}://${address.family === 'IPv6' ? `[${address.address}]` : address.address}:${address.port}` : '';
   }
   private diagnostics(): Record<string, unknown> {
-    const knownDevices = [...this.devices.values()].map(d => ({ id: d.id, name: d.name, connected: this.online(d), readOnly: d.readOnly, lastSeenAt: d.lastSeenAt, lastComputerEndpoint: d.lastComputerEndpoint, ...(d.lastDisconnectedAt ? { lastDisconnectedAt: d.lastDisconnectedAt, lastDisconnectReason: d.lastDisconnectReason } : {}) }));
+    const knownDevices = this.listDevices().map(d => ({ id: d.id, name: d.name, connected: d.connected, readOnly: d.readOnly, lastSeenAt: d.lastSeenAt, lastComputerEndpoint: d.lastComputerEndpoint, ...(d.lastDisconnectedAt ? { lastDisconnectedAt: d.lastDisconnectedAt, lastDisconnectReason: d.lastDisconnectReason } : {}) }));
     const connectionState = knownDevices.some(d => d.connected) ? 'connected' : knownDevices.length ? 'phone_offline' : 'no_phone_connected';
     return { publicEndpoint: this.publicEndpoint(), connectionState, knownDevices,
       nextSteps: connectionState === 'connected' ? ['Use phone_list_devices to select an online phone; readOnly is separate from connectivity.'] :
@@ -180,7 +210,15 @@ export class PhoneHub {
     return Object.assign(new BridgeError('NO_DEVICE', `${message} Current computer: ${this.publicEndpoint()}.`, 503), { details: this.diagnostics() });
   }
   private listDevices() {
-    return [...this.devices.values()].map(d => ({ id: d.id, name: d.name, connected: this.online(d), busy: !!d.pending || d.dispatching || d.managementDispatching > 0, protocol: d.protocol, capabilities: [...d.capabilities], readOnly: d.readOnly, controlling: d.controlling, controlOwnerName: d.controlOwnerName, waitingCount: d.waitingCount, connectionId: d.connectionId, lastSeenAt: d.lastSeenAt, lastComputerEndpoint: d.lastComputerEndpoint, ...(d.lastDisconnectedAt ? { lastDisconnectedAt: d.lastDisconnectedAt, lastDisconnectReason: d.lastDisconnectReason } : {}), transfer: d.files.status() }));
+    return this.phones.list().map(p => {
+      const d = this.devices.get(p.id);
+      return { id: p.id, name: p.alias ?? p.name, modelName: p.name, paused: p.paused,
+        connected: !!d && this.online(d), busy: !!d && (!!d.pending || d.dispatching || d.managementDispatching > 0),
+        protocol: d?.protocol ?? 2, capabilities: d ? [...d.capabilities] : [], readOnly: d?.readOnly ?? false,
+        controlling: d?.controlling ?? false, controlOwnerName: d?.controlOwnerName ?? '', waitingCount: d?.waitingCount ?? 0,
+        connectionId: d?.connectionId, lastSeenAt: d?.lastSeenAt, lastComputerEndpoint: d?.lastComputerEndpoint,
+        lastDisconnectedAt: d?.lastDisconnectedAt, lastDisconnectReason: d?.lastDisconnectReason, transfer: d?.files.status() };
+    });
   }
   private selectDevice(deviceId?: string, connectionId?: string): Device {
     if (deviceId !== undefined) {
@@ -310,6 +348,8 @@ export class PhoneHub {
           const existing = this.devices.get(id);
           // Reconnecting cannot bypass an outstanding command's journal fence.
           if (existing && (existing.ws || existing.dispatching || existing.pending || existing.managementDispatching)) { ws.close(1008, 'Device already connected'); return; }
+          const mode = this.phones.remember(id, hello.device ?? 'Phone', hello.protocol === 2 ? hello.registrationId : undefined);
+          if (mode !== 'allowed') { clearTimeout(helloTimeout); ws.close(mode === 'removed' ? 4004 : 4003, mode === 'removed' ? 'Pair again to reconnect' : 'Paused by computer owner'); return; }
           device = { id, name: hello.device ?? 'Phone', protocol: hello.protocol, capabilities: hello.protocol === 2 ? hello.capabilities : [], readOnly: hello.readOnly ?? false, controlling: false, controlOwnerName: '', waitingCount: 0, connectionId: randomUUID(), ws, ready: true, alive: true, lastSeenAt: new Date().toISOString(), lastComputerEndpoint: this.publicEndpoint(),
             ...(existing?.lastDisconnectedAt ? { lastDisconnectedAt: existing.lastDisconnectedAt, lastDisconnectReason: existing.lastDisconnectReason } : {}),
             dispatching: false, managementPending: new Map(), managementDispatching: 0, controlEvents: new Map(), controlEventSequence: 0, controlWaiters: new Set(), eventTail: Promise.resolve(), eventWrites: 0, files: new FileTransferSlot() };

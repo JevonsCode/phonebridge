@@ -142,6 +142,18 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('computer pause is a clear state without a generic error', (
+    tester,
+  ) async {
+    saved = autoReconnect = true;
+    lastError = 'Computer paused this phone. Resume it on the computer.';
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pumpAndSettle();
+    expect(find.text('电脑已断开连接'), findsOneWidget);
+    expect(find.byKey(const Key('error')), findsNothing);
+    await tester.pumpWidget(const SizedBox());
+  });
+
   testWidgets(
     'a restarting authorized service never asks for authorization again',
     (tester) async {

@@ -4,7 +4,9 @@ import { mkdtemp, mkdir, writeFile, readFile, chmod, symlink, rm, realpath } fro
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { once } from 'node:events';
+import WebSocket from '../../bridge/node_modules/ws/wrapper.mjs';
 import { readFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { loadOrCreateSavedToken } from '../../bridge/dist/credentials.js';
@@ -61,6 +63,20 @@ test('Mac service uses the credential selected by its saved configuration', {
     child.once('exit', code => { clearTimeout(timer); reject(new Error(`Service exited ${code}: ${stderr}`)); });
   });
   assert.equal((await authenticatedStatus(config, token)).connected, false);
+  const url = `http://${config.hostAddress}:${config.port}`;
+  const headers = { Authorization: `Bearer ${token}` }; const id = randomUUID();
+  const ws = new WebSocket(url.replace('http', 'ws') + '/device', { headers });
+  t.after(() => ws.terminate()); await once(ws, 'open');
+  ws.send(JSON.stringify({ type: 'hello', protocol: 2, deviceId: id, registrationId: randomUUID(), device: 'Test phone', readOnly: true, capabilities: [] }));
+  const deadline = Date.now() + 5000;
+  while (!(await authenticatedStatus(config, token)).connected) {
+    assert.ok(Date.now() < deadline); await new Promise(r => setTimeout(r, 10));
+  }
+  const response = await fetch(`${url}/device-management`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, action: 'rename', name: 'My phone' }) });
+  assert.equal(response.status, 200);
+  const directory = JSON.parse(await readFile(join(f.home, '.phonebridge', 'phones.json'), 'utf8'));
+  assert.equal(directory.phones.find(p => p.id === id).alias, 'My phone');
 });
 async function fixture(t) {
   const home=await realpath(await mkdtemp(join(tmpdir(),'phonebridge-mac-')));

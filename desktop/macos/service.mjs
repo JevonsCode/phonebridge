@@ -14,7 +14,7 @@ async function main() {
   const recovery = createNetworkRecovery({ config, networks: macNetworks,
     readConfig: () => readMacConfig(path),
     createCandidate: async next => {
-      const supervisor = new DesktopSupervisor({ token, host: next.hostAddress, port: next.port, allowLan: true,
+      const supervisor = new DesktopSupervisor({ token, phoneDirectoryPath: join(dirname(savedCredentialFile), 'phones.json'), host: next.hostAddress, port: next.port, allowLan: true,
         logFile: process.env.PHONEBRIDGE_LOG_FILE ?? join(dirname(savedCredentialFile), 'operations.jsonl') });
       try { await supervisor.start(); return supervisor; }
       catch (error) { await supervisor.close(); throw error; }

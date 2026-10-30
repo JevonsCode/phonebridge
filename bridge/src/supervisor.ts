@@ -12,7 +12,7 @@ type Options = {
   token: string; host?: string; port?: number; allowLan?: boolean;
   tls?: { cert: Buffer; key: Buffer }; autoStart?: boolean;
   restartDelayMs?: number; startupTimeoutMs?: number;
-  logFile?: string;
+  logFile?: string; phoneDirectoryPath?: string;
   discovery?: false | { port?: number; host?: string; allowLoopback?: boolean };
 };
 
@@ -142,7 +142,7 @@ export class DesktopSupervisor {
     const fileRoute = (req.method === 'POST' && endpoint.pathname === '/files') ||
       (['GET', 'DELETE'].includes(req.method ?? '') && /^\/files\/[a-f0-9-]{36}$/.test(endpoint.pathname)) ||
       (req.method === 'POST' && /^\/files\/[a-f0-9-]{36}\/received$/.test(endpoint.pathname));
-    if (!(fileRoute || (req.method === 'GET' && (req.url === '/status' || req.url === '/devices' || endpoint.pathname === '/operations' || endpoint.pathname === '/control-events')) || (req.method === 'POST' && req.url === '/rpc'))) {
+    if (!(fileRoute || (req.method === 'GET' && (req.url === '/status' || req.url === '/devices' || endpoint.pathname === '/operations' || endpoint.pathname === '/control-events')) || (req.method === 'POST' && ['/rpc', '/device-management'].includes(req.url ?? '')))) {
       req.resume(); this.respond(res, 404, { error: { code: 'NOT_FOUND' } }); return;
     }
     const target = this.hubUrl;
@@ -195,7 +195,7 @@ export class DesktopSupervisor {
     clearTimeout(this.retry); this.retry = undefined;
     const child = fork(fileURLToPath(new URL('./hub-worker.js', import.meta.url)), [], {
       env: { ...process.env, PHONEBRIDGE_TOKEN: this.options.token,
-        PHONEBRIDGE_PUBLIC_ENDPOINT: this.publicUrl ?? '', ...(this.options.logFile ? { PHONEBRIDGE_LOG_FILE: this.options.logFile } : {}) },
+        PHONEBRIDGE_PUBLIC_ENDPOINT: this.publicUrl ?? '', PHONEBRIDGE_PHONES_FILE: this.options.phoneDirectoryPath ?? '', ...(this.options.logFile ? { PHONEBRIDGE_LOG_FILE: this.options.logFile } : {}) },
       stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true,
       // Do not inherit tsx loaders or debugging flags into the fixed production worker.
       execArgv: [],

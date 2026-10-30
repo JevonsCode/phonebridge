@@ -1,6 +1,6 @@
 import { PhoneHub } from './hub.js';
 
-const hub = new PhoneHub({ token: process.env.PHONEBRIDGE_TOKEN ?? '', host: '127.0.0.1', port: 0 });
+const hub = new PhoneHub({ token: process.env.PHONEBRIDGE_TOKEN ?? '', host: '127.0.0.1', port: 0, phoneDirectoryPath: process.env.PHONEBRIDGE_PHONES_FILE || undefined });
 let stopping = false;
 const stop = () => {
   if (stopping) return;

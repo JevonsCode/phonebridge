@@ -88,14 +88,16 @@ data class TrustedComputers(val entries: List<TrustedComputer> = emptyList(), va
         private fun pairingJson(pairing: TrustedPairing) = JSONObject().put("endpoint", pairing.endpoint)
             .put("token", pairing.token).put("allowInsecureLocal", pairing.allowInsecureLocal)
             .put("packages", JSONArray(pairing.packages)).put("actionsEnabled", pairing.actionsEnabled)
-            .put("resumeAllowed", pairing.resumeAllowed)
+            .put("resumeAllowed", pairing.resumeAllowed).put("registrationId", pairing.registrationId)
 
         private fun pairingFrom(json: JSONObject): TrustedPairing {
             val savedPackages = json.getJSONArray("packages")
             val packages = (0 until savedPackages.length()).map { savedPackages.getString(it) }
             AppAccessPolicy.requirePackages(packages)
+            val registrationId = json.optString("registrationId", "")
+            require(registrationId.isEmpty() || (registrationId.length == 36 && UUID.fromString(registrationId).toString() == registrationId.lowercase()))
             return TrustedPairing(json.getString("endpoint"), json.getString("token"), json.getBoolean("allowInsecureLocal"),
-                packages, json.getBoolean("actionsEnabled"), json.getBoolean("resumeAllowed"))
+                packages, json.getBoolean("actionsEnabled"), json.getBoolean("resumeAllowed"), registrationId)
         }
     }
 }

@@ -107,7 +107,7 @@ export async function createDashboard({ config, token, status, startService, cha
       if (req.method === 'GET' && req.url === `${base}/ping`) { send(200, { client: 'phonebridge-desktop', pid: process.pid, clientIdentity }); return; }
       if (req.method === 'GET' && req.url === `${base}/status`) {
         let current; try { current = await status(); } catch { current = { connected: false, unavailable: true }; }
-        const devices = Array.isArray(current.devices) ? current.devices.map(({ id, name, connected, protocol, capabilities, busy, readOnly, connectionId, controlling, controlOwnerName, waitingCount, transfer }) => ({ id, name, connected, protocol, capabilities, busy, readOnly, connectionId, controlling, controlOwnerName, ...(Number.isInteger(waitingCount) && waitingCount >= 0 && waitingCount <= 64 ? { waitingCount } : {}), ...(transfer ? { transfer: { name: transfer.name, state: transfer.state, size: transfer.size, mimeType: transfer.mimeType } } : {}) })) : [];
+        const devices = Array.isArray(current.devices) ? current.devices.map(({ id, name, modelName, paused, connected, protocol, capabilities, busy, readOnly, connectionId, controlling, controlOwnerName, waitingCount, transfer }) => ({ id, name, modelName, paused, connected, protocol, capabilities, busy, readOnly, connectionId, controlling, controlOwnerName, ...(Number.isInteger(waitingCount) && waitingCount >= 0 && waitingCount <= 64 ? { waitingCount } : {}), ...(transfer ? { transfer: { name: transfer.name, state: transfer.state, size: transfer.size, mimeType: transfer.mimeType } } : {}) })) : [];
         send(200, { connected: current.connected, devices, transfer: current.transfer, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? hostname(), error: startupError?.() }); return;
       }
       if (req.method === 'POST' && req.url === `${base}/start`) { req.resume(); await startService(); send(200, { ok: true }); return; }
@@ -120,6 +120,16 @@ export async function createDashboard({ config, token, status, startService, cha
         if (connectionId !== undefined && (typeof connectionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(connectionId))) throw new Error('Invalid connection identity');
         const { sendLocalFile } = await import('../bridge/dist/send-file.js');
         send(200, await sendLocalFile(new URL(`http://${config.hostAddress}:${config.port}`), token, path, { deviceId, connectionId })); return;
+      }
+      if (req.method === 'POST' && req.url === `${base}/device-management`) {
+        let size = 0; const chunks = [];
+        for await (const chunk of req) { const bytes = Buffer.from(chunk); size += bytes.length; if (size > 2048) throw new Error('Request too large'); chunks.push(bytes); }
+        const body = Buffer.concat(chunks).toString('utf8');
+        const response = await fetch(`http://${config.hostAddress}:${config.port}/device-management`, { method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body, redirect: 'error', signal: AbortSignal.timeout(5000) });
+        const value = await response.json();
+        if (!response.ok) throw new Error(value.error?.message ?? 'Could not update phone settings.');
+        send(200, value); return;
       }
       if (req.method === 'POST' && req.url === `${base}/network`) {
         let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 1024) throw new Error('Request too large'); }
@@ -218,7 +228,7 @@ async function main() {
       readConfig: () => readOwnedConfig(path, sid),
       createCandidate: async next => {
         const { DesktopSupervisor, supervisorOptionsForPlatform } = await import('../bridge/dist/supervisor.js');
-        const candidate = new DesktopSupervisor(supervisorOptionsForPlatform({ token, host: next.hostAddress, port: next.port, allowLan: true,
+        const candidate = new DesktopSupervisor(supervisorOptionsForPlatform({ token, phoneDirectoryPath: join(dirname(savedCredentialFile), 'phones.json'), host: next.hostAddress, port: next.port, allowLan: true,
           logFile: process.env.PHONEBRIDGE_LOG_FILE ?? join(dirname(savedCredentialFile), 'operations.jsonl') }));
         try { await candidate.start(); return candidate; }
         catch (error) { await candidate.close(); throw error; }

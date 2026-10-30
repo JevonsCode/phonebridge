@@ -16,6 +16,7 @@ data class TrustedPairing(
     val packages: List<String>,
     val actionsEnabled: Boolean,
     val resumeAllowed: Boolean,
+    val registrationId: String = "",
 ) {
     override fun toString() = "TrustedPairing(redacted)"
 }

@@ -572,7 +572,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
         nativeError == 'Accessibility service stopped.';
     final message =
         error ??
-        (nativeError?.isNotEmpty == true && !retrying && !serviceRecovering
+        (nativeError?.isNotEmpty == true &&
+                !retrying &&
+                !serviceRecovering &&
+                nativeError !=
+                    'Computer paused this phone. Resume it on the computer.'
             ? userError(null, nativeError, '操作失败，请检查手机状态')
             : null);
     return PopScope(
@@ -743,8 +747,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
     final needsAccessibility =
         !accessibilityAuthorized && !connected && hasSavedPairing;
     final anyConnected = status['connected'] == true;
+    final computerPaused =
+        status['lastError'] ==
+        'Computer paused this phone. Resume it on the computer.';
     final title = anyConnected
         ? '已连接'
+        : computerPaused
+        ? '电脑已断开连接'
         : accessibilityRecovering
         ? '正在恢复连接'
         : needsAccessibility
@@ -754,7 +763,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
         : hasSavedPairing
         ? '连接已暂停'
         : '连接你的电脑';
-    final subtitle = accessibilityRecovering
+    final subtitle = computerPaused
+        ? '在电脑端恢复连接后即可继续使用。'
+        : accessibilityRecovering
         ? '授权仍然保留，正在等待系统恢复无障碍服务。'
         : needsAccessibility
         ? '请开启 PhoneBridge 无障碍服务，已记住的电脑会自动连接。'

@@ -126,6 +126,143 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
     ),
   );
 
+  Future<void> renamePhone(BuildContext context, DesktopDevice device) async {
+    final form = GlobalKey<FormState>();
+    var value = device.displayName;
+    final name = await showDialog<String>(
+      context: context,
+      builder: (dialog) {
+        void save() {
+          if (form.currentState!.validate()) {
+            Navigator.pop(dialog, value.trim());
+          }
+        }
+
+        return AlertDialog(
+          title: Text(t('重命名手机', 'Rename phone')),
+          constraints: const BoxConstraints(maxWidth: 480),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          content: SizedBox(
+            width: 400,
+            child: Form(
+              key: form,
+              child: TextFormField(
+                key: const Key('phone-name-input'),
+                initialValue: value,
+                autofocus: true,
+                maxLength: 80,
+                onChanged: (next) => value = next,
+                onFieldSubmitted: (_) => save(),
+                decoration: InputDecoration(
+                  labelText: t('手机名称', 'Phone name'),
+                  counterText: '',
+                  border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+                validator: (text) =>
+                    text == null ||
+                        text.trim().isEmpty ||
+                        RegExp(r'[\x00-\x1f\x7f]').hasMatch(text)
+                    ? t('请输入有效的手机名称', 'Enter a valid phone name')
+                    : null,
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialog),
+              child: Text(t('取消', 'Cancel')),
+            ),
+            FilledButton(onPressed: save, child: Text(t('保存', 'Save'))),
+          ],
+        );
+      },
+    );
+    if (name != null && mounted) {
+      await c.mutate('device-management', {
+        'id': device.id,
+        'action': 'rename',
+        'name': name,
+      });
+    }
+  }
+
+  Future<void> managePhone(
+    BuildContext context,
+    DesktopDevice device,
+    String action,
+  ) async {
+    if (action == 'delete' ||
+        (action == 'disconnect' && (device.busy || device.controlling))) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialog) => AlertDialog(
+          constraints: const BoxConstraints(maxWidth: 440),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(12),
+          ),
+          title: Text(
+            action == 'delete'
+                ? t(
+                    '删除「${device.displayName}」？',
+                    'Delete “${device.displayName}”?',
+                  )
+                : t(
+                    '断开「${device.displayName}」？',
+                    'Disconnect “${device.displayName}”?',
+                  ),
+          ),
+          content: Text(
+            action == 'delete'
+                ? t(
+                    '删除后，这台手机需要重新扫码连接。',
+                    'This phone will need to scan the pairing code again.',
+                  )
+                : t(
+                    '这会结束该手机上的当前操作。',
+                    'This ends the current operation on this phone.',
+                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialog, false),
+              child: Text(t('取消', 'Cancel')),
+            ),
+            FilledButton(
+              key: Key(
+                action == 'delete'
+                    ? 'confirm-delete-phone'
+                    : 'confirm-disconnect-phone',
+              ),
+              style: action == 'delete'
+                  ? FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFFB3261E),
+                    )
+                  : null,
+              onPressed: () => Navigator.pop(dialog, true),
+              child: Text(
+                action == 'delete'
+                    ? t('删除', 'Delete')
+                    : t('断开连接', 'Disconnect'),
+              ),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return;
+    }
+    await c.mutate('device-management', {'id': device.id, 'action': action});
+    if (mounted &&
+        c.failure == null &&
+        action == 'delete' &&
+        fileDeviceId == device.id) {
+      setState(() => fileDeviceId = null);
+    }
+  }
+
   String? fileError;
   String? fileDeviceId;
   Future<void> sendFile() async {
@@ -588,21 +725,27 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                           children: [
                             Text(
                               device.displayName,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w500,
                               ),
                             ),
-                            Text(
-                              device.id.length > 12
-                                  ? device.id.substring(0, 12)
-                                  : device.id,
-                              style: const TextStyle(
-                                color: muted,
-                                fontSize: 11,
+                            if (device.modelName?.isNotEmpty == true &&
+                                device.modelName != device.displayName)
+                              Text(
+                                device.modelName!,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: muted,
+                                  fontSize: 12,
+                                ),
                               ),
-                            ),
                             Text(
-                              !device.connected
+                              device.paused
+                                  ? t('已断开', 'Disconnected')
+                                  : !device.connected
                                   ? t('离线', 'Offline')
                                   : device.busy
                                   ? t('使用中', 'Busy')
@@ -632,6 +775,47 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                           ],
                         ),
                       ),
+                      IconButton(
+                        key: Key('rename-phone-${device.id}'),
+                        tooltip: t('重命名', 'Rename'),
+                        visualDensity: VisualDensity.compact,
+                        onPressed: c.mutating || choosingFile || !c.ready
+                            ? null
+                            : () => renamePhone(context, device),
+                        icon: const Icon(Icons.edit_outlined, size: 20),
+                      ),
+                      IconButton(
+                        key: Key('disconnect-phone-${device.id}'),
+                        tooltip: device.paused
+                            ? t('恢复连接', 'Resume connection')
+                            : t('断开连接', 'Disconnect'),
+                        visualDensity: VisualDensity.compact,
+                        onPressed: c.mutating || choosingFile || !c.ready
+                            ? null
+                            : () => managePhone(
+                                context,
+                                device,
+                                device.paused ? 'resume' : 'disconnect',
+                              ),
+                        icon: Icon(
+                          device.paused
+                              ? Icons.link_rounded
+                              : Icons.link_off_rounded,
+                          size: 20,
+                        ),
+                      ),
+                      IconButton(
+                        key: Key('delete-phone-${device.id}'),
+                        tooltip: t('删除手机', 'Delete phone'),
+                        visualDensity: VisualDensity.compact,
+                        onPressed: c.mutating || choosingFile || !c.ready
+                            ? null
+                            : () => managePhone(context, device, 'delete'),
+                        icon: const Icon(
+                          Icons.delete_outline_rounded,
+                          size: 20,
+                        ),
+                      ),
                     ],
                   ),
                 ),
@@ -654,40 +838,85 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                 ),
               ),
               const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                key: const Key('file-device-target'),
-                initialValue: fileDeviceId,
-                isExpanded: true,
-                borderRadius: BorderRadius.circular(14),
-                decoration: InputDecoration(
-                  labelText: t('接收手机', 'Receiving phone'),
-                ),
-                hint: Text(t('请选择接收手机', 'Choose a receiving phone')),
-                items: [
-                  if (fileDeviceId != null &&
-                      !devices.any((d) => d.id == fileDeviceId))
-                    DropdownMenuItem(
-                      value: fileDeviceId,
-                      child: Text('$fileDeviceId · ${t('离线', 'Offline')}'),
+              ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 440),
+                child: DropdownButtonFormField<String>(
+                  key: const Key('file-device-target'),
+                  initialValue: fileDeviceId,
+                  isExpanded: true,
+                  borderRadius: BorderRadius.circular(8),
+                  elevation: 2,
+                  dropdownColor: Colors.white,
+                  menuMaxHeight: 280,
+                  itemHeight: 56,
+                  decoration: InputDecoration(
+                    labelText: t('接收手机', 'Receiving phone'),
+                    filled: true,
+                    fillColor: Colors.white,
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 14,
                     ),
-                  for (final device in devices)
-                    DropdownMenuItem(
-                      value: device.id,
-                      child: Text(
-                        '${deviceLabel(device)} · ${!device.connected
-                            ? t('离线', 'Offline')
-                            : device.busy
-                            ? t('使用中', 'Busy')
-                            : device.readOnly
-                            ? t('仅观察', 'Read only')
-                            : t('在线', 'Online')}',
-                        overflow: TextOverflow.ellipsis,
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: Color(0xFFD8DEE8)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: const BorderSide(color: blue, width: 1.5),
+                    ),
+                  ),
+                  hint: Text(t('请选择接收手机', 'Choose a receiving phone')),
+                  items: [
+                    if (fileDeviceId != null &&
+                        !devices.any((d) => d.id == fileDeviceId))
+                      DropdownMenuItem(
+                        value: fileDeviceId,
+                        child: Text('$fileDeviceId · ${t('离线', 'Offline')}'),
                       ),
-                    ),
-                ],
-                onChanged: choosingFile || c.mutating
-                    ? null
-                    : (id) => setState(() => fileDeviceId = id),
+                    for (final device in devices)
+                      DropdownMenuItem(
+                        value: device.id,
+                        child: Row(
+                          children: [
+                            Icon(
+                              Icons.smartphone_rounded,
+                              size: 20,
+                              color: device.connected ? blue : muted,
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                '${deviceLabel(device)} · ${!device.connected
+                                    ? t('离线', 'Offline')
+                                    : device.busy
+                                    ? t('使用中', 'Busy')
+                                    : device.readOnly
+                                    ? t('仅观察', 'Read only')
+                                    : t('在线', 'Online')}',
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            SizedBox(
+                              width: 18,
+                              child: fileDeviceId == device.id
+                                  ? const Icon(
+                                      Icons.check_rounded,
+                                      size: 18,
+                                      color: blue,
+                                    )
+                                  : null,
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
+                  onChanged: choosingFile || c.mutating
+                      ? null
+                      : (id) => setState(() => fileDeviceId = id),
+                ),
               ),
               const SizedBox(height: 16),
               FilledButton.icon(

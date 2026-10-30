@@ -134,6 +134,7 @@ class DashboardApi {
           'network',
           'allow-lan',
           'send-file',
+          'device-management',
         ].contains(route)) {
       throw const BackendFailure('unavailable');
     }
@@ -205,6 +206,12 @@ class DesktopDevice {
     }
     id = data['id'];
     name = data['name'];
+    if ((data['paused'] != null && data['paused'] is! bool) ||
+        (data['modelName'] != null && data['modelName'] is! String)) {
+      throw const BackendFailure('response');
+    }
+    paused = data['paused'] == true;
+    modelName = data['modelName'] as String?;
     connected = data['connected'];
     busy = data['busy'];
     readOnly = data['readOnly'];
@@ -234,6 +241,8 @@ class DesktopDevice {
         : null;
   }
   late final String id, name;
+  late final String? modelName;
+  late final bool paused;
   late final bool connected, busy, readOnly;
   late final String? connectionId, controlOwnerName;
   late final bool controlling;
