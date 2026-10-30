@@ -32,6 +32,96 @@ void main() {
       expect(tester.takeException(), isNull);
     });
   }
+  for (final zh in [false, true]) {
+    for (final width in [440.0, 1120.0]) {
+      for (final count in [0, 1, 2]) {
+        testWidgets(
+          'show QR remains available with $count phones ${zh ? "zh" : "en"} $width',
+          (tester) async {
+            tester.view.physicalSize = Size(width, 840);
+            tester.view.devicePixelRatio = 1;
+            addTearDown(tester.view.resetPhysicalSize);
+            addTearDown(tester.view.resetDevicePixelRatio);
+            // Test-only PNG payload for rendering the pairing dialog.
+            final png = base64Encode(
+              (await rootBundle.load(
+                'assets/brand/logo.png',
+              )).buffer.asUint8List(),
+            );
+            final devices = [
+              for (var i = 0; i < count; i++)
+                {
+                  'id': 'phone-$i',
+                  'name': 'Phone $i',
+                  'connected': true,
+                  'busy': false,
+                  'readOnly': true,
+                },
+            ];
+            final data = {
+              ...statusData(),
+              'connected': count > 0,
+              'qr': 'data:image/png;base64,$png',
+              'devices': devices,
+            };
+            final c = DesktopController()..status = DesktopStatus(data);
+            addTearDown(c.dispose);
+            await tester.pumpWidget(
+              PhoneBridgeApp(controller: c, initialChinese: zh),
+            );
+            await tester.pumpAndSettle();
+            final button = find.byKey(const Key('show-pairing-qr'));
+            expect(button, findsOneWidget);
+            expect(find.text(zh ? '显示二维码' : 'Show QR code'), findsOneWidget);
+            expect(tester.getRect(button).bottom, lessThanOrEqualTo(840));
+            await tester.tap(button);
+            await tester.pumpAndSettle();
+            final dialog = find.byKey(const Key('phone-pairing-dialog'));
+            expect(dialog, findsOneWidget);
+            final qr = find.descendant(
+              of: dialog,
+              matching: find.byType(Image),
+            );
+            expect(qr, findsOneWidget);
+            expect(tester.getRect(qr).top, greaterThanOrEqualTo(0));
+            expect(tester.getRect(qr).bottom, lessThanOrEqualTo(840));
+            final originalQr = c.status!.qr!.toList();
+            c.status = DesktopStatus({
+              ...data,
+              'connected': true,
+              'devices': [
+                ...devices,
+                {
+                  'id': 'new',
+                  'name': 'New phone',
+                  'connected': true,
+                  'busy': false,
+                  'readOnly': true,
+                },
+              ],
+            });
+            await tester.pumpWidget(
+              PhoneBridgeApp(controller: c, initialChinese: zh),
+            );
+            await tester.pumpAndSettle();
+            expect(dialog, findsOneWidget);
+            expect(c.status!.devices.length, count + 1);
+            expect(c.status!.devices.every((d) => d.connected), isTrue);
+            expect(c.status!.qr, orderedEquals(originalQr));
+            await tester.tap(find.byTooltip(zh ? '关闭' : 'Close'));
+            await tester.pumpAndSettle();
+            expect(dialog, findsNothing);
+            expect(button, findsOneWidget);
+            await tester.tap(button);
+            await tester.pumpAndSettle();
+            expect(dialog, findsOneWidget);
+            expect(tester.takeException(), isNull);
+          },
+        );
+      }
+    }
+  }
+
   testWidgets('unavailable service does not invite scanning an unusable QR', (
     tester,
   ) async {

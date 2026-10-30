@@ -5,6 +5,17 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class TrustedComputersTest {
+    @Test fun connectedSystemSurvivesRestartWithoutChangingConsentOrSelection() {
+        val original = TrustedComputers().remember(pairing()).remember(pairing("b".repeat(32)))
+        val first = original.entries.first()
+        val updated = original.withSystemName(first.id, "macOS")
+        assertEquals(original.activeId, updated.activeId)
+        assertEquals(original.entries.map { it.pairing }, updated.entries.map { it.pairing })
+        assertEquals("macOS", TrustedComputers.decode(updated.encode()).entries.first().systemName)
+        assertEquals("", TrustedComputers.decode(original.encode()).entries.first().systemName)
+        assertEquals(updated, updated.withSystemName(first.id, "malformed\nvalue"))
+    }
+
     @Test fun expandingOneComputersAutomationPreservesOtherTrustAndActiveSelection() {
         val original = TrustedComputers().remember(pairing().copy(actionsEnabled = false, resumeAllowed = false))
             .remember(pairing("b".repeat(32)))

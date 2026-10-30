@@ -208,6 +208,32 @@ void main() {
   }
 
   testWidgets(
+    'computer list shows operating systems and explains idle access',
+    (tester) async {
+      entries[0]['systemName'] = 'macOS';
+      entries[1]['systemName'] = 'Windows';
+      await open(tester);
+      expect(find.text('macOS'), findsOneWidget);
+      expect(find.text('Windows'), findsOneWidget);
+      expect(find.text('空闲时任意电脑可直接使用；有人操作时自动排队。'), findsOneWidget);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
+    'an offline settings selection never hides another online computer',
+    (tester) async {
+      entries[0]['state'] = 'paused';
+      entries[1]['state'] = 'connected';
+      await tester.pumpWidget(const PhoneBridgeApp());
+      await tester.pumpAndSettle();
+      expect(find.text('已连接'), findsOneWidget);
+      expect(find.text('连接已暂停'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
+  testWidgets(
     'saved selection connects in one tap without scanning or another consent flow',
     (tester) async {
       await open(tester);
@@ -255,8 +281,8 @@ void main() {
       expect(active, 'second');
       expect(connected, isTrue);
       expect(entries.first['connected'], isTrue);
-      expect(find.text('连接已暂停'), findsOneWidget);
-      expect(find.text('已连接'), findsNothing);
+      expect(find.text('连接已暂停'), findsNothing);
+      expect(find.text('已连接'), findsOneWidget);
       final actions = tester.widget<SwitchListTile>(
         find.byKey(const Key('actions')),
       );

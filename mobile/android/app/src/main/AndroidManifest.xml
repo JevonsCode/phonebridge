@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
@@ -14,12 +16,15 @@
         <!-- Dynamic private-IP pairing needs this platform switch. EndpointPolicy
              refuses public cleartext endpoints and requires local acknowledgement. -->
         <service android:name=".PhoneAccessibilityService"
+            android:foregroundServiceType="specialUse"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="true" android:label="PhoneBridge">
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
             <meta-data android:name="android.accessibilityservice" android:resource="@xml/phonebridge_accessibility" />
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Maintain the user-enabled PhoneBridge accessibility connection to paired computers until the user pauses it." />
         </service>
         <receiver android:name=".StopSessionReceiver" android:exported="false" />
         <provider android:name="androidx.core.content.FileProvider"

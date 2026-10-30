@@ -40,6 +40,15 @@ async function setup(t: TestContext, timeoutMs = 1000, host = '127.0.0.1') {
   return { token, hub, url, headers, rpc, connect, journal };
 }
 
+test('authenticated phone handshake identifies the actual computer system', async t => {
+  const { url, headers } = await setup(t);
+  const ws = new WebSocket(url.replace('http', 'ws') + '/device', { headers });
+  t.after(() => ws.terminate());
+  const [response] = await once(ws, 'upgrade');
+  assert.equal(response.headers['x-phonebridge-system'],
+    process.platform === 'darwin' ? 'macOS' : process.platform === 'win32' ? 'Windows' : process.platform === 'linux' ? 'Linux' : 'Other');
+});
+
 test('health reveals no token or device information; commands require authentication', async t => {
   const { url } = await setup(t);
   assert.deepEqual(await (await fetch(`${url}/health`)).json(), { ok: true, protocol: 1 });

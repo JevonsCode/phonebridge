@@ -15,6 +15,7 @@ void main() {
   var autoReconnect = false;
   var rememberedActions = false, connecting = false;
   var accessibility = true, reconnecting = false;
+  bool? accessibilityAuthorized;
   var lastError = '';
   Completer<void>? desktopStart;
   PlatformException? desktopFailure;
@@ -28,6 +29,7 @@ void main() {
     rememberedActions = false;
     connecting = false;
     accessibility = true;
+    accessibilityAuthorized = null;
     lastError = '';
     reconnecting = false;
     desktopStart = null;
@@ -65,6 +67,7 @@ void main() {
           if (call.method == 'status') {
             return {
               'accessibilityEnabled': accessibility,
+              'accessibilityAuthorized': ?accessibilityAuthorized,
               'reconnecting': reconnecting,
               'connected': connected,
               'connecting': connecting,
@@ -139,6 +142,29 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets(
+    'a restarting authorized service never asks for authorization again',
+    (tester) async {
+      saved = autoReconnect = true;
+      accessibility = false;
+      accessibilityAuthorized = true;
+      lastError = 'Accessibility service stopped.';
+      await tester.pumpWidget(const PhoneBridgeApp());
+      await tester.pumpAndSettle();
+      expect(find.text('正在恢复连接'), findsOneWidget);
+      expect(find.byKey(const Key('enable-accessibility')), findsNothing);
+      expect(find.text('无障碍服务已关闭'), findsNothing);
+      expect(find.byKey(const Key('error')), findsNothing);
+      expect(calls.any((c) => c.method == 'openAccessibilitySettings'), false);
+      accessibility = true;
+      connected = true;
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pumpAndSettle();
+      expect(find.text('正在恢复连接'), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    },
+  );
+
   testWidgets('disabled accessibility replaces the misleading waiting state', (
     tester,
   ) async {
@@ -160,9 +186,10 @@ void main() {
     await tester.ensureVisible(find.text('我的电脑'));
     await tester.tap(find.text('我的电脑'));
     await tester.pumpAndSettle();
+    expect(find.byKey(const Key('computer-sheet-accessibility')), findsNothing);
     expect(
-      find.byKey(const Key('computer-sheet-accessibility')),
-      findsOneWidget,
+      tester.widget<InkWell>(find.byKey(const Key('computer-saved'))).onTap,
+      isNotNull,
     );
     await tester.pumpWidget(const SizedBox());
   });

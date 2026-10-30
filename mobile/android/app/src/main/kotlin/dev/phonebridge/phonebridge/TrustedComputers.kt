@@ -5,7 +5,7 @@ import org.json.JSONObject
 import java.net.URI
 import java.util.UUID
 
-data class TrustedComputer(val id: String, val name: String, val pairing: TrustedPairing) {
+data class TrustedComputer(val id: String, val name: String, val pairing: TrustedPairing, val systemName: String = "") {
     override fun toString() = "TrustedComputer(redacted)"
 }
 
@@ -48,9 +48,14 @@ data class TrustedComputers(val entries: List<TrustedComputer> = emptyList(), va
         return copy(entries = entries.map { if (it.id == id) it.copy(name = trimmed) else it })
     }
 
+    fun withSystemName(id: String, system: String): TrustedComputers {
+        if (system !in setOf("macOS", "Windows", "Linux", "Other")) return this
+        return copy(entries = entries.map { if (it.id == id) it.copy(systemName = system) else it })
+    }
+
     fun encode(): String = JSONObject().put("version", 2).put("activeId", activeId ?: JSONObject.NULL)
         .put("computers", JSONArray(entries.map { entry -> pairingJson(entry.pairing)
-            .put("id", entry.id).put("name", entry.name) })).toString()
+            .put("id", entry.id).put("name", entry.name).put("systemName", entry.systemName) })).toString()
 
     companion object {
         fun hostName(endpoint: String): String = (URI(endpoint).host?.takeIf { it.isNotBlank() } ?: "Computer").take(80)
@@ -71,7 +76,8 @@ data class TrustedComputers(val entries: List<TrustedComputer> = emptyList(), va
                 val name = entry.getString("name")
                 require(id.matches(Regex("[A-Za-z0-9_-]{1,80}")))
                 require(name.isNotBlank() && name.length <= 80 && name.none { char -> char.isISOControl() })
-                TrustedComputer(id, name, pairingFrom(entry))
+                val system = entry.optString("systemName").takeIf { it in setOf("macOS", "Windows", "Linux", "Other") } ?: ""
+                TrustedComputer(id, name, pairingFrom(entry), system)
             }
             require(entries.map { it.id }.distinct().size == entries.size)
             val activeId = if (json.isNull("activeId")) null else json.getString("activeId")

@@ -56,6 +56,76 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
   late bool trayIcon = widget.initialTrayIcon;
   int page = 0;
   bool choosingFile = false;
+  bool get pairingAvailable =>
+      c.status?.unavailable == false &&
+      c.status?.qr != null &&
+      !c.connectionFailed;
+
+  Future<void> showPairingQr(BuildContext context) => showDialog<void>(
+    context: context,
+    builder: (context) => AnimatedBuilder(
+      animation: c,
+      builder: (context, _) => AlertDialog(
+        key: const Key('phone-pairing-dialog'),
+        constraints: const BoxConstraints(maxWidth: 440),
+        title: Row(
+          children: [
+            Expanded(child: Text(t('扫码连接这台电脑', 'Scan to connect'))),
+            IconButton(
+              tooltip: t('关闭', 'Close'),
+              onPressed: () => Navigator.of(context).pop(),
+              icon: const Icon(Icons.close_rounded),
+            ),
+          ],
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (pairingAvailable)
+                _pairingImage(c.status!, size: 240)
+              else
+                Text(
+                  t(
+                    '连接服务暂不可用，请关闭后重试。',
+                    'Connection service is unavailable. Close and try again.',
+                  ),
+                ),
+              const SizedBox(height: 20),
+              Text(
+                t(
+                  '打开手机上的 PhoneBridge，点击首页右上角「扫一扫」。',
+                  'Open PhoneBridge on your phone and tap Scan at the top right.',
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                t(
+                  '可继续连接其他手机，已连接的手机不受影响。',
+                  'You can connect more phones. Existing phones stay connected.',
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+
+  Widget _pairingImage(DesktopStatus status, {double size = 184}) => Semantics(
+    label: t('手机配对二维码', 'Phone pairing QR code'),
+    child: Image.memory(
+      status.qr!,
+      width: size,
+      height: size,
+      errorBuilder: (_, _, _) => SizedBox(
+        width: size,
+        height: size,
+        child: const Icon(Icons.qr_code_rounded, size: 96, color: muted),
+      ),
+    ),
+  );
+
   String? fileError;
   String? fileDeviceId;
   Future<void> sendFile() async {
@@ -219,11 +289,31 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                                 _brand(),
                                 const SizedBox(height: 28),
                               ],
-                              Text(
-                                titles[page],
-                                style: Theme.of(
-                                  context,
-                                ).textTheme.headlineMedium,
+                              Wrap(
+                                alignment: WrapAlignment.spaceBetween,
+                                crossAxisAlignment: WrapCrossAlignment.center,
+                                spacing: 20,
+                                runSpacing: 12,
+                                children: [
+                                  Text(
+                                    titles[page],
+                                    style: Theme.of(
+                                      context,
+                                    ).textTheme.headlineMedium,
+                                  ),
+                                  if (page == 0)
+                                    OutlinedButton.icon(
+                                      key: const Key('show-pairing-qr'),
+                                      onPressed: pairingAvailable
+                                          ? () => showPairingQr(context)
+                                          : null,
+                                      icon: const Icon(
+                                        Icons.qr_code_rounded,
+                                        size: 18,
+                                      ),
+                                      label: Text(t('显示二维码', 'Show QR code')),
+                                    ),
+                                ],
                               ),
                               const SizedBox(height: 8),
                               Text(
@@ -669,23 +759,30 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
         ),
         const SizedBox(height: 20),
       ],
-      if (!connected &&
-          s?.unavailable == false &&
-          s?.qr != null &&
-          !c.connectionFailed)
+      if (pairingAvailable && !connected)
         card(
           LayoutBuilder(
+            key: const Key('phone-pairing-panel'),
             builder: (context, box) {
               final explanation = Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  label(t('扫码连接这台电脑', 'Scan to connect')),
+                  label(
+                    connected
+                        ? t('添加另一台手机', 'Add another phone')
+                        : t('扫码连接这台电脑', 'Scan to connect'),
+                  ),
                   const SizedBox(height: 12),
                   Text(
-                    t(
-                      '打开手机上的 PhoneBridge，点击首页右上角「扫一扫」（旧版可点电脑卡片 → 配对另一台电脑 → 扫描电脑配对码）。配对后，你可以随时在手机上暂停控制。',
-                      'Open PhoneBridge on your phone and tap Scan at the top right. On older versions, tap the computer card → Pair another computer → Scan computer pairing code. You can pause control on your phone at any time.',
-                    ),
+                    connected
+                        ? t(
+                            '用另一台手机上的 PhoneBridge 扫码连接，已连接的手机不受影响。',
+                            'Scan with PhoneBridge on another phone. Existing phones stay connected.',
+                          )
+                        : t(
+                            '打开手机上的 PhoneBridge，点击首页右上角「扫一扫」（旧版可点电脑卡片 → 配对另一台电脑 → 扫描电脑配对码）。配对后，你可以随时在手机上暂停控制。',
+                            'Open PhoneBridge on your phone and tap Scan at the top right. On older versions, tap the computer card → Pair another computer → Scan computer pairing code. You can pause control on your phone at any time.',
+                          ),
                   ),
                   const SizedBox(height: 18),
                   Text(
@@ -697,19 +794,7 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                   ),
                 ],
               );
-              final qr = Semantics(
-                label: t('手机配对二维码', 'Phone pairing QR code'),
-                child: Image.memory(
-                  s!.qr!,
-                  width: 184,
-                  height: 184,
-                  errorBuilder: (_, _, _) => const SizedBox(
-                    width: 184,
-                    height: 184,
-                    child: Icon(Icons.qr_code_rounded, size: 96, color: muted),
-                  ),
-                ),
-              );
+              final qr = _pairingImage(s!);
               return box.maxWidth > 480
                   ? Row(
                       children: [

@@ -124,7 +124,7 @@ object BridgeSession {
         authorityChanged()
         transports.values.toList().forEach { close(it, "Accessibility was interrupted."); scheduleReconnect(it) }
     }
-    fun onOwnerActivityResumed(value: Context) { initialize(value); updateAwake(); tryAutoResume() }
+    fun onOwnerActivityResumed(value: Context) { initialize(value); updateAwake(); tryAutoResume(); showNotification() }
     fun getScreenAwakeMode(): String = awake?.mode ?: "controlling"
     fun setScreenAwakeMode(mode: String) { awake!!.select(mode); updateAwake() }
     private fun updateAwake() { awake?.update(service != null, control.lease != null) }
@@ -137,7 +137,11 @@ object BridgeSession {
         val selected = selectedTransport()
         val saved = computers.active?.pairing
         val owner = control.lease
+        val authorized = service != null || context?.let { AccessibilityStatus.authorized(it) } == true
         return mapOf("accessibilityEnabled" to (service != null), "connected" to connected,
+            "accessibilityAuthorized" to authorized,
+            "accessibilityState" to AccessibilityStatus.state(authorized, service != null),
+            "foregroundProtected" to (service?.foregroundProtected == true),
             "connectedComputerCount" to transports.values.count { it.connected },
             "waitingCount" to control.waitingCount,
             "connecting" to transports.values.any { it.connecting }, "actionsEnabled" to actionsEnabled,
@@ -166,7 +170,7 @@ object BridgeSession {
     }
     fun computerList(): List<Map<String, Any>> = computers.entries.map { c ->
         val t = transports[c.id]
-        mapOf("id" to c.id, "name" to c.name, "endpoint" to c.pairing.endpoint,
+        mapOf("id" to c.id, "name" to c.name, "systemName" to c.systemName, "endpoint" to c.pairing.endpoint,
             "active" to (c.id == computers.activeId), "connected" to (t?.connected == true),
             "connecting" to (t?.connecting == true || t?.retry != null),
             "controlling" to (control.lease?.computerId == c.id), "lastError" to (t?.error ?: ""),
@@ -313,13 +317,14 @@ object BridgeSession {
         return status()
     }
     fun selectComputer(id: String) {
-        requireReady()
         val c = entry(id) ?: throw BridgeFailure("NO_SAVED_PAIRING", "Pair with your computer first.")
         validatePairing(c.pairing)
         transports.remove("temporary")?.let { close(it) }
         updateTrust { store!!.select(id) }
         control.select(id); authorityChanged()
-        ensureTransport(id, entry(id)!!.pairing)
+        // Choosing local settings does not require an accessibility binding.
+        // A later system bind resumes remembered connections as usual.
+        if (service != null) ensureTransport(id, entry(id)!!.pairing)
     }
     fun renameComputer(id: String, name: String) { updateTrust { store!!.rename(id, name) } }
     fun setActionsEnabled(enabled: Boolean, computerId: String? = null) {
@@ -461,6 +466,11 @@ object BridgeSession {
                 if (!current(t) || t.socket !== ws) { ws.cancel(); return@post }
                 try { native.requireUnlocked(); requireNotifications(native) }
                 catch (_: BridgeFailure) { lost(t, "Waiting for the phone to be unlocked."); return@post }
+                val system = response.header("X-PhoneBridge-System")
+                if (system in setOf("macOS", "Windows", "Linux", "Other") && entry(t.id)?.systemName != system && entry(t.id) != null) {
+                    try { updateTrust { store!!.updateSystemName(t.id, system!!) } }
+                    catch (_: BridgeFailure) { return@post }
+                }
                 t.connectTimeout?.let { main.removeCallbacks(it) }; t.connectTimeout = null
                 cancelDiscovery(t.id)
                 t.connecting = false; t.connected = true; t.retryAttempt = 0; t.error = ""; globalError = ""
@@ -726,17 +736,21 @@ object BridgeSession {
     private fun showNotification() {
         val value = context ?: return
         val manager = value.getSystemService(NotificationManager::class.java)
-        if (transports.values.none { it.connected || it.connecting || it.retry != null }) { manager.cancel(NOTIFICATION_ID); return }
+        if (transports.values.none { it.connected || it.connecting || it.retry != null }) {
+            service?.connectionNotification(NOTIFICATION_ID, null)
+            manager.cancel(NOTIFICATION_ID); return
+        }
         val stop = PendingIntent.getBroadcast(value, 1, Intent(value, StopSessionReceiver::class.java).setAction(STOP_ACTION), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val open = PendingIntent.getActivity(value, 2, Intent(value, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val strings = AppLanguage.resources(value)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, strings.getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW))
         val state = strings.getString(if (transports.values.any { it.retry != null }) R.string.session_reconnecting
             else if (!connected) R.string.session_connecting else if (actionsEnabled) R.string.session_actions_enabled else R.string.session_read_only)
-        manager.notify(NOTIFICATION_ID, Notification.Builder(value, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
+        val notification = Notification.Builder(value, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
             .setContentTitle("PhoneBridge • $state").setContentText(strings.getString(R.string.session_description))
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setVisibility(Notification.VISIBILITY_PRIVATE)
-            .addAction(Notification.Action.Builder(null, strings.getString(R.string.session_stop), stop).build()).build())
+            .addAction(Notification.Action.Builder(null, strings.getString(R.string.session_stop), stop).build()).build()
+        service?.connectionNotification(NOTIFICATION_ID, notification)
     }
 }
 

@@ -153,6 +153,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
       status['reconnecting'] == true ||
       autoReconnect;
   bool get enabled => status['accessibilityEnabled'] == true;
+  bool get accessibilityAuthorized =>
+      (status['accessibilityAuthorized'] ?? enabled) == true;
+  bool get accessibilityRecovering => accessibilityAuthorized && !enabled;
   bool get hasSavedPairing => status['hasSavedPairing'] == true;
   List<Map<String, dynamic>> get computers =>
       (status['computers'] as List? ?? [])
@@ -564,9 +567,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
     // repeat it and shift the page each time it appears.
     final retrying =
         autoReconnect && !connected && _retryNotices.contains(nativeError);
+    final serviceRecovering =
+        accessibilityRecovering &&
+        nativeError == 'Accessibility service stopped.';
     final message =
         error ??
-        (nativeError?.isNotEmpty == true && !retrying
+        (nativeError?.isNotEmpty == true && !retrying && !serviceRecovering
             ? userError(null, nativeError, '操作失败，请检查手机状态')
             : null);
     return PopScope(
@@ -734,9 +740,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
         ? (status['selectedActionsEnabled'] ?? status['actionsEnabled']) == true
         : hasSavedPairing && status['rememberedActions'] == true;
     // Without the service no transport can open, so "waiting" would mislead.
-    final needsAccessibility = !enabled && !connected && hasSavedPairing;
-    final title = connected
+    final needsAccessibility =
+        !accessibilityAuthorized && !connected && hasSavedPairing;
+    final anyConnected = status['connected'] == true;
+    final title = anyConnected
         ? '已连接'
+        : accessibilityRecovering
+        ? '正在恢复连接'
         : needsAccessibility
         ? '无障碍服务已关闭'
         : connecting || autoReconnect
@@ -744,8 +754,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
         : hasSavedPairing
         ? '连接已暂停'
         : '连接你的电脑';
-    final subtitle = needsAccessibility
-        ? '在最近任务里上滑清除 PhoneBridge 或强制停止后，系统会关闭它。开启后会自动连接已记住的电脑；在最近任务里锁定 PhoneBridge 可避免再次被关闭。'
+    final subtitle = accessibilityRecovering
+        ? '授权仍然保留，正在等待系统恢复无障碍服务。'
+        : needsAccessibility
+        ? '请开启 PhoneBridge 无障碍服务，已记住的电脑会自动连接。'
         : autoReconnect && reconnectFailed
         ? '暂时连不上电脑。请确认电脑端 PhoneBridge 已打开，手机和电脑在同一网络。'
         : autoReconnect
@@ -755,7 +767,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         : '连接电脑，让 AI 帮你处理手机上的事';
     return [
       const SizedBox(height: 12),
-      Center(child: ConnectionIllustration(connected: connected)),
+      Center(child: ConnectionIllustration(connected: anyConnected)),
       const SizedBox(height: 22),
       Text(
         tr(context, title),
@@ -771,7 +783,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
           style: const TextStyle(color: muted, fontSize: 13),
         ),
       ],
-      if (!connected) ...[
+      if (!anyConnected) ...[
         const SizedBox(height: 10),
         Text(
           tr(context, subtitle),
@@ -893,7 +905,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
           label: Text(tr(context, startingDesktop ? '正在启动电脑服务…' : '启动电脑服务')),
         ),
       ],
-      if (!enabled && !needsAccessibility) ...[
+      if (accessibilityRecovering) ...[
+        TextButton(
+          onPressed: busy ? null : () => perform('openAccessibilitySettings'),
+          child: Text(tr(context, '查看服务状态')),
+        ),
+      ],
+      if (!accessibilityAuthorized && !needsAccessibility) ...[
         const SizedBox(height: 16),
         TextButton(
           onPressed: busy ? null : () => perform('openAccessibilitySettings'),
@@ -960,7 +978,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
         SettingsRow(
           icon: Icons.accessibility_new_rounded,
           title: '无障碍服务',
-          subtitle: enabled ? '已开启' : '尚未开启',
+          subtitle: enabled
+              ? '已开启'
+              : accessibilityAuthorized
+              ? '已授权 · 等待恢复'
+              : '尚未开启',
           onTap: busy ? null : () => perform('openAccessibilitySettings'),
         ),
         const Padding(
@@ -1340,18 +1362,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
                       style: const TextStyle(color: muted, fontSize: 12),
                     ),
                   Text(
-                    tr(context, 'AI 按顺序排队，用完自动交接；点选电脑仅查看设置。'),
+                    tr(context, '空闲时任意电脑可直接使用；有人操作时自动排队。'),
                     style: const TextStyle(color: muted, fontSize: 12),
                   ),
                   const SizedBox(height: 12),
-                  if (!enabled) ...[
-                    Text(
-                      tr(context, '开启无障碍服务后才能切换电脑'),
-                      key: const Key('computer-sheet-accessibility'),
-                      style: const TextStyle(color: muted, fontSize: 13),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
                   if (error != null) ...[
                     Text(
                       tr(context, error!),
@@ -1368,7 +1382,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                       child: InkWell(
                         key: Key('computer-${computer['id']}'),
                         borderRadius: BorderRadius.circular(12),
-                        onTap: disabled || !enabled
+                        onTap: disabled
                             ? null
                             : () {
                                 Navigator.pop(sheetContext);
@@ -1420,6 +1434,18 @@ class _ConnectionPageState extends State<ConnectionPage> {
                                   ),
                                 ],
                               ),
+                              if ((computer['systemName'] as String? ?? '')
+                                  .isNotEmpty)
+                                Text(
+                                  computer['systemName'] == 'Other'
+                                      ? tr(context, '其他系统')
+                                      : computer['systemName'] as String,
+                                  key: Key('computer-system-${computer['id']}'),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: muted,
+                                  ),
+                                ),
                               Text(
                                 computer['endpoint'] as String? ?? '',
                                 style: const TextStyle(

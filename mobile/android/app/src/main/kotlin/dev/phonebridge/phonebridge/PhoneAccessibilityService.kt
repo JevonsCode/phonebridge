@@ -6,6 +6,9 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.app.KeyguardManager
+import android.app.Notification
+import android.content.pm.ServiceInfo
+import android.util.Log
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -39,6 +42,27 @@ class PhoneAccessibilityService : AccessibilityService() {
     private var uiEpoch = 0L
     private var lastScreenshot: ScreenshotPolicy.Frame? = null
     private val operationTrail by lazy { OperationTrail(this) }
+    var foregroundProtected = false
+        private set
+
+    fun connectionNotification(id: Int, notification: Notification?) {
+        if (notification == null) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            foregroundProtected = false
+            return
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 34) startForeground(id, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            else startForeground(id, notification)
+            foregroundProtected = true
+        } catch (error: RuntimeException) {
+            // Some ROMs defer foreground promotion until the owner opens the app.
+            // Keep the connection usable and retry on Activity resume.
+            foregroundProtected = false
+            Log.w("PhoneBridgeConnection", "Foreground promotion unavailable: ${error.javaClass.simpleName}")
+            getSystemService(android.app.NotificationManager::class.java).notify(id, notification)
+        }
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -86,6 +110,7 @@ class PhoneAccessibilityService : AccessibilityService() {
         clearOperationTrail()
         AccessibilityFocusedOperation.cancel(this)
         BridgeSession.detach(this)
+        connectionNotification(8721, null)
         imageWorker.shutdown()
         super.onDestroy()
     }

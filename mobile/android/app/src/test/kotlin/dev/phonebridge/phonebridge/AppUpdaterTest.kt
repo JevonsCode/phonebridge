@@ -26,6 +26,61 @@ class AppUpdaterTest {
         .put("sha256", UpdateProtocol.hex(MessageDigest.getInstance("SHA-256").digest(bytes)))
         .put("size", bytes.size).put("notes", "Test release").toString()
 
+    @Test fun closingPooledConnectionNeverPerformsSocketIoOnActivityThread() {
+        val address = Collections.list(NetworkInterface.getNetworkInterfaces())
+            .flatMap { Collections.list(it.inetAddresses) }.filterIsInstance<Inet4Address>()
+            .first { UpdateProtocol.privateIpv4(it.hostAddress) }.hostAddress!!
+        val owner = Thread.currentThread()
+        val closedBy = AtomicReference<Thread?>()
+        val socketClosed = CountDownLatch(1)
+        val factory = object : javax.net.SocketFactory() {
+            override fun createSocket(): Socket = object : Socket() {
+                override fun close() {
+                    closedBy.compareAndSet(null, Thread.currentThread())
+                    super.close()
+                    socketClosed.countDown()
+                }
+            }
+            override fun createSocket(h: String, p: Int): Socket = error("Unused overload")
+            override fun createSocket(h: String, p: Int, l: java.net.InetAddress, lp: Int): Socket = error("Unused overload")
+            override fun createSocket(h: java.net.InetAddress, p: Int): Socket = error("Unused overload")
+            override fun createSocket(h: java.net.InetAddress, p: Int, l: java.net.InetAddress, lp: Int): Socket = error("Unused overload")
+        }
+        val server = ServerSocket(0).apply { soTimeout = 5000 }
+        val origin = "http://$address:${server.localPort}"
+        val error = AtomicReference<Throwable?>()
+        val thread = Thread {
+            try {
+                server.accept().use { socket ->
+                    socket.soTimeout = 5000
+                    val input = socket.getInputStream().bufferedReader()
+                    while (!input.readLine().isNullOrEmpty()) {}
+                    val body = manifest("$origin/update.apk").toByteArray()
+                    socket.getOutputStream().apply {
+                        write(("HTTP/1.1 200 OK\r\nContent-Length: ${body.size}\r\nConnection: keep-alive\r\n\r\n").toByteArray())
+                        write(body); flush()
+                    }
+                    input.read() // Wait for real client connection cleanup.
+                }
+            } catch (failure: Throwable) { error.set(failure) }
+        }.apply { isDaemon = true; start() }
+        val client = okhttp3.OkHttpClient.Builder().socketFactory(factory).build()
+        val protocol = UpdateProtocol("$origin/update.json", client)
+        try {
+            protocol.check()
+            assertEquals(1, client.connectionPool.idleConnectionCount())
+            protocol.close()
+            protocol.close() // Activity teardown may be called through two lifecycle paths.
+            assertTrue("Cleanup did not close the pooled socket", socketClosed.await(5, TimeUnit.SECONDS))
+            assertNotSame("Socket cleanup ran on the Activity caller thread", owner, closedBy.get())
+            assertThrows(java.io.IOException::class.java) { protocol.check() }
+            thread.join(5000)
+            error.get()?.let { throw AssertionError(it) }
+        } finally {
+            protocol.close(); server.close(); thread.join(5000)
+        }
+    }
+
     @Test fun officialPolicyRejectsUntrustedAndAmbiguousOrigins() {
         val protocol = UpdateProtocol()
         try {

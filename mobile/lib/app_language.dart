@@ -530,6 +530,16 @@ const _english = <String, String>{
   '语言': 'Language',
   '跟随系统': 'Follow system',
   '无法保存语言设置，请重试': 'Could not save language preference. Retry.',
+  '正在恢复连接': 'Restoring connection',
+  '授权仍然保留，正在等待系统恢复无障碍服务。':
+      'Authorization is retained. Waiting for Android to reconnect the accessibility service.',
+  '查看服务状态': 'View service status',
+  '已授权 · 等待恢复': 'Authorized · Waiting to reconnect',
+  '请开启 PhoneBridge 无障碍服务，已记住的电脑会自动连接。':
+      'Enable PhoneBridge accessibility once. Remembered computers will connect automatically.',
+  '空闲时任意电脑可直接使用；有人操作时自动排队。':
+      'Any computer can use the phone when idle. Tasks queue automatically while another is operating.',
+  '其他系统': 'Other OS',
 };
 const _chineseNative = <String, String>{
   'Accessibility was interrupted.': '无障碍服务已中断，正在尝试恢复连接',

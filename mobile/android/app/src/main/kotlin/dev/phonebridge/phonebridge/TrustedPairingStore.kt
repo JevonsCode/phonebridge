@@ -51,6 +51,7 @@ class TrustedPairingStore(context: Context) : TrustedComputerPersistence {
     fun save(record: TrustedPairing) { repository.mutate { it.remember(record) } }
     fun select(id: String): TrustedPairing = repository.mutate { it.select(id) }.active!!.pairing
     fun rename(id: String, name: String) { repository.mutate { it.rename(id, name) } }
+    fun updateSystemName(id: String, name: String) { repository.mutate { it.withSystemName(id, name) } }
     fun forget(id: String) { repository.mutate { it.forget(id) } }
     fun update(id: String, record: TrustedPairing) { repository.mutate { computers ->
         require(computers.entries.any { it.id == id }) { "Unknown computer." }

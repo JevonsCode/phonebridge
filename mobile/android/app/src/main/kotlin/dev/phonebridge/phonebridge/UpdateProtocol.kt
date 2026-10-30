@@ -20,16 +20,16 @@ internal data class UpdateManifest(val versionName: String, val versionCode: Lon
 internal class UpdateFailure(val code: String, override val message: String) : IOException(message)
 
 /** No pairing dependencies or headers: this client only talks to update origins. */
-internal class UpdateProtocol(val manifestUrl: String = OFFICIAL_MANIFEST) {
+internal class UpdateProtocol(val manifestUrl: String = OFFICIAL_MANIFEST,
+    private val client: OkHttpClient = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS).callTimeout(10, TimeUnit.MINUTES)
+        // Requests are public read-only GETs: recover stale pooled sockets before response.
+        .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(true).build()) {
     private val fixtureOrigin: URI? = if (manifestUrl != OFFICIAL_MANIFEST) {
         URI(manifestUrl).also {
             require(it.scheme == "http" && privateIpv4(it.host) && it.userInfo == null && it.fragment == null)
         }
     } else null
-    private val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS).callTimeout(10, TimeUnit.MINUTES)
-        // Requests are public read-only GETs: recover stale pooled sockets before response.
-        .followRedirects(false).followSslRedirects(false).retryOnConnectionFailure(true).build()
     @Volatile private var closed = false
 
     fun check(): UpdateManifest {
@@ -153,7 +153,19 @@ internal class UpdateProtocol(val manifestUrl: String = OFFICIAL_MANIFEST) {
         throw UpdateFailure("UPDATE_REDIRECT_REJECTED", "更新服务跳转次数过多")
     }
 
-    fun close() { closed = true; client.dispatcher.cancelAll(); client.connectionPool.evictAll(); client.dispatcher.executorService.shutdown() }
+    @Synchronized fun close() {
+        if (closed) return
+        closed = true
+        // Evicting a pooled TLS connection writes close_notify. Activity teardown
+        // runs on the main thread, so both cancellation and socket cleanup belong
+        // on the client's worker before its executor shuts down.
+        val executor = client.dispatcher.executorService
+        executor.execute {
+            client.dispatcher.cancelAll()
+            client.connectionPool.evictAll()
+        }
+        executor.shutdown()
+    }
 
     companion object {
         const val OFFICIAL_MANIFEST = "https://xn--8ovp9s.xn--m8txu.com/phonebridge/update.json"

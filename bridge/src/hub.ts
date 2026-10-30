@@ -44,7 +44,8 @@ export class PhoneHub {
     this.server = options.tls ? https.createServer(options.tls, (q, s) => void this.handle(q, s)) : http.createServer((q, s) => void this.handle(q, s));
     this.server.requestTimeout = 60000;
     this.server.headersTimeout = 5000;
-    this.wss.on('headers', headers => headers.push('X-PhoneBridge-Protocol: 2'));
+    this.wss.on('headers', headers => headers.push('X-PhoneBridge-Protocol: 2',
+      `X-PhoneBridge-System: ${process.platform === 'darwin' ? 'macOS' : process.platform === 'win32' ? 'Windows' : process.platform === 'linux' ? 'Linux' : 'Other'}`));
     this.server.on('upgrade', (req, socket, head) => {
       if (req.url !== '/device' || req.headers.origin || !this.authorized(req)) {
         socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n'); return;
