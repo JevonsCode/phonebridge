@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "versionName": "0.7.2",
-  "versionCode": 4026,
-  "apkUrl": "https://github.com/JevonsCode/phonebridge/releases/download/v0.7.2/phonebridge-0.7.2-arm64.apk",
-  "sha256": "e363e1c40cf7836b834e3f7fb9732ae70546377a15bab82040a0191a43f157f9",
-  "size": 38359280,
-  "notes": "# PhoneBridge 0.7.2\n\nMultiple computers can stay connected to one phone and take turns controlling it. Selecting another computer on the phone now only changes the settings view: it no longer ends the active AI task or reserves the phone for 60 seconds.\n\n- The first requesting AI controls the phone; later requests wait in FIFO order. Releasing or ending the current task lets the next waiting task continue.\n- Pairing or selecting another computer does not interrupt a task, change its deadline or move another task ahead in the queue.\n- Keep all remembered computers, App access and other settings when updating. The phone's computer list explains that selection and control are independent.\n- Existing 0.7.1 desktop clients support this phone fix; updating or pairing the computer again is not required. Matching 0.7.2 desktop packages are also provided.\n\nValidation: 228 Android JVM tests and 138 mobile Flutter tests passed, with clean Flutter analysis. Six assertions covering task preservation, idle-phone access, FIFO handoff and active-gesture authority failed against the old behavior and passed after the fix. The original failure was also reproduced on the existing Android 16 phone with two computers online: selecting the current settings computer caused the other computer's active workflow to return `CONTROL_EXPIRED`.\n\nAndroid updates retain the existing preview signer. Mac packages are ad-hoc signed and are not Apple Developer ID notarized."
+  "versionName": "0.7.3",
+  "versionCode": 4030,
+  "apkUrl": "https://github.com/JevonsCode/phonebridge/releases/download/v0.7.3/phonebridge-0.7.3-arm64.apk",
+  "sha256": "c864a91098bff03dbcb52a9403cc47c2bad44d486bb57369759c9938c431d5d0",
+  "size": 38767912,
+  "notes": "# PhoneBridge 0.7.3\n\n- 支持手机改名、断开/恢复连接和删除。\n- 改善多设备配对、重连和文件接收选择。\n- 修复应用关闭时的崩溃。\n\n请同时更新电脑端和手机端。"
 }
