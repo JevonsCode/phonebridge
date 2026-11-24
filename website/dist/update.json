@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "versionName": "0.7.3",
-  "versionCode": 4030,
-  "apkUrl": "https://github.com/JevonsCode/phonebridge/releases/download/v0.7.3/phonebridge-0.7.3-arm64.apk",
-  "sha256": "c864a91098bff03dbcb52a9403cc47c2bad44d486bb57369759c9938c431d5d0",
-  "size": 38767912,
-  "notes": "# PhoneBridge 0.7.3\n\n- 支持手机改名、断开/恢复连接和删除。\n- 改善多设备配对、重连和文件接收选择。\n- 修复应用关闭时的崩溃。\n\n请同时更新电脑端和手机端。"
+  "versionName": "0.8.0",
+  "versionCode": 4031,
+  "apkUrl": "https://github.com/JevonsCode/phonebridge/releases/download/v0.8.0/phonebridge-0.8.0-arm64.apk",
+  "sha256": "93da2b9c78cca5cf75a7e1010b56927e678fe6ae98b0c0f16786be247abafeea",
+  "size": 38767916,
+  "notes": "- 桌面端新增安卓下载二维码。\n- 使用手机时，AI 暂停排队，空闲后恢复。\n- 支持更多内网和私有 VPN 地址。\n\n请同时更新电脑端和安卓端。"
 }
