@@ -61,6 +61,11 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
       c.status?.qr != null &&
       !c.connectionFailed;
 
+  String get pairingNetworkHint => t(
+    '手机需能通过 Wi-Fi、有线网络或受信任的 VPN 访问这台电脑。',
+    'Your phone must be able to reach this computer over Wi-Fi, Ethernet, or a trusted VPN.',
+  );
+
   Future<void> showPairingQr(BuildContext context) => showDialog<void>(
     context: context,
     builder: (context) => AnimatedBuilder(
@@ -99,12 +104,16 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                 ),
               ),
               const SizedBox(height: 10),
-              Text(
-                t(
-                  '可继续连接其他手机，已连接的手机不受影响。',
-                  'You can connect more phones. Existing phones stay connected.',
+              Text(pairingNetworkHint),
+              if (c.status?.connected == true) ...[
+                const SizedBox(height: 10),
+                Text(
+                  t(
+                    '可继续连接其他手机，已连接的手机不受影响。',
+                    'You can connect more phones. Existing phones stay connected.',
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -448,27 +457,27 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                                         Icons.qr_code_rounded,
                                         size: 18,
                                       ),
-                                      label: Text(t('显示二维码', 'Show QR code')),
+                                      label: Text(
+                                        t('显示配对码', 'Show pairing QR'),
+                                      ),
                                     ),
                                 ],
                               ),
                               const SizedBox(height: 8),
-                              Text(
-                                [
-                                  t(
-                                    '连接你的手机，开启更多可能。',
-                                    'Connect your phone. Open up new possibilities.',
-                                  ),
-                                  t(
-                                    '把手机能力带到你熟悉的 AI 工具中。',
-                                    'Bring your phone to the AI tools you already use.',
-                                  ),
-                                  t(
-                                    '按照你的习惯，设置 PhoneBridge。',
-                                    'Make PhoneBridge feel at home.',
-                                  ),
-                                ][page],
-                              ),
+                              if (page == 0)
+                                _androidDownload()
+                              else
+                                Text(
+                                  page == 1
+                                      ? t(
+                                          '把手机能力带到你熟悉的 AI 工具中。',
+                                          'Bring your phone to the AI tools you already use.',
+                                        )
+                                      : t(
+                                          '按照你的习惯，设置 PhoneBridge。',
+                                          'Make PhoneBridge feel at home.',
+                                        ),
+                                ),
                               const SizedBox(height: 28),
                               if (c.failure != null) ...[
                                 _failure(context),
@@ -542,6 +551,36 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
       fontWeight: FontWeight.w500,
       color: ink,
     ),
+  );
+
+  Widget _androidDownload() => Row(
+    children: [
+      // Bundled QR for https://xn--8ovp9s.xn--m8txu.com/phonebridge/android/
+      // The 33 modules and four-module quiet zone fit 123 pixels at 1x.
+      Image.asset(
+        'assets/android-download-qr.png',
+        width: 123,
+        height: 123,
+        filterQuality: FilterQuality.none,
+        semanticLabel: t('安卓客户端下载二维码', 'Android app download QR code'),
+      ),
+      const SizedBox(width: 16),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            label(t('下载安卓客户端', 'Download the Android app')),
+            const SizedBox(height: 4),
+            Text(
+              t(
+                '用手机相机扫码下载最新版 APK。',
+                'Scan with your phone camera to download the latest APK.',
+              ),
+            ),
+          ],
+        ),
+      ),
+    ],
   );
 
   Widget _failure(BuildContext context) => card(
@@ -646,10 +685,7 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
                         '一切就绪，前往「接入 AI」开始使用。',
                         'All set. Open Connect AI to get started.',
                       )
-                    : t(
-                        '手机和电脑连接同一 Wi-Fi，即可安全配对。',
-                        'Keep your phone and computer on the same private Wi-Fi.',
-                      ),
+                    : pairingNetworkHint,
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 24),
@@ -1250,8 +1286,8 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
             const SizedBox(height: 8),
             Text(
               t(
-                '使用手机所在的私人 Wi-Fi 或以太网。切换网络前，请先断开手机。',
-                'Use the private Wi-Fi or Ethernet network your phone is on. Disconnect the phone before switching.',
+                '选择手机可访问的电脑网络，如 Wi-Fi、有线网络或受信任的 VPN。切换网络前，请先断开手机。',
+                'Choose a network your phone can reach over Wi-Fi, Ethernet, or a trusted VPN. Disconnect the phone before switching networks.',
               ),
             ),
             const SizedBox(height: 12),

@@ -1,12 +1,12 @@
+import { isIPv4 } from 'node:net';
 import { networkInterfaces } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
 export function privateIPv4(address) {
-  if (typeof address !== 'string' || !/^\d+\.\d+\.\d+\.\d+$/.test(address)) return false;
-  const n = address.split('.').map(Number);
-  if (address.split('.').some((part, index) => String(n[index]) !== part)) return false;
-  if (n.some(v => v < 0 || v > 255)) return false;
-  return n[0] === 10 || (n[0] === 172 && n[1] >= 16 && n[1] <= 31) || (n[0] === 192 && n[1] === 168);
+  if (typeof address !== 'string' || !isIPv4(address)) return false;
+  const [first, second] = address.split('.').map(Number);
+  return first === 10 || (first === 172 && second >= 16 && second <= 31) ||
+    (first === 192 && second === 168) || (first === 100 && second >= 64 && second <= 127);
 }
 
 export function selectNetworks(adapters) {
@@ -24,7 +24,19 @@ export function windowsIdentity() {
 export function localNetworks({ run = spawnSync } = {}) {
   // Windows PowerShell 5.1 otherwise encodes redirected stdout with the active
   // console code page. Node's UTF-8 decoder cannot recover localized aliases.
-  const code = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false); $r=@(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0'); @(Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object { $a=Get-NetAdapter -InterfaceIndex $_.InterfaceIndex -ErrorAction SilentlyContinue; [pscustomobject]@{address=$_.IPAddress;name=$_.InterfaceAlias;active=($a.Status -eq 'Up');physical=[bool]$a.HardwareInterface;defaultRoute=([bool]($r | Where-Object InterfaceIndex -eq $_.InterfaceIndex));metric=($r | Where-Object InterfaceIndex -eq $_.InterfaceIndex | Select-Object -First 1 -ExpandProperty RouteMetric)}}) | ConvertTo-Json -Compress";
+  const code = `$ErrorActionPreference='Stop'
+    [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
+    $routes = @(Get-NetRoute -AddressFamily IPv4 -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue)
+    @(Get-NetIPAddress -AddressFamily IPv4 | ForEach-Object {
+      $ip = $_
+      $adapter = Get-NetAdapter -InterfaceIndex $ip.InterfaceIndex -IncludeHidden -ErrorAction SilentlyContinue
+      $up = if ($adapter) { $adapter.Status -eq 'Up' } else {
+        (Get-NetIPInterface -AddressFamily IPv4 -InterfaceIndex $ip.InterfaceIndex -ErrorAction SilentlyContinue).ConnectionState -eq 'Connected'
+      }
+      $route = $routes | Where-Object InterfaceIndex -eq $ip.InterfaceIndex | Sort-Object RouteMetric | Select-Object -First 1
+      [pscustomobject]@{ address=$ip.IPAddress; name=$ip.InterfaceAlias; active=($up -and $ip.AddressState -eq 'Preferred')
+        physical=[bool]$adapter.HardwareInterface; defaultRoute=[bool]$route; metric=$route.RouteMetric }
+    }) | ConvertTo-Json -Compress`;
   const r = run(process.env.SystemRoot + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', code], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
   if (r.status === 0) { try { const parsed = JSON.parse(r.stdout); return selectNetworks(Array.isArray(parsed) ? parsed : [parsed]); } catch {} }
   return selectNetworks(Object.entries(networkInterfaces()).flatMap(([name, values]) => (values ?? []).map(v => ({ name, address: v.address, internal: v.internal }))));

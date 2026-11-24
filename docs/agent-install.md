@@ -22,6 +22,12 @@ Follow [macOS test-package instructions](macos-testing.md) to download the match
 
 On a Mac, use the native App's `--diagnose`, `--self-test` and `--diagnose --report-path <absolute-path>` commands for sanitized checks. `--uninstall-service` removes only the exact owned login service and preserves identity and logs. Never remove quarantine, disable Gatekeeper or delete the pairing file as an installation workaround.
 
+### Connecting over a routed LAN or VPN
+
+In **Settings → Computer network**, select the computer address your phone can reach over the office LAN or an approved VPN, then scan the pairing QR. The desktop supports RFC 1918 addresses and VPN addresses in `100.64.0.0/10`. Initial setup prefers physical LAN adapters and can use a VPN when it is the only available network. An existing selection is reused while the address stays assigned. Disconnect connected phones before switching. On Windows, stop the owned **PhoneBridge Desktop** scheduled task first if it is already serving the old address.
+
+The network must route traffic from the phone to the selected computer address and permit its configured TCP port (default `8767`). VLAN isolation, VPN access policies, and host firewall rules can each block this path. The Windows **Allow LAN connection** action is limited to the local subnet. If the computer address changes across routed networks, select its new address and scan the current pairing QR again. Broadcast discovery generally stays within one LAN.
+
 ## Diagnostics for an Agent
 
 These installer commands validate the embedded package and path containment, then exit before installation, extraction, configuration writes or task registration:

@@ -14,18 +14,25 @@ export function serializeNetworkChange(change) {
   };
 }
 
+export function selectedAddress(requested, networks) {
+  if (!privateIPv4(requested) || !networks.some(network => network.address === requested && !network.internal && network.active !== false)) {
+    throw new Error('Select an active private network.');
+  }
+  return requested;
+}
+
 export function recoveryAddress(configured, networks) {
   // A still-local address is an explicit choice, even if another adapter ranks higher.
   if (networks.some(network => network.address === configured)) return configured;
   const physical = networks.find(network => network.physical === true && network.active !== false &&
     !network.internal && privateIPv4(network.address) && !/vpn|tailscale|wireguard|tap|tun|virtual|vethernet|docker|hyper-v/i.test(network.name ?? ''));
-  if (!physical) throw new Error('Connect this computer to a private Wi-Fi or Ethernet network.');
+  if (!physical) throw new Error('Connect this computer to private Wi-Fi or Ethernet, or select an active VPN address in PhoneBridge.');
   return physical.address;
 }
 
 /** Validate ownership again before replacing only the endpoint of the observed configuration. */
 export async function persistNetworkConfig(path, next, expected, { readConfig } = {}) {
-  if (!privateIPv4(next.hostAddress)) throw new Error('Network recovery requires a private LAN address.');
+  if (!privateIPv4(next.hostAddress)) throw new Error('Network recovery requires a private LAN or VPN IPv4 address.');
   const current = readConfig ? await readConfig() : JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, ''));
   if (!isDeepStrictEqual(current, expected)) throw new Error('Desktop configuration changed. The newer configuration was preserved.');
   if (Object.keys(next).some(key => key !== 'hostAddress' && !isDeepStrictEqual(next[key], current[key])) ||
@@ -68,8 +75,7 @@ export function createNetworkRecovery({ config, networks, createCandidate, persi
       for (const key of Object.keys(config)) if (!(key in saved)) delete config[key];
       Object.assign(config, saved);
     }
-    const selected = address ?? (boundIsLocal ? boundAddress : recoveryAddress(config.hostAddress, available));
-    if (address && !available.some(network => network.address === address)) throw new Error('Select an active private network.');
+    const selected = address === undefined ? (boundIsLocal ? boundAddress : recoveryAddress(config.hostAddress, available)) : selectedAddress(address, available);
     if (supervisor && selected === boundAddress) { await supervisor.ensureRunning(); return supervisor; }
     const previous = supervisor, expected = { ...config }, next = { ...config, hostAddress: selected };
     const candidate = await createCandidate(next);

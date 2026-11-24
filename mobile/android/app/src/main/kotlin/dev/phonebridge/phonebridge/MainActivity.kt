@@ -9,6 +9,8 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import android.view.MotionEvent
+import android.view.KeyEvent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -219,6 +221,29 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        // A hardware touch in our own window is authoritative even while an AI gesture
+        // is pending. Android's accessibility injector uses a virtual input device.
+        if (event.device?.isVirtual == false) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    BridgeSession.localUse.begin(LocalPhoneUse.Touch.ACTIVITY)
+                    BridgeSession.localInputDetected()
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> BridgeSession.localUse.end(LocalPhoneUse.Touch.ACTIVITY)
+            }
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.device?.isVirtual == false && event.action == KeyEvent.ACTION_DOWN) {
+            BridgeSession.localUse.activity()
+            BridgeSession.localInputDetected()
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
     override fun onResume() {
         super.onResume()
         updater?.onResume()
@@ -244,6 +269,7 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onPause() {
+        BridgeSession.localUse.end(LocalPhoneUse.Touch.ACTIVITY)
         updater?.onPause()
         super.onPause()
     }

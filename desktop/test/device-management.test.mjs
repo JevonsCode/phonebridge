@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import WebSocket from '../../bridge/node_modules/ws/wrapper.mjs';
 import { DesktopSupervisor } from '../../bridge/dist/supervisor.js';
@@ -27,4 +27,21 @@ test('desktop phone management keeps CSRF protection and reaches the managed ser
   const result = await (await fetch(`${dash.url}/status`)).json();
   assert.equal(result.devices[0].name, 'My phone'); assert.equal(result.devices[0].modelName, 'Test phone');
   assert.equal(result.devices[0].paused, false);
+});
+
+test('desktop management requires its saved VPN address to still be assigned locally', async t => {
+  const local = Object.values(networkInterfaces()).flat().map(item => item.address);
+  const stale = ['100.64.0.1', '100.95.4.7', '100.127.255.254'].find(address => !local.includes(address));
+  assert.ok(stale);
+  const dashboard = await createDashboard({ config: { hostAddress: stale, port: 8767 }, token: 'fixture' });
+  t.after(() => dashboard.close());
+  const localFetch = fetch;
+  const upstream = t.mock.method(globalThis, 'fetch', () => { throw new Error('Unexpected upstream call'); });
+  const response = await localFetch(dashboard.url + '/device-management', {
+    method: 'POST', headers: { Origin: new URL(dashboard.url).origin, 'X-PhoneBridge-CSRF': dashboard.secret },
+    body: JSON.stringify({ id: randomUUID(), action: 'rename', name: 'Test phone' }),
+  });
+  assert.equal(response.status, 409);
+  assert.match((await response.json()).error, /no longer local/);
+  assert.equal(upstream.mock.callCount(), 0);
 });

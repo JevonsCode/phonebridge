@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { spawn, spawnSync } from 'node:child_process';
 import { writeFile, lstat, readFile } from 'node:fs/promises';
 import { createDashboard, createMcpConfiguration, authenticatedStatus, nativeReady } from '../server.mjs';
-import { serializeNetworkChange, recoveryAddress } from '../network-transaction.mjs';
+import { serializeNetworkChange, recoveryAddress, selectedAddress } from '../network-transaction.mjs';
 import { macConfigPath, macNetworks, macRuntimeRevision, privateDirectory, readMacConfig, validateInstalledApp, installService, uninstallService } from './lifecycle.mjs';
 import { loadOrCreateSavedToken, credentialPath } from '../../bridge/dist/credentials.js';
 import { pairingUri } from '../../bridge/dist/pairing.js';
@@ -32,7 +32,7 @@ export async function main(args = process.argv.slice(2)) {
   await privateDirectory(dirname(path), uid);
   await privateDirectory(join(homedir(), '.phonebridge'), uid);
   let saved = config;
-  if (!config) { const network = macNetworks()[0]; if (!network) throw new Error('Connect to a private Wi-Fi or Ethernet network.'); config = {schema:'phonebridge-macos-desktop-v1',ownerUid:uid,projectRoot:root,nodePath:process.execPath,hostAddress:network.address,port:8767}; }
+  if (!config) { const network = macNetworks()[0]; if (!network) throw new Error('Connect to a private LAN or VPN with an IPv4 address.'); config = {schema:'phonebridge-macos-desktop-v1',ownerUid:uid,projectRoot:root,nodePath:process.execPath,hostAddress:network.address,port:8767}; }
   // Upgrading the App keeps the credential and logs; only our owned job can be refreshed.
   config = { ...config, projectRoot: root, nodePath: process.execPath, credentialFile: config.credentialFile ?? credentialPath(), runtimeRevision: await macRuntimeRevision(root) };
   const token = await loadOrCreateSavedToken(config.credentialFile);
@@ -42,7 +42,9 @@ export async function main(args = process.argv.slice(2)) {
     starting = (async () => {
       const latest = await readMacConfig(path, uid).catch(error => { if (error.code === 'ENOENT') return undefined; throw error; });
       if (latest) saved = latest;
-      const next = { ...config, hostAddress: recoveryAddress(requestedAddress ?? latest?.hostAddress ?? config.hostAddress, macNetworks()) };
+      const networks = macNetworks();
+      const address = requestedAddress === undefined ? recoveryAddress(latest?.hostAddress ?? config.hostAddress, networks) : selectedAddress(requestedAddress, networks);
+      const next = { ...config, hostAddress: address };
       // A non-owned/occupied endpoint is never stopped. Registration checks exact job ownership.
       const current = await authenticatedStatus(saved ?? config, token).catch(() => undefined);
       if (current?.connected && saved && (saved.projectRoot !== config.projectRoot || saved.nodePath !== config.nodePath || saved.runtimeRevision !== config.runtimeRevision)) throw new Error('Disconnect the phone before moving or upgrading the desktop App.');
@@ -58,8 +60,8 @@ export async function main(args = process.argv.slice(2)) {
     return authenticatedStatus(config,token);
   }, startService:start,
     changeNetwork:serializeNetworkChange(async address => {
-      if (!macNetworks().some(net => net.address === address)) throw new Error('Select an active private network.');
-      if (address === config.hostAddress) { await start(); return; }
+      selectedAddress(address, macNetworks());
+      if (address === config.hostAddress) { await start(address); return; }
       if (starting) throw new Error('The service is starting. Please wait.');
       const current = await authenticatedStatus(config,token).catch(()=>undefined);
       if (current?.connected) throw new Error('Disconnect the phone before changing networks.');

@@ -18,6 +18,7 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.os.Bundle
 import android.os.Build
+import android.os.SystemClock
 import android.text.InputType
 import android.os.PowerManager
 import android.provider.Settings
@@ -74,6 +75,8 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (operationTrail.ownsEvent(event)) return
+        if (event != null && BridgeSession.localUse.accessibilityEvent(event.eventType,
+                event.packageName?.toString(), event.eventTime)) BridgeSession.localInputDetected()
         // A clock/status-bar refresh outside our verified screenshot crop does
         // not change the application image. Unknown, focused, overlapping and
         // structural events still invalidate the capture as before.
@@ -372,6 +375,7 @@ class PhoneAccessibilityService : AccessibilityService() {
                 if (!ime.currentInputStarted || ime.currentInputEditorInfo !== editor)
                     throw BridgeFailure("FOCUS_REQUIRED", "Input focus changed. Observe again.")
                 invalidateNodes()
+                BridgeSession.localUse.expectFeedback(scope.packageName, eventTypes = AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED)
                 connection.commitText(text, 1, null)
                 complete(completed(), null)
             }
@@ -516,6 +520,14 @@ class PhoneAccessibilityService : AccessibilityService() {
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, 0)
                 putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, node.text?.length ?: 0)
             } else null
+            val feedback = when (action) {
+                "click" -> AccessibilityEvent.TYPE_VIEW_CLICKED
+                "long_click" -> AccessibilityEvent.TYPE_VIEW_LONG_CLICKED or AccessibilityEvent.TYPE_VIEW_CONTEXT_CLICKED
+                "scroll_forward", "scroll_backward" -> AccessibilityEvent.TYPE_VIEW_SCROLLED
+                "cut", "paste" -> AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+                else -> 0
+            }
+            if (feedback != 0) BridgeSession.localUse.expectFeedback(scope.packageName, eventTypes = feedback)
             if (!node.performAction(nodeActionId(action), arguments)) {
                 throw BridgeFailure("ACTION_REJECTED", "The application rejected the node action.")
             }
@@ -708,6 +720,7 @@ class PhoneAccessibilityService : AccessibilityService() {
             }
             invalidateNodes()
             val args = Bundle().apply { putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text) }
+            BridgeSession.localUse.expectFeedback(scope.packageName, eventTypes = AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED)
             if (!node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
                 throw BridgeFailure("ACTION_REJECTED", "The application rejected text entry.")
             }
@@ -771,19 +784,32 @@ class PhoneAccessibilityService : AccessibilityService() {
                 x1, y1, x2, y2, protectedBounds(recheck))
             requireSession(generation, true)
             invalidateNodes()
+            val dispatchTime = SystemClock.uptimeMillis()
             val accepted = dispatchGesture(gesture, object : GestureResultCallback() {
                 override fun onCompleted(gestureDescription: GestureDescription?) {
+                    BridgeSession.localUse.endRemoteGesture()
                     if (BridgeSession.isOperationCurrent(generation)) { invalidateNodes(); complete(completed(), null) }
                     else complete(null, BridgeFailure("CONTROL_EXPIRED", "The control task ended during the gesture."))
                 }
                 override fun onCancelled(gestureDescription: GestureDescription?) {
+                    BridgeSession.localUse.endRemoteGesture()
                     if (BridgeSession.isOperationCurrent(generation)) {
+                        // Android also cancels injection when a person starts touching a
+                        // different app, which may publish no click or scroll event.
+                        BridgeSession.localUse.activity()
+                        BridgeSession.localInputDetected()
                         clearOperationTrail(); invalidateNodes()
                         complete(null, BridgeFailure("GESTURE_CANCELLED", "Android cancelled the gesture; observe before retrying."))
                     } else complete(null, BridgeFailure("CONTROL_EXPIRED", "The control task ended during the gesture."))
                 }
             }, BridgeSession.main)
             if (!accepted) throw BridgeFailure("ACTION_REJECTED", "Android rejected gesture dispatch.")
+            val feedback = when (method) {
+                "swipe" -> AccessibilityEvent.TYPE_VIEW_SCROLLED
+                "long_press" -> AccessibilityEvent.TYPE_VIEW_LONG_CLICKED or AccessibilityEvent.TYPE_VIEW_CONTEXT_CLICKED or AccessibilityEvent.TYPE_VIEW_CLICKED
+                else -> AccessibilityEvent.TYPE_VIEW_CLICKED
+            }
+            BridgeSession.localUse.expectFeedback(scope.packageName, isGesture = true, eventTypes = feedback, start = dispatchTime)
             BridgeSession.recordGestureDispatch(generation, duration)
             operationTrail.show(TrailMotion(method, x1, y1, x2, y2, duration))
         } finally { selected?.recycle() }

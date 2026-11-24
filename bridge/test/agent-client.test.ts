@@ -232,7 +232,7 @@ test('expired file uploads terminate the handle and cannot upload again', async 
   assert.equal(f.requests.filter(r => r.method === 'file_upload').length, 1);
 });
 
-for (const code of ['LOG_WRITE_FAILED', 'SEND_FAILED', 'TIMEOUT', 'WINDOW_CHANGED']) {
+for (const code of ['LOG_WRITE_FAILED', 'SEND_FAILED', 'TIMEOUT', 'WINDOW_CHANGED', 'LOCAL_INPUT_INTERRUPTED']) {
   test(`file ${code} preserves unknown outcome after consuming an upload`, async t => {
     const f = await fixture(t); f.fileError(code);
     await assert.rejects(f.client.sendFile(fileURLToPath(new URL('../package.json', import.meta.url)), { deviceId: 'phone-a' }), (e: AgentError) => e.code === code && e.outcome === 'unknown');
@@ -298,4 +298,23 @@ test('shutdown cancels a queued acquisition whose reply arrives after closing st
   await f.client.close(); await rejected;
   assert.deepEqual(f.requests.map(r => r.method), ['acquire_control', 'release_control']);
   await assert.rejects(f.client.acquire('phone-a'), (e: AgentError) => e.code === 'CLIENT_CLOSED');
+});
+
+test('local input moves an active handle back to waiting without replaying its interrupted operation', async t => {
+  const f = await fixture(t);
+  const task = await f.client.acquire('phone-a');
+  const handle = task.taskHandle as string;
+  f.stateErrors('LOCAL_INPUT_INTERRUPTED');
+  await assert.rejects(f.client.command('state', {}, task), (e: AgentError) =>
+    e.code === 'LOCAL_INPUT_INTERRUPTED' && e.outcome === 'unknown');
+  await assert.rejects(f.client.command('tap', { x: 1, y: 2 }, task), (e: AgentError) =>
+    e.code === 'CONTROL_QUEUED' && e.outcome === 'not_dispatched');
+  await assert.rejects(f.client.sendFile(fileURLToPath(new URL('../package.json', import.meta.url)), task),
+    (e: AgentError) => e.code === 'CONTROL_QUEUED');
+  assert.equal((await f.client.waitForControl(handle, 0)).state, 'queued');
+  f.grant();
+  assert.equal((await f.client.waitForControl(handle, 0)).state, 'active');
+  await f.client.command('state', {}, task);
+  await f.client.release(handle);
+  assert.deepEqual(f.requests.map(r => r.method), ['acquire_control', 'state', 'control_wait', 'control_wait', 'state', 'release_control']);
 });

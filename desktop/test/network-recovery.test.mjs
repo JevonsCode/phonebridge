@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createNetworkRecovery, recoveryAddress, persistNetworkConfig } from '../network-transaction.mjs';
+import { createNetworkRecovery, recoveryAddress, persistNetworkConfig, selectedAddress } from '../network-transaction.mjs';
 import { authenticatedStatus } from '../server.mjs';
 import { publishWindowsConfiguration, withConfigurationLock } from '../configuration-lock.mjs';
 
@@ -26,6 +26,32 @@ test('automatic recovery preserves an active selected address and never chooses 
   assert.equal(recoveryAddress('192.168.9.2', adapters), '192.168.1.159');
   assert.throws(() => recoveryAddress('192.168.9.2', [{ ...adapter('10.0.0.2'), name: 'Tailscale', physical: false }]), /private Wi-Fi/);
   assert.throws(() => recoveryAddress('192.168.9.2', [adapter('8.8.8.8')]), /private Wi-Fi/);
+});
+
+test('an explicit VPN change uses the assigned address, preserves it on restart, and refuses a vanished choice', async t => {
+  const config = fixtureConfig(), vpn = { name: 'VPN', address: '100.95.4.7', physical: false };
+  const lan = adapter(config.hostAddress);
+  const available = [lan, vpn];
+  let saved = { ...config };
+  const controller = createNetworkRecovery({ config, networks: () => available,
+    createCandidate: async () => ({ close: async () => {}, ensureRunning: async () => {} }),
+    persist: async next => { saved = next; },
+  });
+  t.after(() => controller.close());
+  await controller.ensure();
+  await controller.change(vpn.address);
+  assert.deepEqual(saved, { ...fixtureConfig(), hostAddress: vpn.address });
+  assert.equal(recoveryAddress(saved.hostAddress, available), vpn.address);
+  available.pop();
+  await assert.rejects(controller.change(vpn.address), /active private network/);
+  assert.equal(recoveryAddress(saved.hostAddress, available), lan.address);
+});
+
+test('an explicit selection cannot fall back to a different adapter when its address disappears', () => {
+  const available = [adapter('192.168.1.22'), { name: 'VPN', address: '100.64.0.8' }];
+  assert.equal(selectedAddress('100.64.0.8', available), '100.64.0.8');
+  assert.throws(() => selectedAddress('100.64.0.9', available), /active private network/);
+  assert.throws(() => selectedAddress('8.8.8.8', [adapter('8.8.8.8')]), /active private network/);
 });
 
 test('startup with a stale IP listens first and durably changes only the address, retaining pairing and port', async t => {
@@ -101,7 +127,7 @@ test('concurrent recovery requests share one candidate and close cancels an unco
 test('atomic endpoint persistence preserves every other field and refuses a changed owned configuration', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'phonebridge-network-recovery-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const path = join(directory, 'desktop.json'), config = fixtureConfig(), next = { ...config, hostAddress: '192.168.1.159' };
+  const path = join(directory, 'desktop.json'), config = fixtureConfig(), next = { ...config, hostAddress: '100.64.3.2' };
   await writeFile(path, JSON.stringify(config));
   await persistNetworkConfig(path, next, config);
   assert.deepEqual(JSON.parse(await readFile(path, 'utf8')), next);

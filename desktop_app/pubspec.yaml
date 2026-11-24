@@ -1,7 +1,7 @@
 name: phonebridge_desktop
 description: PhoneBridge desktop companion.
 publish_to: none
-version: 0.7.3+2030
+version: 0.8.0+2031
 environment:
   sdk: ^3.11.5
 dependencies:
@@ -16,6 +16,7 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/android-download-qr.png
     - assets/brand/logo.png
     - assets/brand/tray.ico
     - assets/fonts/OFL.txt

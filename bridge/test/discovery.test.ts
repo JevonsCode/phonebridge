@@ -25,6 +25,18 @@ test('discovery matches the shared Android HMAC vector and binds the nonce and e
   assert.ok(trustedDiscoveryResponse(token, challenge, 'wss://192.168.1.159:443/device'));
 });
 
+test('the paired challenge can authenticate a private routed VPN endpoint', () => {
+  for (const address of ['100.64.0.0', '100.127.255.255']) {
+    const vpnEndpoint = `ws://${address}:8767/device`;
+    const found = trustedDiscoveryResponse(token, challenge, vpnEndpoint);
+    assert.equal(found?.endpoint, vpnEndpoint);
+    assert.equal(found?.proof, discoveryProof(token, identity, nonce, vpnEndpoint));
+  }
+  for (const address of ['100.63.255.255', '100.128.0.0']) {
+    assert.equal(trustedDiscoveryResponse(token, challenge, `ws://${address}:8767/device`), undefined);
+  }
+});
+
 test('discovery has no response for a foreign identity, malformed challenge or unsafe endpoint', () => {
   for (const request of [undefined, null, [], 'value', { ...challenge, identity: '0'.repeat(64) },
     { ...challenge, identity: identity.toUpperCase() }, { ...challenge, nonce: '' }, { ...challenge, nonce: 'f'.repeat(33) },

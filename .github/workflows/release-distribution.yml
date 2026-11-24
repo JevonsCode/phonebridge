@@ -259,7 +259,7 @@ jobs:
       - name: Commit only generated public download files
         if: steps.generate.outputs.changed == 'true'
         run: |
-          git add -- website/dist/update.json website/dist/index.html website/dist/en/index.html README.md website/dist/android-download-qr.png
+          git add -- website/dist/update.json website/dist/index.html website/dist/en/index.html README.md website/dist/android-download-qr.png website/dist/android/index.html
           node --input-type=module <<'NODE'
           import { execFileSync } from 'node:child_process';
           import { PUBLIC_FILES } from './scripts/release-distribution.mjs';

@@ -314,7 +314,7 @@ void main() {
   );
 
   for (final failure in {
-    'DESKTOP_UNREACHABLE': '无法联系电脑，请确认电脑已开机并连接同一网络',
+    'DESKTOP_UNREACHABLE': '无法联系电脑，请确认电脑已开机，并检查局域网或 VPN 连接',
     'DESKTOP_UPDATE_REQUIRED': '电脑端尚不支持一键启动，请更新并安装电脑端后台服务',
     'DESKTOP_AUTH_FAILED': '电脑拒绝了配对身份，请检查电脑端配对设置',
     'DESKTOP_START_FAILED': '电脑服务启动失败，请检查电脑端后台服务',

@@ -32,7 +32,7 @@ object BridgeSession {
     private data class Transport(val id: String, var record: TrustedPairing, val serial: Long,
         var socket: WebSocket? = null, var client: OkHttpClient? = null,
         var connected: Boolean = false, var connecting: Boolean = false,
-        var negotiatedV2: Boolean = false,
+        var negotiatedV2: Boolean = false, var legacyNeedsObservation: Boolean = false,
         var error: String = "", var retryAttempt: Int = 0, var retry: Runnable? = null,
         var connectTimeout: Runnable? = null)
     private data class Operation(val id: String, val method: String, val transport: Transport,
@@ -44,7 +44,8 @@ object BridgeSession {
     private val discoveries = mutableMapOf<String, TrustedComputerDiscovery.Attempt>()
     private val discoveryTimes = mutableMapOf<String, Long>()
     private val automaticStarts = mutableMapOf<String, DesktopServiceRecovery>()
-    private val control = ControlLeaseManager(SystemClock::elapsedRealtime)
+    val localUse = LocalPhoneUse(SystemClock::uptimeMillis)
+    private val control = ControlLeaseManager(SystemClock::elapsedRealtime, localUseActive = { localUse.active })
     private val operationScope = SessionOperationScope()
     private var lastAuthority: ControlLeaseManager.Lease? = null
     private var lastWaitingCount = 0
@@ -111,6 +112,8 @@ object BridgeSession {
     }
     fun detach(value: PhoneAccessibilityService) {
         if (service !== value) return
+        localUse.end(LocalPhoneUse.Touch.ACCESSIBILITY)
+        localUse.endRemoteGesture()
         cancelAllDiscoveries()
         control.clear()
         authorityChanged()
@@ -120,6 +123,7 @@ object BridgeSession {
         updateAwake()
     }
     fun serviceInterrupted() {
+        localUse.end(LocalPhoneUse.Touch.ACCESSIBILITY)
         control.clear()
         authorityChanged()
         transports.values.toList().forEach { close(it, "Accessibility was interrupted."); scheduleReconnect(it) }
@@ -143,7 +147,7 @@ object BridgeSession {
             "accessibilityState" to AccessibilityStatus.state(authorized, service != null),
             "foregroundProtected" to (service?.foregroundProtected == true),
             "connectedComputerCount" to transports.values.count { it.connected },
-            "waitingCount" to control.waitingCount,
+            "waitingCount" to control.pendingTaskCount, "localUseActive" to localUse.active,
             "connecting" to transports.values.any { it.connecting }, "actionsEnabled" to actionsEnabled,
             "selectedConnected" to (selected?.connected == true),
             "selectedConnecting" to (selected?.connecting == true || selected?.retry != null),
@@ -184,6 +188,19 @@ object BridgeSession {
         if (lastAuthority !== control.lease) authorityChanged()
         return operationScope.isCurrent(expected) && op.generation == expected && !op.invalidated && op.transport.connected &&
             current(op.transport, op.socket) && leaseValid
+    }
+    fun localInputDetected() {
+        val previous = control.lease ?: return
+        if (previous.controlId == null) transports[previous.computerId]?.legacyNeedsObservation = true
+        control.suspendForLocalUse()
+        authorityChanged()
+        val op = execution ?: return
+        if (op.lease !== previous || op.replied || !current(op.transport, op.socket)) return
+        op.replied = true
+        val followUp = if (previous.controlId == null) "Wait until the phone is idle."
+            else "Wait for control with the same task handle."
+        send(op.transport, op.id, null, BridgeFailure("LOCAL_INPUT_INTERRUPTED",
+            "Local phone input interrupted this operation. Its outcome is unknown. $followUp Observe before acting and do not replay it."))
     }
     /** Acceptance may precede injection by an unbounded queue delay; duration is not settlement. */
     fun recordGestureDispatch(expected: Long, @Suppress("UNUSED_PARAMETER") durationMillis: Long) {
@@ -657,13 +674,21 @@ object BridgeSession {
             val before = control.lease
             val lease = control.authorize(t.id, t.serial, name, task)
             if (before !== lease) authorityChanged()
+            if (lease.needsObservation || (lease.controlId == null && t.legacyNeedsObservation))
+                LocalPhoneUse.requireFreshTarget(method)
             updateAwake()
             check(operationScope.begin(id))
             val op = Operation(id, method, t, lease, t.record.copy(), operationScope.generation)
             execution = op
             val complete: (JSONObject?, BridgeFailure?) -> Unit = { result, error -> main.post { settle(op, result, error) } }
             op.timeout = Runnable {
-                if (execution !== op || op.replied) return@Runnable
+                if (execution !== op) return@Runnable
+                if (op.replied) {
+                    // A local interruption has already been reported. Keep a dispatched
+                    // gesture fenced until Android acknowledges it, even after timeout.
+                    if (operationScope.canSettleOnTimeout()) settle(op, null, null)
+                    return@Runnable
+                }
                 op.invalidated = true
                 operationScope.invalidate()
                 op.replied = true
@@ -692,6 +717,10 @@ object BridgeSession {
         if (execution !== op) return
         val valid = isOperationCurrent(op.generation)
         op.timeout?.let { main.removeCallbacks(it) }
+        if (valid && error == null && result != null && op.method in setOf("state", "screenshot")) {
+            op.lease.needsObservation = false
+            if (op.lease.controlId == null) op.transport.legacyNeedsObservation = false
+        }
         execution = null
         check(operationScope.complete(op.id, op.generation))
         if (!op.replied && current(op.transport) && op.transport.connected)

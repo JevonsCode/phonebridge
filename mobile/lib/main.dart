@@ -168,7 +168,14 @@ class _ConnectionPageState extends State<ConnectionPage> {
   bool get autoReconnect => status['autoReconnectEnabled'] == true;
   int get waitingCount {
     final value = status['waitingCount'];
-    return value is int && value >= 0 && value <= 64 ? value : 0;
+    return value is int && value >= 0 && value <= 65 ? value : 0;
+  }
+
+  String get waitingLabel {
+    final message = status['localUseActive'] == true
+        ? '正在使用手机，AI 等待空闲'
+        : '等待控制';
+    return '${tr(context, message)} · $waitingCount';
   }
 
   @override
@@ -770,7 +777,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         : needsAccessibility
         ? '请开启 PhoneBridge 无障碍服务，已记住的电脑会自动连接。'
         : autoReconnect && reconnectFailed
-        ? '暂时连不上电脑。请确认电脑端 PhoneBridge 已打开，手机和电脑在同一网络。'
+        ? '暂时连不上电脑。请确认电脑端 PhoneBridge 已打开，手机能通过局域网或受信任的 VPN 访问电脑。'
         : autoReconnect
         ? '正在等待电脑，连接会自动恢复'
         : hasSavedPairing
@@ -788,7 +795,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       if (waitingCount > 0) ...[
         const SizedBox(height: 10),
         Text(
-          '${tr(context, '等待控制')} · $waitingCount',
+          waitingLabel,
           key: const Key('control-waiting-count'),
           textAlign: TextAlign.center,
           style: const TextStyle(color: muted, fontSize: 13),
@@ -1368,7 +1375,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                     ),
                   if (waitingCount > 0)
                     Text(
-                      '${tr(context, '等待控制')} · $waitingCount',
+                      waitingLabel,
                       key: const Key('computer-sheet-waiting-count'),
                       style: const TextStyle(color: muted, fontSize: 12),
                     ),

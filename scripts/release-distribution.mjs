@@ -8,7 +8,7 @@ import { createRequire } from 'node:module';
 export const REPOSITORY = 'JevonsCode/phonebridge';
 export const PACKAGE = 'dev.phonebridge.phonebridge';
 export const CERTIFICATE = '8ce72b7e5687933ea65307b99d3e2b1e41c837a26d18740f9dbc72aeb0bcdbc0';
-export const PUBLIC_TEXT_FILES = ['website/dist/update.json', 'website/dist/index.html', 'website/dist/en/index.html', 'README.md'];
+export const PUBLIC_TEXT_FILES = ['website/dist/update.json', 'website/dist/index.html', 'website/dist/en/index.html', 'README.md', 'website/dist/android/index.html'];
 export const DOWNLOAD_QR_FILE = 'website/dist/android-download-qr.png';
 export const PUBLIC_FILES = [...PUBLIC_TEXT_FILES, DOWNLOAD_QR_FILE];
 const CONSOLE_URL = 'https://www.uptodown.dev/apps/1000896707';
@@ -135,7 +135,7 @@ export function createPublicUpdates(current, files, verified, notes, desktopAsse
       const links = new RegExp(`https://github\\.com/JevonsCode/phonebridge/releases/download/v[0-9]+\\.[0-9]+\\.[0-9]+/phonebridge-[0-9]+\\.[0-9]+\\.[0-9]+-${suffix}`, 'g');
       updated = updated.replace(links, desktop.url);
     }
-    if (file.endsWith('index.html')) {
+    if (file === 'website/dist/index.html' || file === 'website/dist/en/index.html') {
       const label = file.includes('/en/') ? 'Current version' : '当前版本';
       const pattern = new RegExp(`${label} [0-9]+\\.[0-9]+\\.[0-9]+`, 'g');
       requireThat((original.match(pattern) || []).length === 1, `Expected one update preview version in ${file}`);

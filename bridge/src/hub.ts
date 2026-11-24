@@ -269,7 +269,7 @@ export class PhoneHub {
       const waiter: ControlWaiter = { controlId, reject: fail, event: event => {
         const { state, position, ownerName } = event;
         // A grant/terminal event must beat even a queued status reply already in flight.
-        if (state !== 'queued' || (initial && (position !== initial.position || ownerName !== initial.ownerName))) finish({ state, ...(position !== undefined ? { position } : {}), ...(ownerName !== undefined ? { ownerName } : {}) });
+        if (state !== 'queued' || (initial && (state !== initial.state || position !== initial.position || ownerName !== initial.ownerName))) finish({ state, ...(position !== undefined ? { position } : {}), ...(ownerName !== undefined ? { ownerName } : {}) });
       } };
       device.controlWaiters.add(waiter); ++this.controlWaiterCount;
       req.once('aborted', aborted); res.once('close', aborted);
@@ -284,7 +284,8 @@ export class PhoneHub {
         const { controlId: _reportedId, ...next } = status.data;
         initial = next;
         const received = device.controlEvents.get(controlId);
-        if (received && received.event.state !== 'queued' && (received.sequence > eventSequenceAtStart || initial.state === received.event.state)) {
+        if (received && ((received.sequence > eventSequenceAtStart && initial.state !== received.event.state) ||
+            (initial.state === received.event.state && initial.state !== 'queued'))) {
           // A newer push can be waiting for disk while an older status reply finishes.
           const auditBudget = waitMs === 0 ? this.options.timeoutMs ?? 15000 : Math.max(1, waitMs - (Date.now() - startedAt));
           timer = setTimeout(() => fail(new BridgeError('LOG_WRITE_FAILED', 'The new control event is not yet durably recorded. Check control status before acting.', 503)), auditBudget);
@@ -442,7 +443,7 @@ export class PhoneHub {
     const errorCode = failure?.code ?? reply?.error?.code;
     const deviceReportedError = Boolean(reply?.error);
     // Device timeout/gesture cancellation can occur after a partial mutation.
-    const uncertain = !!failure || ['TIMEOUT', 'GESTURE_CANCELLED', 'WINDOW_CHANGED', 'CONTROL_EXPIRED'].includes(errorCode ?? '');
+    const uncertain = !!failure || ['TIMEOUT', 'GESTURE_CANCELLED', 'WINDOW_CHANGED', 'CONTROL_EXPIRED', 'LOCAL_INPUT_INTERRUPTED'].includes(errorCode ?? '');
     try {
       await this.journal.append({ ...base, time: new Date().toISOString(), status: uncertain ? 'uncertain' : deviceReportedError ? 'failed' : 'completed', outcome: uncertain ? 'unknown' : deviceReportedError ? 'device_reported_error' : 'device_reported_success', durationMs: Date.now() - startedAt, ...(errorCode !== undefined ? { errorCode: journalErrorCode(errorCode) } : {}) });
     } catch {

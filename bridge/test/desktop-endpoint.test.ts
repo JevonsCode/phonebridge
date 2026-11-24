@@ -4,11 +4,12 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm, writeFile, rename } from 'node:fs/promises';
 import { tmpdir, networkInterfaces } from 'node:os';
 import { join } from 'node:path';
+import { privateIPv4Range } from '../src/hub-url.js';
 import { desktopEndpointSource } from '../src/desktop-endpoint.js';
 
 async function fixture(t: TestContext) {
   const root = await mkdtemp(join(tmpdir(), 'phonebridge-endpoint-')); t.after(() => rm(root, { recursive: true, force: true }));
-  const host = Object.values(networkInterfaces()).flat().find(item => item?.family === 'IPv4' && /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(item.address))?.address;
+  const host = Object.values(networkInterfaces()).flat().find(item => item?.family === 'IPv4' && privateIPv4Range(item.address))?.address;
   if (!host) { t.skip('No local private IPv4 interface'); return; }
   const windows = process.platform === 'win32';
   const configFile = join(root, windows ? 'desktop.json' : 'desktop-macos.json'), credentialFile = join(root, 'pairing.json');
@@ -32,7 +33,7 @@ test('owned endpoint metadata follows atomic host/port updates and rejects forei
 test('legacy private endpoint with matching credential follows its install; standalone loopback never adopts it', async t => {
   const f = await fixture(t); if (!f) return;
   const options = { configFile: '', credentialFile: f.credentialFile, stateDirectory: f.root };
-  const legacy = desktopEndpointSource(new URL(`http://${f.host}:8000`), options);
+  const legacy = desktopEndpointSource(new URL('http://100.64.1.9:8000'), options);
   assert.equal((await legacy())?.href, `http://${f.host}:8767/`);
   await f.save({ ...f.config, port: 9876 }); assert.equal((await legacy())?.href, `http://${f.host}:9876/`);
   assert.equal(await desktopEndpointSource(new URL('http://127.0.0.1:8765'), options)(), undefined);

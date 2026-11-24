@@ -26,6 +26,7 @@ function publicFixture() {
     [PUBLIC_FILES[0]]: `${JSON.stringify(current(), null, 2)}\n`,
     [PUBLIC_FILES[1]]: `<a href="${assetUrl('0.2.5')}">下载</a><small>当前版本 0.2.5</small><a href="${assetUrl('0.2.5')}">安装</a>`,
     [PUBLIC_FILES[2]]: `<a href="${assetUrl('0.2.5')}">Download</a><small>Current version 0.2.5</small><a href="${assetUrl('0.2.5')}">Install</a>`,
+    'website/dist/android/index.html': `<meta http-equiv="refresh" content="0;url=${assetUrl('0.2.5')}"><a href="${assetUrl('0.2.5')}">APK</a>`,
     'README.md': `[APK](${assetUrl('0.2.5')})\nDo not change this content.`,
     [DOWNLOAD_QR_FILE]: Buffer.from('previous QR fixture')
   };
@@ -249,6 +250,9 @@ test('end-to-end generation synchronizes every bilingual URL and mock version, R
   }
   assert.match(await readFile(path.join(f.root, PUBLIC_FILES[1]), 'utf8'), /当前版本 0\.2\.6/);
   assert.match(await readFile(path.join(f.root, PUBLIC_FILES[2]), 'utf8'), /Current version 0\.2\.6/);
+  const redirect = await readFile(path.join(f.root, 'website/dist/android/index.html'), 'utf8');
+  assert.ok(redirect.includes(`content="0;url=${manifest.apkUrl}"`));
+  assert.ok(redirect.includes(`href="${manifest.apkUrl}"`));
   const kit = JSON.parse(await readFile(path.join(f.outputDir, 'uptodown-submission.json'), 'utf8'));
   assert.equal(kit.apkUrl, manifest.apkUrl); assert.equal(kit.sha256, hash); assert.equal(kit.certificateSha256, CERTIFICATE);
   assert.equal(kit.consoleUrl, 'https://www.uptodown.dev/apps/1000896707');

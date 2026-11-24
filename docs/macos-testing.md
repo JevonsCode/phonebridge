@@ -6,7 +6,7 @@ PhoneBridge provides a Flutter window for macOS 13 or later and Windows, using t
 
 1. Open [GitHub Releases](https://github.com/JevonsCode/phonebridge/releases). For 0.7.0, download `phonebridge-0.7.0-macos-arm64.dmg` for Apple Silicon (M1 or later), or `phonebridge-0.7.0-macos-x64.dmg` for an Intel Mac, together with its `.sha256` file. Each architecture also has an alternative App ZIP. Unreleased PR builds remain available from **Checks → Flutter desktop client preview → Details** as 14-day CI artifacts.
 2. In the download folder, run `shasum -a 256 -c phonebridge-0.7.0-macos-arm64.dmg.sha256` (replace `arm64` with `x64` on Intel). Open the matching DMG and drag **PhoneBridge.app** into **Applications**. `~/Applications` also works. Do not run the persistent service directly from the mounted DMG or Downloads.
-3. Open **PhoneBridge**. The window shows connection status, the selected network, a pairing QR and **Copy MCP configuration**. Keep the Android phone on the same reachable private Wi-Fi, scan once in PhoneBridge, and enable the Android permissions on the phone. Later openings retain this pairing.
+3. Open **PhoneBridge**. The window shows connection status, the selected network, a pairing QR and **Copy MCP configuration**. Select the computer address the Android phone can reach over a private LAN or trusted VPN, then scan the QR in PhoneBridge and enable the Android permissions on the phone. Later openings retain this pairing.
 
 The preview is ad-hoc signed, without Apple Developer ID signing or notarization. If macOS asks you to approve the App, use the system's normal approval flow. The package does not remove quarantine or disable Gatekeeper. Approve local-network access if macOS asks. Guest-network isolation or a Mac firewall policy can prevent phone access.
 
@@ -37,7 +37,7 @@ The command verifies the owned plist and the loaded executable/arguments before 
 CI compiles and executes the matching Flutter desktop application, isolated lifecycle tests, bundled diagnostics/self-test, code-signature checks and read-only DMG checks. These checks do not prove real phone pairing, the system's approval prompts or the physical GUI experience.
 
 - Copy the App to Applications; opening presents a visible window with loading or an actionable error.
-- Select the expected Wi-Fi/Ethernet interface; QR pairs the phone once. Reopen and confirm the original phone pairing remains.
+- Select the reachable Wi-Fi, Ethernet, or VPN interface; QR pairs the phone once. Reopen and confirm the original phone pairing remains.
 - Close the window, then verify the phone and AI remain connected. Reopen the App and confirm status.
 - Copy the MCP configuration into the AI client; confirm a screenshot, one authorized tap, and `phone_operation_history` through the Android App.
 - Log out/in or restart the Mac; confirm the user service and saved phone reconnect.

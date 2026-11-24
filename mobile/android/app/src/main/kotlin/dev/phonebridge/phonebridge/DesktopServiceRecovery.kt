@@ -32,7 +32,7 @@ class DesktopServiceRecovery {
             call.enqueue(object : Callback {
                 override fun onFailure(call: Call, e: IOException) {
                     // Exception text may contain URLs or credential details; never forward/log it.
-                    complete(BridgeFailure("DESKTOP_UNREACHABLE", "无法联系电脑，请确认电脑已开机并连接同一网络"))
+                    complete(BridgeFailure("DESKTOP_UNREACHABLE", "无法联系电脑，请确认电脑已开机，并检查局域网或 VPN 连接"))
                 }
 
                 override fun onResponse(call: Call, response: Response) {

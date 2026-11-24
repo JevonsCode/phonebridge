@@ -37,7 +37,8 @@ internal static class McpLauncher {
         string[] pieces=value.Split('.'); if(pieces.Length!=4)return false;
         int[] octets=new int[4];
         for(int i=0;i<4;i++)if(!int.TryParse(pieces[i],out octets[i]) || octets[i]<0 || octets[i]>255 || octets[i].ToString()!=pieces[i])return false;
-        return octets[0]==10 || (octets[0]==172 && octets[1]>=16 && octets[1]<=31) || (octets[0]==192 && octets[1]==168);
+        return octets[0]==10 || (octets[0]==172 && octets[1]>=16 && octets[1]<=31) || (octets[0]==192 && octets[1]==168) ||
+            (octets[0]==100 && octets[1]>=64 && octets[1]<=127);
     }
     static void Usage(TextWriter output) {
         output.WriteLine("Usage: PhoneBridgeMcp.exe [--help | --version | --launcher-version]");

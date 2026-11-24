@@ -25,7 +25,7 @@ export async function macRuntimeRevision(resources) {
 }
 export function validateMacConfig(value, uid = process.getuid?.(), { test = false } = {}) {
   if (!value || value.schema !== 'phonebridge-macos-desktop-v1' || value.ownerUid !== uid || !Number.isInteger(uid)) throw new Error('Unsupported desktop configuration or another owner.');
-  if (!privateIPv4(value.hostAddress) && !(test && value.hostAddress === '127.0.0.1')) throw new Error('Select a private Wi-Fi or Ethernet network.');
+  if (!privateIPv4(value.hostAddress) && !(test && value.hostAddress === '127.0.0.1')) throw new Error('Select a private LAN or VPN IPv4 address.');
   if (!Number.isInteger(value.port) || value.port < 1 || value.port > 65535) throw new Error('Invalid desktop port.');
   for (const key of ['projectRoot', 'nodePath']) if (typeof value[key] !== 'string' || !isAbsolute(value[key]) || /[\r\n\0]/.test(value[key])) throw new Error('Invalid desktop path.');
   if (value.nodePath !== join(value.projectRoot, 'runtime', 'node')) throw new Error('The desktop runtime must be inside the App.');

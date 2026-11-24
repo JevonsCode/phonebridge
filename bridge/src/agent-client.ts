@@ -22,7 +22,7 @@ const deviceSchema = z.object({
 export type AgentDevice = z.infer<typeof deviceSchema>;
 type Task = { deviceId: string; controlId: string; connectionId: string; state: 'active' | 'queued' };
 const terminalErrors = new Set(['CONTROL_EXPIRED', 'NO_DEVICE', 'DISCONNECTED', 'SHUTDOWN', 'SERVICE_UNAVAILABLE']);
-const uncertainErrors = new Set(['TIMEOUT', 'DISCONNECTED', 'SEND_FAILED', 'LOG_WRITE_FAILED', 'GESTURE_CANCELLED', 'WINDOW_CHANGED', 'CONTROL_EXPIRED']);
+const uncertainErrors = new Set(['TIMEOUT', 'DISCONNECTED', 'SEND_FAILED', 'LOG_WRITE_FAILED', 'GESTURE_CANCELLED', 'WINDOW_CHANGED', 'CONTROL_EXPIRED', 'LOCAL_INPUT_INTERRUPTED']);
 
 /** Handles select one live phone connection. They never follow the UI or reconnect silently. */
 export class AgentClient {
@@ -101,7 +101,7 @@ export class AgentClient {
       throw new AgentError('CLIENT_CLOSED', 'The AI connection closed during acquisition; its task was cancelled where reachable.');
     }
     return { ...(result.result ?? {}), taskHandle, deviceId: device.id, state, idleTimeoutMs: 60000, instruction: state === 'queued'
-      ? 'Another AI is using this phone. Call phone_wait_for_control with this taskHandle; do not operate until state is active. Release to cancel waiting.'
+      ? 'The phone is in use. Call phone_wait_for_control with this taskHandle; do not operate until state is active. Release to cancel waiting.'
       : 'Reuse this taskHandle for the entire workflow, including clipboard/files. Do not acquire again for each command: control changes invalidate old node/screenshot IDs. Renew explicitly before a planned idle interval reaches 60 seconds. Release in finally when done. Expired handles require a new acquire and fresh observation.' };
   }
 
@@ -119,6 +119,15 @@ export class AgentClient {
     return { deviceId: task.deviceId, controlId: task.controlId, connectionId: task.connectionId };
   }
 
+  private taskFailed(handle: string | undefined, error: unknown): void {
+    if (!handle || !(error instanceof AgentError || error instanceof BridgeError)) return;
+    if (terminalErrors.has(error.code)) this.tasks.delete(handle);
+    else if (error.code === 'CONTROL_QUEUED' || error.code === 'LOCAL_INPUT_INTERRUPTED') {
+      const task = this.tasks.get(handle);
+      if (task) task.state = 'queued';
+    }
+  }
+
   async command(method: Method, params: Record<string, unknown>, target: Target = {}, timeoutMs?: number): Promise<Record<string, any>> {
     const started = Date.now();
     const routing = await this.resolve(target, timeoutMs);
@@ -127,7 +136,7 @@ export class AgentClient {
       if (!reply.result || typeof reply.result !== 'object' || Array.isArray(reply.result)) throw new AgentError('INVALID_RESPONSE', 'Invalid phone result.', 'unknown');
       return reply.result;
     } catch (error) {
-      if (target.taskHandle && error instanceof AgentError && terminalErrors.has(error.code)) this.tasks.delete(target.taskHandle);
+      this.taskFailed(target.taskHandle, error);
       throw error;
     }
   }
@@ -149,7 +158,7 @@ export class AgentClient {
       if (!reply.result || reply.result.state !== 'active') throw new AgentError('INVALID_RESPONSE', 'The phone did not confirm an active lease renewal.', 'unknown');
       return { ...reply.result, taskHandle, instruction: 'Active lease renewed. Continue using this workflow handle; release it in finally.' };
     } catch (error) {
-      if (error instanceof AgentError && terminalErrors.has(error.code)) this.tasks.delete(taskHandle);
+      this.taskFailed(taskHandle, error);
       throw error;
     }
   }
@@ -169,7 +178,7 @@ export class AgentClient {
       else { this.tasks.delete(taskHandle); throw new AgentError('CONTROL_EXPIRED', `The phone task is ${state}.`); }
       return { ...result, taskHandle, instruction: state === 'active' ? 'Control granted. Observe the phone before acting; release this task in finally.' : 'Still queued. Wait again for a notification, or release this task to cancel. No phone action was sent.' };
     } catch (error) {
-      if (error instanceof AgentError && terminalErrors.has(error.code)) this.tasks.delete(taskHandle);
+      this.taskFailed(taskHandle, error);
       throw error;
     }
   }
@@ -177,7 +186,7 @@ export class AgentClient {
   async sendFile(path: string, target: Target): Promise<unknown> {
     try { const routing = await this.resolve(target); await this.refreshEndpoint(); return await sendLocalFile(this.url, this.token, path, routing); }
     catch (error) {
-      if (target.taskHandle && (error instanceof AgentError || error instanceof BridgeError) && terminalErrors.has(error.code)) this.tasks.delete(target.taskHandle);
+      this.taskFailed(target.taskHandle, error);
       if (error instanceof BridgeError) throw new AgentError(error.code, error.message, uncertainErrors.has(error.code) ? 'unknown' : 'not_dispatched', error.details);
       throw error;
     }

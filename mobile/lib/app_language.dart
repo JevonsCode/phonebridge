@@ -131,7 +131,7 @@ const _errors = <String, String>{
   'DEVICE_LOCKED': '请先解锁手机，再继续',
   'NOTIFICATIONS_DISABLED': '请允许 PhoneBridge 的连接通知后再试',
   'NO_SAVED_PAIRING': '请先与电脑配对',
-  'DESKTOP_UNREACHABLE': '无法联系电脑，请确认电脑已开机并连接同一网络',
+  'DESKTOP_UNREACHABLE': '无法联系电脑，请确认电脑已开机，并检查局域网或 VPN 连接',
   'DESKTOP_AUTH_FAILED': '电脑拒绝了配对身份，请检查电脑端配对设置',
   'DESKTOP_UPDATE_REQUIRED': '电脑端尚不支持一键启动，请更新并安装电脑端后台服务',
   'DESKTOP_START_FAILED': '电脑服务启动失败，请检查电脑端后台服务',
@@ -157,6 +157,7 @@ const _errors = <String, String>{
 
 const _english = <String, String>{
   '等待控制': 'Waiting for control',
+  '正在使用手机，AI 等待空闲': 'Phone in use. AI is waiting',
   '保持屏幕常亮': 'Keep screen awake',
   '关闭': 'Off',
   '控制期间': 'While controlling',
@@ -325,8 +326,8 @@ const _english = <String, String>{
   '无法连接更新服务器': 'Could not connect to the update server',
   '检查失败，请重试': 'Check failed. Retry.',
   '无法打开系统安装界面': 'Could not open the system installer',
-  '无法联系电脑，请确认电脑已开机并连接同一网络':
-      'Cannot reach your computer. Check that it is on and on the same network.',
+  '无法联系电脑，请确认电脑已开机，并检查局域网或 VPN 连接':
+      'Cannot reach your computer. Check that it is on and that your LAN or VPN is connected.',
   '电脑拒绝了配对身份，请检查电脑端配对设置':
       'Your computer rejected this pairing. Check its pairing settings.',
   '电脑端尚不支持一键启动，请更新并安装电脑端后台服务':
@@ -371,8 +372,8 @@ const _english = <String, String>{
   '正在等待电脑，连接会自动恢复':
       'Waiting for your computer. Connection resumes automatically.',
   '电脑已记住，随时可以继续': 'Computer saved. Resume whenever you like.',
-  '暂时连不上电脑。请确认电脑端 PhoneBridge 已打开，手机和电脑在同一网络。':
-      "Can't reach your computer yet. Make sure PhoneBridge is open on it and both devices are on the same network.",
+  '暂时连不上电脑。请确认电脑端 PhoneBridge 已打开，手机能通过局域网或受信任的 VPN 访问电脑。':
+      "Can't reach your computer yet. Check that PhoneBridge is open on it and that your phone can reach it over the LAN or a trusted VPN.",
   '无障碍服务已关闭': 'Accessibility is off',
   '在最近任务里上滑清除 PhoneBridge 或强制停止后，系统会关闭它。开启后会自动连接已记住的电脑；在最近任务里锁定 PhoneBridge 可避免再次被关闭。':
       'Android turns it off when PhoneBridge is swiped away in Recents or force stopped. Turn it on to reconnect to your saved computer, and lock PhoneBridge in Recents to keep it on.',

@@ -18,6 +18,7 @@ void main() {
   PlatformException? connectFailure;
   Completer<void>? connectReply;
   var queuedTasks = 0;
+  var localUseActive = false;
 
   setUp(() {
     TestWidgetsFlutterBinding.instance.platformDispatcher.localeTestValue =
@@ -31,6 +32,7 @@ void main() {
     connectFailure = null;
     connectReply = null;
     queuedTasks = 0;
+    localUseActive = false;
     active = 'first';
     entries = [
       {
@@ -78,6 +80,7 @@ void main() {
         'autoReconnectEnabled': false,
         'lastError': '',
         'waitingCount': queuedTasks,
+        'localUseActive': localUseActive,
         'controlOwnerName': entries.any((e) => e['controlling'] == true)
             ? '工作电脑'
             : '',
@@ -778,6 +781,15 @@ void main() {
           find.byKey(const Key('computer-sheet-waiting-count')),
           findsOneWidget,
         );
+        localUseActive = true;
+        queuedTasks = 65; // One suspended owner and a full 64-ticket queue.
+        await tester.pump(const Duration(seconds: 1));
+        await tester.pumpAndSettle();
+        final humanLabel = locale == 'zh'
+            ? '正在使用手机，AI 等待空闲'
+            : 'Phone in use. AI is waiting';
+        expect(find.text('$humanLabel · 65'), findsWidgets);
+        localUseActive = false;
         queuedTasks = 1;
         await tester.pump(const Duration(seconds: 1));
         await tester.pumpAndSettle();

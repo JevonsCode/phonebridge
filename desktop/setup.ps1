@@ -13,7 +13,7 @@ $previous = $null
 if (Test-Path -LiteralPath $configPath) { $previous = Read-PhoneBridgeDesktopConfiguration $configPath }
 $task = @(Get-ScheduledTask -TaskPath '\' -ErrorAction Stop | Where-Object TaskName -eq 'PhoneBridge Desktop')
 if ($task.Count -gt 0) { Assert-PhoneBridgeTaskOwnership $task[0] $previous $configPath }
-$address = if ($previous) { $previous.hostAddress } else { & (Join-Path $PackageRoot 'runtime\node.exe') (Join-Path $PackageRoot 'desktop\select-network.mjs'); if ($LASTEXITCODE -ne 0) { throw 'Connect this computer to a private Wi-Fi or Ethernet network before installing.' } }
+$address = if ($previous) { $previous.hostAddress } else { & (Join-Path $PackageRoot 'runtime\node.exe') (Join-Path $PackageRoot 'desktop\select-network.mjs'); if ($LASTEXITCODE -ne 0) { throw 'Connect this computer to a private LAN or VPN with an IPv4 address before installing.' } }
 if ($ValidateOnly) { [pscustomobject]@{ DryRun=$true; ExistingOwnedConfig=($null -ne $previous); ExistingOwnedTask=($task.Count -gt 0); PackageRoot=$PackageRoot }; return }
 # Preserve owned configuration and the old task XML before migrating only installation paths.
 $backup = "$configPath.backup-$(Get-Date -Format 'yyyyMMdd-HHmmss-fffffff')"

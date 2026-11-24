@@ -151,10 +151,10 @@ test('stable launch selects current A/B target, endpoint and credential on recon
   await f.save(configA);
   const first = session(t, f.launcher);
   assert.deepEqual(await first.request({id:1}), {id:1,label:'A',url:'http://192.168.1.2:8767',credential:join(f.state,'pairing.json'),tokenPresent:false});
-  const configB = { ...configA, projectRoot: b, nodePath: windows ? process.execPath : join(b,'runtime','node'), hostAddress:'10.0.0.9',port:9876,credentialFile:join(f.state,'other-pairing.json') };
+  const configB = { ...configA, projectRoot: b, nodePath: windows ? process.execPath : join(b,'runtime','node'), hostAddress:'100.95.4.7',port:9876,credentialFile:join(f.state,'other-pairing.json') };
   await f.save(configB);
   const second=session(t,f.launcher);
-  const result=await second.request({id:2});assert.equal(result.label,'B');assert.equal(result.url,'http://10.0.0.9:9876');assert.equal(result.credential,configB.credentialFile);
+  const result=await second.request({id:2});assert.equal(result.label,'B');assert.equal(result.url,'http://100.95.4.7:9876');assert.equal(result.credential,configB.credentialFile);
   assert.equal((await first.request({id:3})).label,'A');
   second.child.stdin.write(JSON.stringify({method:'exit'})+'\n');assert.equal((await boundedExit(second)).code,23);
   first.child.stdin.end();assert.equal((await boundedExit(first)).code,0);assert.equal(first.stderr(),'');assert.equal(second.stderr(),'');

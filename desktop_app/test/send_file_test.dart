@@ -48,6 +48,7 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.text('Phone one · Online').last);
       await tester.pumpAndSettle();
+      await tester.ensureVisible(find.byKey(const Key('send-file')));
       await tester.tap(find.byKey(const Key('send-file')));
       await tester.pumpAndSettle();
       expect(c.sent, isEmpty);

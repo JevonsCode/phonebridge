@@ -10,6 +10,22 @@ import 'package:phonebridge_desktop/backend.dart';
 import 'backend_test.dart' show statusData;
 
 void main() {
+  void expectAndroidDownload(WidgetTester tester, {bool zh = false}) {
+    final download = find.image(
+      const AssetImage('assets/android-download-qr.png'),
+    );
+    expect(download, findsOneWidget);
+    expect(
+      find.text(zh ? '下载安卓客户端' : 'Download the Android app'),
+      findsOneWidget,
+    );
+    expect(
+      tester.widget<Image>(download).semanticLabel,
+      zh ? '安卓客户端下载二维码' : 'Android app download QR code',
+    );
+    expect(download.hitTestable(), findsOneWidget);
+  }
+
   for (final width in [400.0, 820.0]) {
     testWidgets('minimum height and enlarged text remain usable at $width', (
       tester,
@@ -72,12 +88,20 @@ void main() {
             await tester.pumpAndSettle();
             final button = find.byKey(const Key('show-pairing-qr'));
             expect(button, findsOneWidget);
-            expect(find.text(zh ? '显示二维码' : 'Show QR code'), findsOneWidget);
+            expect(find.text(zh ? '显示配对码' : 'Show pairing QR'), findsOneWidget);
+            expectAndroidDownload(tester, zh: zh);
             expect(tester.getRect(button).bottom, lessThanOrEqualTo(840));
             await tester.tap(button);
             await tester.pumpAndSettle();
             final dialog = find.byKey(const Key('phone-pairing-dialog'));
             expect(dialog, findsOneWidget);
+            expect(
+              find.descendant(
+                of: dialog,
+                matching: find.textContaining(zh ? '受信任的 VPN' : 'trusted VPN'),
+              ),
+              findsOneWidget,
+            );
             final qr = find.descendant(
               of: dialog,
               matching: find.byType(Image),
@@ -136,6 +160,7 @@ void main() {
     await tester.pumpWidget(PhoneBridgeApp(controller: c));
     expect(find.text('Service unavailable'), findsOneWidget);
     expect(find.text('Scan to connect'), findsNothing);
+    expectAndroidDownload(tester);
   });
 
   testWidgets(
@@ -313,10 +338,12 @@ void main() {
     c.starting = true;
     await tester.pumpWidget(PhoneBridgeApp(controller: c));
     expect(find.text('Getting ready'), findsOneWidget);
+    expectAndroidDownload(tester);
     c.starting = false;
     await c.start();
     await tester.pump();
     expect(find.text('Unable to connect'), findsOneWidget);
     expect(find.text('Retry connection'), findsOneWidget);
+    expectAndroidDownload(tester);
   });
 }

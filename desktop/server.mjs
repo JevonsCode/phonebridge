@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn, spawnSync } from 'node:child_process';
 import { lstatSync } from 'node:fs';
 import { localNetworks, privateIPv4, windowsIdentity } from './network.mjs';
-import { serializeNetworkChange, createNetworkRecovery, persistNetworkConfig } from './network-transaction.mjs';
+import { serializeNetworkChange, createNetworkRecovery, persistNetworkConfig, selectedAddress } from './network-transaction.mjs';
 import { startLauncherMaintenance } from './launcher-maintenance.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -39,7 +39,7 @@ export async function reusableDashboardUrl(record, { ownerSid, clientIdentity, e
 export const configPath = () => process.env.PHONEBRIDGE_DESKTOP_CONFIG ?? join(homedir(), '.phonebridge', 'desktop.json');
 export function validateConfig(config, sid) {
   if (!config || config.schema !== 'phonebridge-desktop-v1' || config.ownerSid !== sid) throw new Error('Desktop configuration belongs to another user or has an unsupported schema.');
-  if (!privateIPv4(config.hostAddress) && !(process.env.PHONEBRIDGE_DESKTOP_TEST === '1' && config.hostAddress === '127.0.0.1')) throw new Error('PhoneBridge needs a private LAN address. Existing configuration was preserved.');
+  if (!privateIPv4(config.hostAddress) && !(process.env.PHONEBRIDGE_DESKTOP_TEST === '1' && config.hostAddress === '127.0.0.1')) throw new Error('PhoneBridge needs a private LAN or VPN IPv4 address. Existing configuration was preserved.');
   if (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535) throw new Error('Invalid desktop port.');
   for (const key of ['projectRoot', 'nodePath', 'launcherPath', 'powershellPath']) if (typeof config[key] !== 'string' || !/^(?:[a-z]:[\\/]|\/)/i.test(config[key]) || /["\r\n]/.test(config[key])) throw new Error('Unsafe desktop path.');
   return config;
@@ -49,8 +49,11 @@ export async function readOwnedConfig(path, sid) {
   if (!info.isFile() || info.isSymbolicLink() || info.size > 32768) throw new Error('Invalid desktop configuration file.');
   return validateConfig(JSON.parse((await readFile(path, 'utf8')).replace(/^\uFEFF/, '')), sid);
 }
-export async function authenticatedStatus(config, token, { interfaces = networkInterfaces(), fetchImpl = fetch } = {}) {
-  if (!Object.values(interfaces).flat().some(network => network?.address === config.hostAddress)) throw new Error('The saved network is no longer local to this computer.');
+function requireLocalAddress(address, interfaces = networkInterfaces()) {
+  if (!Object.values(interfaces).flat().some(network => network?.address === address)) throw new Error('The saved network is no longer local to this computer.');
+}
+export async function authenticatedStatus(config, token, { interfaces, fetchImpl = fetch } = {}) {
+  requireLocalAddress(config.hostAddress, interfaces);
   const response = await fetchImpl(`http://${config.hostAddress}:${config.port}/status`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2500), redirect: 'error' });
   if (!response.ok) throw new Error('Existing endpoint cannot be authenticated.');
   const status = await response.json();
@@ -125,6 +128,7 @@ export async function createDashboard({ config, token, status, startService, cha
         let size = 0; const chunks = [];
         for await (const chunk of req) { const bytes = Buffer.from(chunk); size += bytes.length; if (size > 2048) throw new Error('Request too large'); chunks.push(bytes); }
         const body = Buffer.concat(chunks).toString('utf8');
+        requireLocalAddress(config.hostAddress);
         const response = await fetch(`http://${config.hostAddress}:${config.port}/device-management`, { method: 'POST',
           headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body, redirect: 'error', signal: AbortSignal.timeout(5000) });
         const value = await response.json();
@@ -210,7 +214,7 @@ async function main() {
   try {
     let config;
     try { config = await readOwnedConfig(path, sid); }
-    catch (e) { if (e.code !== 'ENOENT') throw e; const net = localNetworks()[0]; if (!net) throw new Error('Connect this computer to a private Wi-Fi or Ethernet network.'); config = { schema: 'phonebridge-desktop-v1', ownerSid: sid, projectRoot: root, nodePath: process.execPath, hostAddress: net.address, port: 8767, launcherPath: join(root, 'scripts', 'windows', 'run-desktop.ps1'), powershellPath: process.env.SystemRoot + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' }; await writeFile(path, JSON.stringify(config), { flag: 'wx' }); }
+    catch (e) { if (e.code !== 'ENOENT') throw e; const net = localNetworks()[0]; if (!net) throw new Error('Connect this computer to a private LAN or VPN with an IPv4 address.'); config = { schema: 'phonebridge-desktop-v1', ownerSid: sid, projectRoot: root, nodePath: process.execPath, hostAddress: net.address, port: 8767, launcherPath: join(root, 'scripts', 'windows', 'run-desktop.ps1'), powershellPath: process.env.SystemRoot + '\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' }; await writeFile(path, JSON.stringify(config), { flag: 'wx' }); }
     // DPAPI helper uses Windows PowerShell; add only this OS directory, never require Node/npm on PATH.
     process.env.PATH = dirname(config.powershellPath) + ';' + (process.env.PATH ?? '');
     const { credentialPath, loadOrCreateSavedToken } = await import('../bridge/dist/credentials.js');
@@ -274,10 +278,11 @@ async function main() {
     dashboard = await createDashboard({ config, token, clientIdentity, networks: localNetworks, status: async () => { await refreshConfig(); return authenticatedStatus(config, token); }, startService: startWithFeedback, startupError:()=>startupError?.message,
       changeNetwork: serializeNetworkChange(async address => {
         if(startupPromise)throw new Error('The desktop service is starting. Please wait before changing networks.');
-        if (!privateIPv4(address) || !localNetworks().some(a => a.address === address)) throw new Error('Select an active private network.');
+        const available = localNetworks();
+        selectedAddress(address, available);
         if (!supervisor) { try { await authenticatedStatus(config, token); throw new Error('An existing desktop service is running. Stop it before changing its network.'); } catch (e) { if (e.message.startsWith('An existing')) throw e; } }
         if (address === config.hostAddress) { await startWithFeedback(); return; }
-        if (supervisor) { const status = await authenticatedStatus(config, token); if (status.connected) throw new Error('Disconnect your phone before changing networks.'); }
+        if (supervisor && available.some(network => network.address === config.hostAddress)) { const status = await authenticatedStatus(config, token); if (status.connected) throw new Error('Disconnect your phone before changing networks.'); }
         supervisor = await recovery.change(address);
         recovery.watch();
         startupError=undefined;

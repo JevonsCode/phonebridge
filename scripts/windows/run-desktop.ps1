@@ -23,8 +23,15 @@ function Get-PhoneBridgeTaskArguments([string]$LauncherPath, [string]$ConfigPath
 function Assert-PhoneBridgeAddress([string]$Address, [int]$ListenPort) {
     $parsedAddress = $null
     if (-not [Net.IPAddress]::TryParse($Address, [ref]$parsedAddress) -or
-        $parsedAddress.Equals([Net.IPAddress]::Any) -or $parsedAddress.Equals([Net.IPAddress]::IPv6Any)) {
-        throw 'HostAddress must be a fixed local IPv4/IPv6 address, not a hostname or wildcard.'
+        $parsedAddress.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or
+        $parsedAddress.ToString() -cne $Address) {
+        throw 'HostAddress must be a canonical private LAN or VPN IPv4 address.'
+    }
+    $ip = $parsedAddress.GetAddressBytes()
+    $allowed = $ip[0] -eq 10 -or ($ip[0] -eq 172 -and $ip[1] -ge 16 -and $ip[1] -le 31) -or
+        ($ip[0] -eq 192 -and $ip[1] -eq 168) -or ($ip[0] -eq 100 -and $ip[1] -ge 64 -and $ip[1] -le 127)
+    if (-not $allowed -and -not ($env:PHONEBRIDGE_DESKTOP_TEST -eq '1' -and $Address -ceq '127.0.0.1')) {
+        throw 'HostAddress must be a private LAN or VPN IPv4 address.'
     }
     if ($ListenPort -lt 1 -or $ListenPort -gt 65535) { throw 'Port must be between 1 and 65535.' }
     return $parsedAddress

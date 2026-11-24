@@ -5,8 +5,9 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { networkInterfaces } from 'node:os';
+import { privateIPv4Range } from './hub-url.js';
 import { validateToken } from './protocol.js';
-import { TrustedDiscoveryResponder, privateDiscoveryAddress, trustedDiscoveryResponse } from './discovery.js';
+import { TrustedDiscoveryResponder, trustedDiscoveryResponse } from './discovery.js';
 
 type Options = {
   token: string; host?: string; port?: number; allowLan?: boolean;
@@ -83,8 +84,8 @@ export class DesktopSupervisor {
       // Leave management available even when the Hub cannot start yet.
       await this.ensureRunning().catch(() => undefined);
     }
-    // Loopback-only test/development supervisors do not compete for the production UDP port.
-    if (this.options.discovery !== false && (privateDiscoveryAddress(address.address) || this.options.discovery?.allowLoopback)) {
+    // Broadcast discovery stays on RFC 1918 LANs. Routed VPNs use the selected TCP endpoint.
+    if (this.options.discovery !== false && (privateIPv4Range(address.address) === 'lan' || this.options.discovery?.allowLoopback)) {
       const discovery = new TrustedDiscoveryResponder({ token: this.options.token, ...this.options.discovery,
         endpoint: () => this.discoveryEndpoint() });
       try { await discovery.start(); this.discovery = discovery; }

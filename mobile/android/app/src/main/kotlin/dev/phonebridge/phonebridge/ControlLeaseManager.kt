@@ -4,9 +4,10 @@ import java.util.UUID
 
 /** Main-thread arbitration. Only real commands renew leases; only wait checks renew tickets. */
 class ControlLeaseManager(private val now: () -> Long, private val idleMillis: Long = 60_000,
-    private val maximumRetired: Int = 16_384, private val queueIdleMillis: Long = 120_000) {
+    private val maximumRetired: Int = 16_384, private val queueIdleMillis: Long = 120_000,
+    private val localUseActive: () -> Boolean = { false }) {
     data class Lease(val computerId: String, val connection: Long, val controlId: String?, val name: String,
-        val epoch: Long, var deadline: Long)
+        val epoch: Long, var deadline: Long, var needsObservation: Boolean = false)
     data class Event(val event: String, val computerId: String, val elapsedMillis: Long)
     data class ControlEvent(val computerId: String, val connection: Long, val controlId: String,
         val state: String, val position: Int? = null, val ownerName: String? = null)
@@ -17,7 +18,11 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
     private val eventLog = ArrayDeque<Event>()
     private val pushes = ArrayDeque<ControlEvent>()
     private val waiters = mutableListOf<Ticket>()
+    // The interrupted owner already held control. Reserve its turn separately so all 64 FIFO
+    // places (and the positions understood by older bridges) remain available.
+    private var suspendedOwner: Ticket? = null
     val waitingCount: Int get() = waiters.size
+    val pendingTaskCount: Int get() = waitingCount + if (suspendedOwner == null) 0 else 1
     fun events(): List<Event> = eventLog.toList()
     fun drainControlEvents(): List<ControlEvent> = pushes.toList().also { pushes.clear() }
     private fun record(event: String, id: String) {
@@ -57,8 +62,9 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
         }
     }
     private fun removeTickets(reason: String, matches: (Ticket) -> Boolean): Boolean {
-        val removed = waiters.filter(matches)
+        val removed = waiters.filter(matches).toMutableList()
         waiters.removeAll(removed.toSet())
+        suspendedOwner?.takeIf(matches)?.let { suspendedOwner = null; removed.add(it) }
         removed.forEach {
             retired.add(key(it.computerId, it.connection, it.controlId))
             push(it.computerId, it.connection, it.controlId, reason)
@@ -67,6 +73,20 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
         if (removed.isNotEmpty()) positions()
         return removed.isNotEmpty()
     }
+    /** Discard old authority immediately. Regrant only the handle, never an interrupted RPC. */
+    fun suspendForLocalUse() {
+        expire()
+        val previous = lease ?: return
+        lease = null
+        serial++
+        record("local_input", previous.computerId)
+        previous.controlId?.let {
+            suspendedOwner = Ticket(previous.computerId, previous.connection, it, previous.name, now() + queueIdleMillis)
+            push(previous.computerId, previous.connection, it, "queued")
+        }
+        positions()
+    }
+
     fun expire(): Boolean {
         val changed = lease?.let { now() >= it.deadline } == true
         if (changed) retire("expired")
@@ -86,11 +106,16 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
     }
     fun clear() { retire("stopped"); removeTickets("cancelled") { true } }
     private fun requireCapacity() {
-        if (retired.size + waiters.size + (if (lease?.controlId != null) 1 else 0) >= maximumRetired)
+        if (retired.size + waiters.size + (if (lease?.controlId != null || suspendedOwner != null) 1 else 0) >= maximumRetired)
             throw BridgeFailure("TASK_LIMIT", "Control task limit reached. Restart PhoneBridge locally before acquiring a new task.")
     }
     private fun ownerBusy(): Nothing = throw BridgeFailure("CONTROL_BUSY", lease?.let { "Control is held by ${it.name}." }
         ?: "Another task is waiting for control.")
+    private fun localBusy(): Nothing = throw BridgeFailure("CONTROL_BUSY",
+        "The phone is in local use. Wait until it is idle, then observe before acting.")
+    private fun Ticket.matches(id: String, serial: Long, task: String) =
+        computerId == id && connection == serial && controlId == task
+
     fun acquire(computerId: String, connection: Long, name: String, controlId: String): Lease =
         claim(computerId, connection, name, validateId(controlId), true)
     fun authorize(computerId: String, connection: Long, name: String, controlId: String?): Lease {
@@ -100,8 +125,8 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
         return claim(computerId, connection, name, normalized, false)
     }
     private fun rejectQueuedAction(id: String, connection: Long, controlId: String) {
-        if (waiters.any { it.computerId == id && it.connection == connection && it.controlId == controlId })
-            throw BridgeFailure("CONTROL_QUEUED", "This task is waiting for control and cannot observe or act yet.")
+        if (suspendedOwner?.matches(id, connection, controlId) == true || waiters.any { it.matches(id, connection, controlId) })
+            throw BridgeFailure("CONTROL_QUEUED", "Wait for control with this same task handle, then observe before acting.")
     }
     /** No acquire or lease renewal: used while the shared executor is fenced. */
     fun requireExistingControl(computerId: String, connection: Long, controlId: String) {
@@ -114,6 +139,7 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
     private fun claim(id: String, connection: Long, name: String, control: String?, acquire: Boolean): Lease {
         expire()
         if (key(id, connection, control) in retired) expired()
+        if (localUseActive()) localBusy()
         val current = lease
         if (current != null) {
             if (current.computerId != id || current.connection != connection || current.controlId != control) ownerBusy()
@@ -121,7 +147,7 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
             return current
         }
         if (control != null && !acquire) expired()
-        if (waiters.isNotEmpty()) ownerBusy()
+        if (waiters.isNotEmpty() || suspendedOwner != null) ownerBusy()
         if (control != null) requireCapacity()
         return grant(id, connection, name, control)
     }
@@ -136,10 +162,11 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
         expire()
         lease?.let { if (!isLive(it.computerId, it.connection)) retire("disconnected") }
         removeTickets("cancelled") { !isLive(it.computerId, it.connection) }
-        if (lease != null || !executorSettled) return false
-        if (waiters.isEmpty()) return false
-        val t = waiters.removeAt(0)
-        grant(t.computerId, t.connection, t.name, t.controlId)
+        if (lease != null || !executorSettled || localUseActive()) return false
+        val t = suspendedOwner ?: waiters.firstOrNull() ?: return false
+        val resuming = t === suspendedOwner
+        if (resuming) suspendedOwner = null else waiters.removeAt(0)
+        grant(t.computerId, t.connection, t.name, t.controlId).needsObservation = resuming
         positions()
         return true
     }
@@ -153,14 +180,18 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
         // Repeating acquire is idempotent and does not keep an orphan task/ticket alive.
         lease?.takeIf { it.computerId == computerId && it.connection == connection && it.controlId == normalized }
             ?.let { return TaskStatus(normalized, "active", ownerName = it.name, expiresInMs = it.deadline - now()) }
+        suspendedOwner?.takeIf { it.matches(computerId, connection, normalized) }?.let {
+            return TaskStatus(normalized, "queued", expiresInMs = it.deadline - now())
+        }
         waiters.indexOfFirst { it.computerId == computerId && it.connection == connection && it.controlId == normalized }
             .takeIf { it >= 0 }?.let { return TaskStatus(normalized, "queued", it + 1, lease?.name, waiters[it].deadline - now()) }
-        if (lease == null && executorSettled && waiters.isEmpty()) {
+        if (lease == null && suspendedOwner == null && executorSettled && waiters.isEmpty() && !localUseActive()) {
             requireCapacity()
             grant(computerId, connection, name, normalized)
             return TaskStatus(normalized, "active", ownerName = name, expiresInMs = idleMillis)
         }
         if (!queue) {
+            if (localUseActive()) localBusy()
             if (!executorSettled) throw BridgeFailure("BUSY", OperationTimeoutPolicy.awaitingGestureMessage)
             ownerBusy()
         }
@@ -175,6 +206,10 @@ class ControlLeaseManager(private val now: () -> Long, private val idleMillis: L
         expire()
         lease?.takeIf { it.computerId == computerId && it.connection == connection && it.controlId == normalized }
             ?.let { return TaskStatus(normalized, "active", ownerName = it.name, expiresInMs = it.deadline - now()) }
+        suspendedOwner?.takeIf { it.matches(computerId, connection, normalized) }?.let {
+            it.deadline = now() + queueIdleMillis
+            return TaskStatus(normalized, "queued", expiresInMs = queueIdleMillis)
+        }
         val index = waiters.indexOfFirst { it.computerId == computerId && it.connection == connection && it.controlId == normalized }
         if (index < 0) expired()
         waiters[index].deadline = now() + queueIdleMillis

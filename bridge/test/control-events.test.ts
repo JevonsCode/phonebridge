@@ -241,3 +241,16 @@ test('strict unsolicited events reject extra content and never persist it', asyn
   assert.equal((await closed)[0], 1008);
   assert.equal(JSON.stringify(await s.journal.read()).includes('PRIVATE_SCREEN_TEXT'), false);
 });
+
+test('local pause event wins over a stale active status reply', async t => {
+  const s = await setup(t);
+  const phone = await s.connect();
+  const controlId = randomUUID();
+  phone.phone.on('message', bytes => {
+    const r = JSON.parse(bytes.toString());
+    event(phone.phone, controlId, 'queued');
+    reply(phone.phone, r, { state: 'active', controlId, expiresInMs: 60000 });
+  });
+  assert.equal((await s.watch(phone, controlId, 0)).body.state, 'queued');
+  assert.equal(s.waiterCount(), 0);
+});

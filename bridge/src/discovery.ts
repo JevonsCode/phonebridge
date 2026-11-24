@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { createSocket, type Socket } from 'node:dgram';
-import { isIP } from 'node:net';
+import { privateIPv4Range } from './hub-url.js';
 
 export const discoveryPort = 8766;
 const identityLabel = 'PhoneBridge discovery identity v1';
@@ -14,10 +14,7 @@ export function discoveryProof(token: string, identity: string, nonce: string, e
 }
 
 export function privateDiscoveryAddress(address: string): boolean {
-  if (isIP(address) !== 4) return false;
-  const parts = address.split('.').map(Number);
-  return parts[0] === 10 || (parts[0] === 172 && parts[1]! >= 16 && parts[1]! <= 31) ||
-    (parts[0] === 192 && parts[1] === 168);
+  return privateIPv4Range(address) !== undefined;
 }
 
 type DiscoveryOptions = {
@@ -66,7 +63,7 @@ export class TrustedDiscoveryResponder {
     const socket = createSocket({ type: 'udp4', reuseAddr: true });
     this.socket = socket;
     socket.on('message', (bytes, remote) => {
-      if (bytes.length > 1024 || !(privateDiscoveryAddress(remote.address) ||
+      if (bytes.length > 1024 || !(privateIPv4Range(remote.address) === 'lan' ||
         (this.options.allowLoopback && remote.address === '127.0.0.1'))) return;
       let request: unknown;
       try { request = JSON.parse(bytes.toString('utf8')); } catch { return; }
