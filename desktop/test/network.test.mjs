@@ -28,20 +28,21 @@ test('assigned shared VPN addresses are selectable and physical LAN keeps first 
 
 test('Windows installer and scheduled task validate the same private address ranges', { skip: !windows }, () => {
   const helper = fileURLToPath(new URL('../scripts/windows/run-desktop.ps1', networkModule));
+  const candidates = ['192.168.1.2', '10.0.0.1', '172.16.0.1', '100.64.0.0', '100.127.255.255',
+    '0.0.0.0', '8.8.8.8', '100.63.255.255', '100.128.0.0', '100.0100.0.1', '10.1', '127.0.0.1', '::1'];
   const command = `$ErrorActionPreference='Stop'
     . $env:PHONEBRIDGE_ADDRESS_HELPER -LoadHelpers
-    foreach ($address in @('192.168.1.2','10.0.0.1','172.16.0.1','100.64.0.0','100.127.255.255')) {
-      if ((Assert-PhoneBridgeAddress $address 8767).ToString() -cne $address) { throw 'Valid address rejected.' }
+    $accepted = foreach ($address in (ConvertFrom-Json $env:PHONEBRIDGE_TEST_ADDRESSES)) {
+      try { (Assert-PhoneBridgeAddress $address 8767).ToString() } catch {}
     }
-    foreach ($address in @('0.0.0.0','8.8.8.8','100.63.255.255','100.128.0.0','100.0100.0.1','10.1','127.0.0.1','::1')) {
-      try { [void](Assert-PhoneBridgeAddress $address 8767) } catch { continue }
-      throw 'Invalid address accepted.'
-    }`;
+    ConvertTo-Json -InputObject @($accepted) -Compress`;
   const result = spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', command], {
     encoding: 'utf8', windowsHide: true,
-    env: { ...process.env, PHONEBRIDGE_ADDRESS_HELPER: helper, PHONEBRIDGE_DESKTOP_TEST: '0' },
+    env: { ...process.env, PHONEBRIDGE_ADDRESS_HELPER: helper, PHONEBRIDGE_DESKTOP_TEST: '0',
+      PHONEBRIDGE_TEST_ADDRESSES: JSON.stringify(candidates) },
   });
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.deepEqual(JSON.parse(result.stdout), candidates.slice(0, 5));
 });
 
 test('Windows enumerates connected VPN interfaces that have no visible NetAdapter', { skip: !windows }, () => {
