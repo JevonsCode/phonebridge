@@ -54,19 +54,24 @@ export function selectReleaseAsset(release, expectedTag = release?.tag_name) {
   return { version, tag: expectedTag, name, url, size: asset.size, digest };
 }
 
-export function selectDesktopAssets(release, expectedTag = release?.tag_name) {
+const desktopPackages = {
+  Windows: { installer: 'windows-setup.exe', portable: 'windows-x64.zip' },
+  macOS: { 'mac-arm': 'macos-arm64.dmg', 'mac-intel': 'macos-x64.dmg' }
+};
+
+export function selectDesktopAssets(release, expectedTag = release?.tag_name, platform = 'Windows') {
   const android = selectReleaseAsset(release, expectedTag);
   const selected = [];
-  for (const [suffix, kind] of [['windows-setup.exe', 'installer'], ['windows-x64.zip', 'portable']]) {
+  for (const [kind, suffix] of Object.entries(desktopPackages[platform])) {
     const name = `phonebridge-${android.version}-${suffix}`;
     const matches = release.assets.filter(asset => asset.name === name);
-    requireThat(matches.length <= 1, 'Duplicate Windows release asset');
+    requireThat(matches.length <= 1, `Duplicate ${platform} release asset`);
     if (!matches.length) continue;
     const asset = matches[0];
     const url = `https://github.com/${REPOSITORY}/releases/download/${expectedTag}/${name}`;
-    requireThat(asset.browser_download_url === url && asset.state === 'uploaded', 'Windows asset must use the exact official uploaded release URL');
-    requireThat(Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= 2147483647, 'Windows asset size is invalid');
-    requireThat(typeof asset.digest === 'string' && /^sha256:[a-f0-9]{64}$/.test(asset.digest), 'Windows asset must include GitHub SHA-256 digest');
+    requireThat(asset.browser_download_url === url && asset.state === 'uploaded', `${platform} asset must use the exact official uploaded release URL`);
+    requireThat(Number.isSafeInteger(asset.size) && asset.size > 0 && asset.size <= 2147483647, `${platform} asset size is invalid`);
+    requireThat(typeof asset.digest === 'string' && /^sha256:[a-f0-9]{64}$/.test(asset.digest), `${platform} asset must include GitHub SHA-256 digest`);
     selected.push({ kind, name, url, size: asset.size, sha256: asset.digest.slice(7) });
   }
   return selected;
@@ -131,9 +136,13 @@ export function createPublicUpdates(current, files, verified, notes, desktopAsse
     let updated = original.replace(apkLinks, verified.url);
     updated = updated.replace(/(<!-- android-qr-version -->)[0-9]+\.[0-9]+\.[0-9]+(<!-- \/android-qr-version -->)/g, `$1${verified.version}$2`);
     for (const desktop of desktopAssets) {
-      const suffix = desktop.kind === 'installer' ? 'windows-setup\\.exe' : 'windows-x64\\.zip';
+      const packageName = desktopPackages.Windows[desktop.kind] ?? desktopPackages.macOS[desktop.kind];
+      requireThat(packageName, 'Unexpected desktop package kind');
+      const suffix = packageName.replaceAll('.', '\\.');
       const links = new RegExp(`https://github\\.com/JevonsCode/phonebridge/releases/download/v[0-9]+\\.[0-9]+\\.[0-9]+/phonebridge-[0-9]+\\.[0-9]+\\.[0-9]+-${suffix}`, 'g');
       updated = updated.replace(links, desktop.url);
+      const versionLabel = new RegExp(`(<!-- ${suffix}-version -->)[0-9.]+(<!-- /${suffix}-version -->)`, 'g');
+      updated = updated.replace(versionLabel, `$1${verified.version}$2`);
     }
     if (file === 'website/dist/index.html' || file === 'website/dist/en/index.html') {
       const label = file.includes('/en/') ? 'Current version' : '当前版本';
@@ -191,7 +200,8 @@ export async function distribute({ root, release, tag, apkBytes, badging, signer
   const verified = verifyApk({ release, tag, apkBytes, badging, signerReport, expectedHash: trustedHash });
   const desktopAssets = selectDesktopAssets(release, tag);
   const releaseNotes = release.body?.replace(/\n*<!-- phonebridge-download-qr:start -->[\s\S]*?<!-- phonebridge-download-qr:end -->\n*/g, '\n').trim();
-  const generated = createPublicUpdates(current, files, verified, releaseNotes || undefined, desktopAssets);
+  const macAssets = selectDesktopAssets(release, tag, 'macOS');
+  const generated = createPublicUpdates(current, files, verified, releaseNotes || undefined, [...desktopAssets, ...macAssets]);
   // Encode only the APK URL that just passed identity, signature and digest checks.
   const QRCode = createRequire(new URL('../bridge/package.json', import.meta.url))('qrcode');
   const qrPng = await QRCode.toBuffer(verified.url, { type: 'png', errorCorrectionLevel: 'M', margin: 4, scale: 10 });

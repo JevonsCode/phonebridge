@@ -70,8 +70,8 @@ test('select only the exact published official ARM64 asset', () => {
   for (const mutate of mutations) { const i = input(); mutate(i); assert.throws(() => selectReleaseAsset(i.release, i.tag)); }
 });
 
-function addDesktopAssets(i) {
-  for (const suffix of ['windows-setup.exe', 'windows-x64.zip']) {
+function addDesktopAssets(i, suffixes = ['windows-setup.exe', 'windows-x64.zip']) {
+  for (const suffix of suffixes) {
     const name = `phonebridge-${i.tag.slice(1)}-${suffix}`;
     i.release.assets.push({ name, browser_download_url: `https://github.com/JevonsCode/phonebridge/releases/download/${i.tag}/${name}`, size: 1234, state: 'uploaded', digest: `sha256:${'c'.repeat(64)}` });
   }
@@ -189,6 +189,29 @@ test('present Windows assets synchronize existing desktop URLs in both languages
   const kit = JSON.parse(await readFile(path.join(f.outputDir, 'uptodown-submission.json'), 'utf8'));
   assert.equal(kit.desktopAssets.length, 2);
   assert.equal(kit.desktopAssets[0].sha256, 'c'.repeat(64));
+});
+
+test('both languages update only Mac packages actually uploaded to the new release', async t => {
+  for (const suffixes of [['macos-arm64.dmg'], ['macos-arm64.dmg', 'macos-x64.dmg']]) {
+    const contents = publicFixture();
+    const pages = ['website/dist/index.html', 'website/dist/en/index.html'];
+    const url = (version, suffix) => assetUrl(version).replace('arm64.apk', suffix);
+    for (const page of pages) {
+      for (const suffix of ['macos-arm64.dmg', 'macos-x64.dmg']) {
+        contents[page] += url('0.2.5', suffix) + ` v<!-- ${suffix}-version -->0.2.5<!-- /${suffix}-version -->\n`;
+      }
+    }
+    const f = await fixture(t, contents);
+    await distribute({ ...f, ...addDesktopAssets(input('0.6.0', 2011), suffixes) });
+    for (const page of pages) {
+      const updated = await readFile(path.join(f.root, page), 'utf8');
+      assert.ok(updated.includes(url('0.6.0', 'macos-arm64.dmg')));
+      const intelVersion = suffixes.length === 2 ? '0.6.0' : '0.2.5';
+      assert.ok(updated.includes(url(intelVersion, 'macos-x64.dmg')));
+      assert.ok(updated.includes(`<!-- macos-x64.dmg-version -->${intelVersion}<!--`));
+      assert.ok(updated.includes('<!-- macos-arm64.dmg-version -->0.6.0<!--'));
+    }
+  }
 });
 
 test('invalid optional desktop metadata prevents Android manifest publication and kit generation', async t => {
