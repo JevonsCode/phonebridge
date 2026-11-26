@@ -1,9 +1,9 @@
 {
   "schema": 1,
-  "versionName": "0.8.0",
-  "versionCode": 4031,
-  "apkUrl": "https://github.com/JevonsCode/phonebridge/releases/download/v0.8.0/phonebridge-0.8.0-arm64.apk",
-  "sha256": "93da2b9c78cca5cf75a7e1010b56927e678fe6ae98b0c0f16786be247abafeea",
-  "size": 38767916,
-  "notes": "- 桌面端新增安卓下载二维码。\n- 使用手机时，AI 暂停排队，空闲后恢复。\n- 支持更多内网和私有 VPN 地址。\n\n请同时更新电脑端和安卓端。"
+  "versionName": "0.8.1",
+  "versionCode": 4032,
+  "apkUrl": "https://github.com/JevonsCode/phonebridge/releases/download/v0.8.1/phonebridge-0.8.1-arm64.apk",
+  "sha256": "25e4615775222370bb27ef69ef6a53df22ac7ffcf46d4f735dff2fbd379dc0ae",
+  "size": 38784296,
+  "notes": "安卓新增「点击抖动」和「随机操作延迟」，可在设置中分别开启。Mac 和 Windows 继续使用 0.8.0 即可。"
 }
