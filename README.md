@@ -2,7 +2,7 @@
 
 让现有 AI 助手通过你授权的安卓应用，看界面、点击、滑动和输入。
 
-[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [English website](https://xn--8ovp9s.xn--m8txu.com/phonebridge/en/) · [下载 Windows 客户端](https://github.com/JevonsCode/phonebridge/releases/download/v0.8.0/phonebridge-0.8.0-windows-setup.exe) · [下载 Mac 客户端](https://github.com/JevonsCode/phonebridge/releases/latest) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.8.0/phonebridge-0.8.0-arm64.apk) · [用 Obtainium 跟踪更新](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.phonebridge.phonebridge%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FJevonsCode%2Fphonebridge%22%2C%22author%22%3A%22JevonsCode%22%2C%22name%22%3A%22PhoneBridge%22%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Atrue%7D%22%7D) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
+[官方网站](https://xn--8ovp9s.xn--m8txu.com/phonebridge/) · [English website](https://xn--8ovp9s.xn--m8txu.com/phonebridge/en/) · [下载 Windows 客户端](https://github.com/JevonsCode/phonebridge/releases/download/v0.8.0/phonebridge-0.8.0-windows-setup.exe) · [下载 Mac 客户端](https://xn--8ovp9s.xn--m8txu.com/phonebridge/#mac-downloads) · [下载 Android APK](https://github.com/JevonsCode/phonebridge/releases/download/v0.8.0/phonebridge-0.8.0-arm64.apk) · [用 Obtainium 跟踪更新](https://apps.obtainium.imranr.dev/redirect?r=obtainium://app/%7B%22id%22%3A%22dev.phonebridge.phonebridge%22%2C%22url%22%3A%22https%3A%2F%2Fgithub.com%2FJevonsCode%2Fphonebridge%22%2C%22author%22%3A%22JevonsCode%22%2C%22name%22%3A%22PhoneBridge%22%2C%22additionalSettings%22%3A%22%7B%5C%22includePrereleases%5C%22%3Atrue%7D%22%7D) · [反馈问题](https://github.com/JevonsCode/phonebridge/issues)
 
 这是一个早期开发者预览版。它提供手机执行工具，不内置大模型，也不承诺“完全控制手机”。无障碍权限需要机主在系统设置中亲自开启。微信功能基于可见界面，不读取私有聊天数据库。真机兼容性与验证范围见 [验证记录](docs/verification.md)。
 
@@ -17,6 +17,8 @@ PhoneBridge MCP → 本机 Hub ← 经过配对的 Android 手机
 ## 能做什么
 
 让电脑上的 AI 像用户一样操作真机，帮助你开发和测试手机应用：打开页面、点击按钮、填写表单、滑动列表，按你提供的步骤和预期结果执行回归检查。AI 也可以结合截图、界面信息和操作日志复现问题，定位出错的步骤，再验证修复。PhoneBridge 提供操作手机的工具，测试目标和判断由你的 AI 完成。
+
+安卓端「设置」提供两个独立开关，默认关闭。开启「点击抖动」后，单击会在中心半径 10 像素内随机取点。开启「随机操作延迟」后，每次 AI 操作前会等待 0.3～1.3 秒。
 
 - 读取允许应用当前界面的控件、文字、坐标；密码控件文字会隐藏。
 - 截取允许应用的窗口，返回缩放与裁剪坐标映射。

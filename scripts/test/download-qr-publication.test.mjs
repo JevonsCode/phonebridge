@@ -39,6 +39,7 @@ test('release notes keep authored content and contain one idempotent bilingual Q
   assert.ok(after.startsWith(before));
   assert.ok(after.includes(`![`)); assert.ok(after.includes(result.qrName));
   assert.ok(after.includes('扫码')); assert.ok(after.includes('Scan'));
+  assert.ok(after.includes('/phonebridge/#mac-downloads)') && after.includes('/phonebridge/#windows-title)'));
   assert.equal(buildDownloadQrNotes(after, result), after);
   assert.equal((after.match(/<!-- phonebridge-download-qr:start -->/g)||[]).length, 1);
   assert.throws(() => buildDownloadQrNotes(`${after}\n${after}`, result), /section/);

@@ -980,13 +980,30 @@ class _ConnectionPageState extends State<ConnectionPage> {
         ),
         AutomationSetting(
           preference: 'ProtectConnectionControls',
+          defaultValue: false,
           title: '避免 AI 误断开连接',
           subtitle: '保护连接和授权开关，防止操作中误触',
         ),
       ],
     ),
     const SizedBox(height: 12),
-    const SurfaceGroup(children: [OperationTrailSetting()]),
+    const SurfaceGroup(
+      children: [
+        AutomationSetting(
+          preference: 'TapJitter',
+          defaultValue: false,
+          title: '点击抖动',
+          subtitle: '每次单击在目标中心半径 10 像素内随机取点',
+        ),
+        AutomationSetting(
+          preference: 'RandomControlDelay',
+          defaultValue: false,
+          title: '随机操作延迟',
+          subtitle: '每次 AI 操作前随机等待 0.3～1.3 秒',
+        ),
+        OperationTrailSetting(),
+      ],
+    ),
     const SizedBox(height: 12),
     const SurfaceGroup(children: [ScreenAwakeSetting()]),
     const SizedBox(height: 28),

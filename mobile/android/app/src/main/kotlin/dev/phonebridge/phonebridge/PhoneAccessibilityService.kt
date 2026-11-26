@@ -295,17 +295,37 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     fun execute(method: String, params: JSONObject, generation: Long,
                 complete: (JSONObject?, BridgeFailure?) -> Unit) {
-        operationTrail.beforeRpc {
-            try { executeReady(method, params, generation, complete) }
+        val mutation = method in ControlVariation.mutations
+        fun checked(block: () -> Unit) {
+            try { block() }
             catch (error: BridgeFailure) { complete(null, error) }
             catch (_: Exception) { complete(null, BridgeFailure("UNAVAILABLE", "Android could not complete the operation.")) }
+        }
+        operationTrail.beforeRpc {
+            checked {
+                requireSession(generation, mutation)
+                if (mutation && AutomationPreferences.randomControlDelay(this)) {
+                    // Launch names its destination and clipboard writes do not target a window.
+                    val window = if (method == "launch_app" || method == "set_clipboard") null else windowScope()
+                    val epoch = uiEpoch
+                    BridgeSession.main.postDelayed({
+                        checked {
+                            requireSession(generation, true)
+                            if (window != null) requireSameWindow(window, windowScope())
+                            if ((params.has("x") || params.has("x1")) && epoch != uiEpoch)
+                                throw BridgeFailure("WINDOW_CHANGED", "The screen changed while waiting. Observe again.")
+                            executeReady(method, params, generation, complete)
+                        }
+                    }, ControlVariation.delayMillis())
+                } else {
+                    executeReady(method, params, generation, complete)
+                }
+            }
         }
     }
 
     private fun executeReady(method: String, params: JSONObject, generation: Long,
                              complete: (JSONObject?, BridgeFailure?) -> Unit) {
-        val mutation = method in setOf("tap", "long_press", "swipe", "set_text", "node_action", "commit_text", "global_action", "launch_app", "set_clipboard")
-        requireSession(generation, mutation)
         when (method) {
             "get_clipboard" -> {
                 validateKeys(params, emptySet())
@@ -345,8 +365,12 @@ class PhoneAccessibilityService : AccessibilityService() {
             }
             "node_action" -> {
                 validateKeys(params, setOf("nodeId", "selector", "action"))
-                nodeAction(params, generation)
-                complete(completed(), null)
+                if (params.opt("action") == "click" && AutomationPreferences.tapJitter(this)) {
+                    gesture("tap", params, generation, complete, nodeClick = true)
+                } else {
+                    nodeAction(params, generation)
+                    complete(completed(), null)
+                }
             }
             "commit_text" -> {
                 validateKeys(params, setOf("text", "packageName"))
@@ -728,8 +752,8 @@ class PhoneAccessibilityService : AccessibilityService() {
     }
 
     private fun gesture(method: String, params: JSONObject, generation: Long,
-                        complete: (JSONObject?, BridgeFailure?) -> Unit) {
-        validateKeys(params, when (method) {
+                        complete: (JSONObject?, BridgeFailure?) -> Unit, nodeClick: Boolean = false) {
+        if (!nodeClick) validateKeys(params, when (method) {
             "swipe" -> setOf("x1", "y1", "x2", "y2", "durationMs")
             "long_press" -> setOf("x", "y", "durationMs")
             else -> setOf("x", "y", "selector", "imageX", "imageY", "screenshotId")
@@ -738,12 +762,18 @@ class PhoneAccessibilityService : AccessibilityService() {
         var selected: AccessibilityNodeInfo? = null
         var observed: NodeActionPolicy.Target? = null
         try {
-            val mode = if (method == "tap") SelectorPolicy.tapMode(params.keys().asSequence().toSet()) else SelectorPolicy.TapMode.PHYSICAL
+            val mode = when {
+                nodeClick -> SelectorPolicy.TapMode.SELECTOR
+                method == "tap" -> SelectorPolicy.tapMode(params.keys().asSequence().toSet())
+                else -> SelectorPolicy.TapMode.PHYSICAL
+            }
             val point = when (mode) {
                 SelectorPolicy.TapMode.SELECTOR -> {
-                    val node = targetNode(JSONObject().put("selector", params.get("selector")), scope)
+                    val node = targetNode(params, scope)
                     selected = node
                     requirePointerNode(node, scope)
+                    if (nodeClick) requireClickableAction(node, scope)
+                    requireNodeProtection(scope, node)
                     val target = nodeTarget(node)
                     observed = target
                     safeNodeBounds("click", target.bounds, scope)
@@ -753,7 +783,22 @@ class PhoneAccessibilityService : AccessibilityService() {
                 SelectorPolicy.TapMode.PHYSICAL -> Pair(number(params, if (method == "swipe") "x1" else "x"),
                     number(params, if (method == "swipe") "y1" else "y"))
             }
-            val x1 = point.first; val y1 = point.second
+            val start = if (method == "tap" && AutomationPreferences.tapJitter(this)) {
+                val (cx, cy) = point
+                if (!contains(scope.bounds, cx, cy))
+                    throw BridgeFailure("OUT_OF_BOUNDS", "Tap must be inside the allowed application window.")
+                requireClearGesture(scope, cx, cy, cx, cy)
+                val protected = protectedBounds(scope)
+                ProtectedControlPolicy.requireGesture(true, scope.packageName == packageName, cx, cy, cx, cy, protected)
+                val target = observed?.bounds
+                ControlVariation.tap(point) { x, y ->
+                    contains(scope.bounds, x, y) &&
+                        (target == null || (x >= target.left && x < target.right && y >= target.top && y < target.bottom)) &&
+                        scope.occlusions.none { !it.toast && contains(it.bounds, x, y) } &&
+                        protected.none { ProtectedControlPolicy.touches(it, x, y, x, y) }
+                }
+            } else point
+            val x1 = start.first; val y1 = start.second
             val x2 = if (method == "swipe") number(params, "x2") else x1
             val y2 = if (method == "swipe") number(params, "y2") else y1
             val duration = when (method) {
@@ -776,6 +821,7 @@ class PhoneAccessibilityService : AccessibilityService() {
             requireClearGesture(recheck, x1, y1, x2, y2)
             selected?.let { node ->
                 requirePointerNode(node, recheck)
+                if (nodeClick) requireClickableAction(node, recheck)
                 NodeActionPolicy.requireUnchanged(observed!!, nodeTarget(node))
                 requireNodeProtection(recheck, node)
             }
@@ -813,6 +859,11 @@ class PhoneAccessibilityService : AccessibilityService() {
             BridgeSession.recordGestureDispatch(generation, duration)
             operationTrail.show(TrailMotion(method, x1, y1, x2, y2, duration))
         } finally { selected?.recycle() }
+    }
+
+    private fun requireClickableAction(node: AccessibilityNodeInfo, scope: WindowScope) {
+        NodeActionPolicy.requireAction("click", supportedNodeActions(node), node.isVisibleToUser,
+            node.isEnabled, hasPasswordAncestry(node, scope))
     }
 
     private fun requirePointerNode(node: AccessibilityNodeInfo, scope: WindowScope) {

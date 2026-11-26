@@ -3,7 +3,10 @@ package dev.phonebridge.phonebridge
 import android.content.Context
 
 internal object AutomationPreferenceDefaults {
-    fun value(key: String): Boolean = key != "protectConnectionControls"
+    fun value(key: String): Boolean = when (key) {
+        "protectConnectionControls", "tapJitter", "randomControlDelay" -> false
+        else -> true
+    }
 }
 
 internal class AutomationPreferenceState {
@@ -31,6 +34,10 @@ object AutomationPreferences {
         val preferences = preferences(context)
         state.save(key, value, { preferences.getBoolean(key, AutomationPreferenceDefaults.value(key)) }) { preferences.edit().putBoolean(key, it).commit() }
     }
+    fun tapJitter(context: Context) = read(context, "tapJitter")
+    fun setTapJitter(context: Context, enabled: Boolean) = save(context, "tapJitter", enabled)
+    fun randomControlDelay(context: Context) = read(context, "randomControlDelay")
+    fun setRandomControlDelay(context: Context, enabled: Boolean) = save(context, "randomControlDelay", enabled)
     fun clipboardAccessEnabled(context: Context): Boolean = read(context, "clipboardAccessEnabled")
     fun setClipboardAccessEnabled(context: Context, enabled: Boolean) = save(context, "clipboardAccessEnabled", enabled)
     fun protectConnectionControls(context: Context): Boolean = read(context, "protectConnectionControls")

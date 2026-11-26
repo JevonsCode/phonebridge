@@ -34,7 +34,7 @@ export function buildDownloadQrNotes(body, result) {
   const starts = body.split(START).length - 1, ends = body.split(END).length - 1;
   requireThat(starts === ends && starts <= 1 && (!starts || body.indexOf(START) < body.indexOf(END)), 'Invalid managed QR section');
   const url = `https://github.com/${REPOSITORY}/releases/download/${result.tag}/${result.qrName}`;
-  const section = `${START}\n## 安卓扫码下载 / Android download\n\n用手机浏览器扫码下载 PhoneBridge ${result.version}（Android 11+ · ARM64）。\nScan with your phone to download the Android APK.\n\n[![PhoneBridge ${result.version} Android download QR](${url})](${result.apkUrl})\n\n[直接下载 APK / Download APK](${result.apkUrl})\n${END}`;
+  const section = `${START}\n## 安卓扫码下载 / Android download\n\n用手机浏览器扫码下载 PhoneBridge ${result.version}（Android 11+ · ARM64）。\nScan with your phone to download the Android APK.\n\n[![PhoneBridge ${result.version} Android download QR](${url})](${result.apkUrl})\n\n[直接下载 APK / Download APK](${result.apkUrl})\n\n桌面客户端下载 / Desktop downloads · [macOS](https://xn--8ovp9s.xn--m8txu.com/phonebridge/#mac-downloads) · [Windows](https://xn--8ovp9s.xn--m8txu.com/phonebridge/#windows-title)\n${END}`;
   return starts ? body.slice(0, body.indexOf(START)) + section + body.slice(body.indexOf(END) + END.length) : `${body.trimEnd()}\n\n${section}\n`;
 }
 

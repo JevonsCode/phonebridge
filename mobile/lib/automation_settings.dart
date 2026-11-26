@@ -23,8 +23,10 @@ class AutomationSetting extends StatefulWidget {
     required this.preference,
     required this.title,
     required this.subtitle,
+    this.defaultValue = true,
     super.key,
   });
+  final bool defaultValue;
   final String preference, title, subtitle;
   @override
   State<AutomationSetting> createState() => _AutomationSettingState();
@@ -38,7 +40,7 @@ class _AutomationSettingState extends State<AutomationSetting> {
   @override
   void initState() {
     super.initState();
-    enabled = widget.preference != 'ProtectConnectionControls';
+    enabled = widget.defaultValue;
     unawaited(load());
   }
 

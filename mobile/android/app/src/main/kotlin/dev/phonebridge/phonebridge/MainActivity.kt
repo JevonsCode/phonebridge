@@ -46,6 +46,18 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 try {
                     when (call.method) {
+                        "getTapJitter" -> result.success(AutomationPreferences.tapJitter(this))
+                        "setTapJitter" -> {
+                            val enabled = call.argument<Boolean>("enabled") ?: throw IllegalArgumentException("enabled must be a boolean.")
+                            AutomationPreferences.setTapJitter(this, enabled)
+                            result.success(null)
+                        }
+                        "getRandomControlDelay" -> result.success(AutomationPreferences.randomControlDelay(this))
+                        "setRandomControlDelay" -> {
+                            val enabled = call.argument<Boolean>("enabled") ?: throw IllegalArgumentException("enabled must be a boolean.")
+                            AutomationPreferences.setRandomControlDelay(this, enabled)
+                            result.success(null)
+                        }
                         "getClipboardAccessEnabled" -> result.success(AutomationPreferences.clipboardAccessEnabled(this))
                         "setClipboardAccessEnabled" -> {
                             val enabled = call.argument<Boolean>("enabled") ?: throw IllegalArgumentException("enabled must be a boolean.")

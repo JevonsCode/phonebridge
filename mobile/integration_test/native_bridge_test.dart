@@ -15,6 +15,10 @@ void main() {
   // Native accessibility gestures must reach Flutter instead of the test
   // framework's default interactive finder/debug interception.
   binding.shouldPropagateDevicePointerEvents = true;
+  // Keep the test semantics tree available while Android binds its service.
+  // Establish the platform handle before testWidgets records its baseline.
+  setUpAll(() => binding.platformDispatcher.semanticsEnabledTestValue = true);
+  tearDownAll(binding.platformDispatcher.clearSemanticsEnabledTestValue);
   const channel = MethodChannel('dev.phonebridge/control');
   const token = String.fromEnvironment('PHONEBRIDGE_TEST_TOKEN');
   const port = String.fromEnvironment(
@@ -77,7 +81,14 @@ void main() {
         ))?['connected'],
         true,
       );
-      await tester.pumpWidget(const MaterialApp(home: PlaygroundPage()));
+      final touches = <Offset>[];
+      await tester.pumpWidget(
+        Listener(
+          onPointerDown: (event) =>
+              touches.add(event.position * tester.view.devicePixelRatio),
+          child: const MaterialApp(home: PlaygroundPage()),
+        ),
+      );
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 1));
 
@@ -119,6 +130,33 @@ void main() {
       expect(tapped['error'], isNull, reason: jsonEncode(tapped));
       await tester.pumpAndSettle();
       expect(find.text('当前计数：1'), findsOneWidget);
+
+      final center = touches.single;
+      await channel.invokeMethod<void>('setTapJitter', {'enabled': true});
+      await channel.invokeMethod<void>('setRandomControlDelay', {
+        'enabled': true,
+      });
+      final selectorKey = button['description'] == '加一' ? 'description' : 'text';
+      for (final method in ['tap', 'node_action', 'tap']) {
+        final watch = Stopwatch()..start();
+        final result = await rpc(method, {
+          'selector': {selectorKey: '加一'},
+          if (method == 'node_action') 'action': 'click',
+        });
+        expect(result['error'], isNull, reason: jsonEncode(result));
+        expect(watch.elapsedMilliseconds, greaterThanOrEqualTo(300));
+        await tester.pumpAndSettle();
+      }
+      expect(touches, hasLength(4));
+      for (final touch in touches.skip(1)) {
+        // The selector center can differ from the rounded physical coordinates by half a pixel per axis.
+        expect((touch - center).distance, lessThanOrEqualTo(10.8));
+      }
+      expect(find.text('当前计数：4'), findsOneWidget);
+      await channel.invokeMethod<void>('setTapJitter', {'enabled': false});
+      await channel.invokeMethod<void>('setRandomControlDelay', {
+        'enabled': false,
+      });
 
       final nextState = await rpc('state');
       final beforeFocus = (nextState['result']['nodes'] as List)

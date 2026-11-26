@@ -36,6 +36,9 @@ void main() {
       switch (call.method) {
         case 'getLanguagePreference':
           return preference;
+        case 'getTapJitter':
+        case 'getRandomControlDelay':
+          return false;
         case 'getShowOperationTrails':
         case 'getAutoReceiveFilesEnabled':
           return true;
@@ -162,6 +165,8 @@ void main() {
             'status',
             'getLanguagePreference',
             'getShowOperationTrails',
+            'getTapJitter',
+            'getRandomControlDelay',
             'getAutoReceiveFilesEnabled',
             'getClipboardAccessEnabled',
             'getSaveMediaToGallery',

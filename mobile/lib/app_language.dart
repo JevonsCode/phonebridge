@@ -297,6 +297,11 @@ const _english = <String, String>{
       "Received; the computer did not receive confirmation",
   "\u65e0\u6cd5\u4fdd\u5b58\u63a5\u6536\u8bb0\u5f55\uff0c\u8bf7\u68c0\u67e5\u624b\u673a\u5b58\u50a8\u7a7a\u95f4":
       "Could not save the receipt. Check phone storage.",
+  '点击抖动': 'Tap jitter',
+  '每次单击在目标中心半径 10 像素内随机取点':
+      'Tap at a random point within 10 pixels of the target center',
+  '随机操作延迟': 'Random action delay',
+  '每次 AI 操作前随机等待 0.3～1.3 秒': 'Wait 0.3–1.3 seconds before each AI action',
   '显示操作轨迹': 'Show operation trails',
   '全部允许': 'Allow all',
   '图片和视频可保存到相册，其他文件保存在下载/PhoneBridge。':
