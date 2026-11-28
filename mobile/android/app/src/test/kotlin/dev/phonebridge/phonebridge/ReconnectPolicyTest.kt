@@ -47,4 +47,11 @@ class ReconnectPolicyTest {
             (0..5).map { ReconnectPolicy.delayMillis(it) })
         assertEquals(30000L, ReconnectPolicy.delayMillis(Int.MAX_VALUE))
     }
+
+    @Test fun aReconnectRacingTheOldSocketIsRetriedNotPaused() {
+        assertTrue(ReconnectPolicy.isStaleConnectionRejection(1008, "Device already connected"))
+        assertFalse(ReconnectPolicy.isStaleConnectionRejection(1008, "Invalid protocol message"))
+        assertFalse(ReconnectPolicy.isStaleConnectionRejection(1008, "Protocol handshake required"))
+        assertFalse(ReconnectPolicy.isStaleConnectionRejection(1000, "Device already connected"))
+    }
 }

@@ -548,6 +548,9 @@ const _english = <String, String>{
   '空闲时任意电脑可直接使用；有人操作时自动排队。':
       'Any computer can use the phone when idle. Tasks queue automatically while another is operating.',
   '其他系统': 'Other OS',
+  '显示 AI 控制提示': 'Show AI control indicator',
+  'AI 控制时在屏幕顶部显示蓝色细线，通知中同步显示控制方':
+      'Shows a thin blue line at the top of the screen while AI controls the phone; the notification names the controller',
   '确认 USB 连接的电脑': 'Confirm the USB computer',
   '这台电脑已通过 USB 调试授权发起配对。核对名称和地址，勾选选项后点「连接」；之后插线会自动连接。':
       'This computer started pairing through USB debugging you authorized. Check its name and address, tick the options and tap Connect. Afterwards, plugging in connects automatically.',

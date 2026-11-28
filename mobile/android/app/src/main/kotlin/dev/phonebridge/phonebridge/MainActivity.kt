@@ -63,6 +63,13 @@ class MainActivity : FlutterActivity() {
                             AutomationPreferences.setRandomControlDelay(this, enabled)
                             result.success(null)
                         }
+                        "getShowControlIndicator" -> result.success(AutomationPreferences.showControlIndicator(this))
+                        "setShowControlIndicator" -> {
+                            val enabled = call.argument<Boolean>("enabled") ?: throw IllegalArgumentException("enabled must be a boolean.")
+                            AutomationPreferences.setShowControlIndicator(this, enabled)
+                            BridgeSession.refreshControlIndicator()
+                            result.success(null)
+                        }
                         "getClipboardAccessEnabled" -> result.success(AutomationPreferences.clipboardAccessEnabled(this))
                         "setClipboardAccessEnabled" -> {
                             val enabled = call.argument<Boolean>("enabled") ?: throw IllegalArgumentException("enabled must be a boolean.")

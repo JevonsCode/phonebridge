@@ -952,7 +952,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
         FileInboxEntry(files: files.value, onOpen: openFiles),
       ],
       const SizedBox(height: 24),
-      if (!active && hasSavedPairing)
+      // The selected computer can be paused while another one stays connected.
+      if (hasSavedPairing && (!active || (!connected && !connecting && !autoReconnect)))
         FilledButton.icon(
           key: const Key('resume-saved'),
           onPressed: busy || startingDesktop || !enabled
@@ -1056,6 +1057,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
           subtitle: '每次 AI 操作前随机等待 0.3～1.3 秒',
         ),
         OperationTrailSetting(),
+        AutomationSetting(
+          preference: 'ShowControlIndicator',
+          title: '显示 AI 控制提示',
+          subtitle: 'AI 控制时在屏幕顶部显示蓝色细线，通知中同步显示控制方',
+        ),
       ],
     ),
     const SizedBox(height: 12),

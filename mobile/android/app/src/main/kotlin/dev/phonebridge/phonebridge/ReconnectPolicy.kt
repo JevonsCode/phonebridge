@@ -13,6 +13,9 @@ object ReconnectPolicy {
     fun resumeAllowedAfterEnd(previouslyAllowed: Boolean, reason: EndReason) =
         previouslyAllowed && permitsAutomaticResume(reason)
 
+    /** Hub v2 answers a reconnect that races the old socket with 1008 "Device already connected". */
+    fun isStaleConnectionRejection(code: Int, reason: String?) = code == 1008 && reason == "Device already connected"
+
     fun isPermanentHttpRejection(status: Int?) =
         status != null && status in 400..499 && status !in setOf(408, 409, 425, 429)
 

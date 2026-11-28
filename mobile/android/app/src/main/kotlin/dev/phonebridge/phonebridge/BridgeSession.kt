@@ -520,7 +520,10 @@ object BridgeSession {
             val idle = control.lease == null && control.pendingTaskCount == 0 && execution == null
             if (fresh && t?.connected == true && !t.viaUsb && idle) {
                 // Plugging in moves an idle wireless connection to the cable; active tasks are never cut.
-                close(t, "")
+                // Close politely and reconnect after the backoff delay so the Hub releases the old socket.
+                t.socket?.close(1000, "Switching to USB")
+                close(t, ""); t.retryAttempt = 0; scheduleReconnect(t)
+                return UsbLinkPolicy.linkState(true, true, true, true, false, false, true)
             }
             val current = transports[c.id]
             if (current?.connected != true && current?.connecting != true) {
@@ -606,6 +609,9 @@ object BridgeSession {
                         else close(t, "This computer removed the phone. Pair again to reconnect.")
                     } catch (_: Exception) { close(t, "Saved pairing could not be removed. Try again.") }
                 } else if (code == 4003) lost(t, "Computer paused this phone. Resume it on the computer.")
+                // The Hub has not yet noticed the previous socket closing (Wi-Fi flap, USB switch).
+                // That is transient: retry with backoff instead of pausing the trusted computer.
+                else if (ReconnectPolicy.isStaleConnectionRejection(code, reason)) lost(t, "Desktop disconnected. Reconnecting to the trusted computer.")
                 else if (code in setOf(1002, 1003, 1007, 1008, 1009)) pause(t, "Desktop rejected this session. Resume locally after checking pairing.")
                 else lost(t, "Desktop disconnected. Reconnecting to the trusted computer.")
             } }
@@ -720,7 +726,9 @@ object BridgeSession {
         lastWaitingCount = control.waitingCount
         flushControlEvents()
         updateAwake(); showNotification()
+        refreshControlIndicator()
     }
+    fun refreshControlIndicator() { service?.showControlIndicator(control.lease != null && !localUse.active) }
     private fun receive(t: Transport, text: String) {
         if (!t.connected) return
         val request = try { JSONObject(text) } catch (_: Exception) { pause(t, "Invalid command format."); return }

@@ -44,6 +44,8 @@ class PhoneAccessibilityService : AccessibilityService() {
     private var uiEpoch = 0L
     private var lastScreenshot: ScreenshotPolicy.Frame? = null
     private val operationTrail by lazy { OperationTrail(this) }
+    private val controlIndicator by lazy { ControlIndicator(this) }
+    fun showControlIndicator(visible: Boolean) = controlIndicator.update(visible)
     var foregroundProtected = false
         private set
 
@@ -133,6 +135,7 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     override fun onUnbind(intent: Intent?): Boolean {
         unregisterSystemSignals()
+        controlIndicator.hide()
         clearOperationTrail()
         BridgeSession.detach(this)
         return super.onUnbind(intent)
@@ -140,6 +143,7 @@ class PhoneAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         unregisterSystemSignals()
+        controlIndicator.hide()
         clearOperationTrail()
         AccessibilityFocusedOperation.cancel(this)
         BridgeSession.detach(this)
@@ -242,6 +246,8 @@ class PhoneAccessibilityService : AccessibilityService() {
             val occlusions = mutableListOf<Occlusion>()
             for (window in visible) {
                 if (window.id == rootId || window.displayId != Display.DEFAULT_DISPLAY) continue
+                // Our own status-bar control line: non-touchable and outside the crop.
+                if (controlIndicator.owns(window.id)) continue
                 val area = Rect().also { window.getBoundsInScreen(it) }
                 if (area.isEmpty) continue
                 val otherRoot = window.root
@@ -277,7 +283,7 @@ class PhoneAccessibilityService : AccessibilityService() {
             val excludedSystemWindowIds = visible.filter { window ->
                 val area = Rect().also { window.getBoundsInScreen(it) }
                 window.id != rootId && window.displayId == Display.DEFAULT_DISPLAY &&
-                    window.type == AccessibilityWindowInfo.TYPE_SYSTEM &&
+                    (window.type == AccessibilityWindowInfo.TYPE_SYSTEM || controlIndicator.owns(window.id)) &&
                     !window.isFocused && !window.isActive && !area.isEmpty &&
                     !Rect.intersects(area, bounds)
             }.map { it.id }.toSet()
