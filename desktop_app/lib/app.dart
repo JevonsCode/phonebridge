@@ -1079,6 +1079,12 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
             },
           ),
         ),
+      // Shown beside the QR code as the cable alternative, or whenever a phone is plugged in.
+      if (s != null && (!connected || s.usb.phones.isNotEmpty)) ...[
+        if (pairingAvailable && !connected) const SizedBox(height: 20),
+        _usbCard(s.usb),
+        const SizedBox(height: 20),
+      ],
       if (connected)
         card(
           Row(
@@ -1106,6 +1112,120 @@ class _PhoneBridgeAppState extends State<PhoneBridgeApp> {
         ),
     ];
   }
+
+  String usbStateLabel(UsbPhone phone) => switch (phone.state) {
+    'unauthorized' => t(
+      '请在手机弹窗中允许 USB 调试，并勾选「始终允许」',
+      'Allow USB debugging in the phone dialog and tick "Always allow"',
+    ),
+    'offline' => t('USB 连接未就绪，请重新插拔数据线', 'USB not ready. Reconnect the cable'),
+    'app_missing' => t('手机未安装 PhoneBridge', 'PhoneBridge is not installed on the phone'),
+    'app_outdated' => t(
+      '请把手机 PhoneBridge 升级到 0.9.0 或更高版本',
+      'Update PhoneBridge on the phone to 0.9.0 or later',
+    ),
+    'unknown' => t('尚未配对，点击右侧按钮在手机上确认', 'Not paired yet. Confirm on the phone'),
+    'pairing_requested' => t(
+      '已在手机上打开配对，请核对后点「连接」',
+      'Pairing is open on the phone. Check it and tap Connect',
+    ),
+    'paused' => t('手机已暂停这台电脑，请在手机上继续连接', 'Paused on the phone. Resume there'),
+    'accessibility_disabled' => t(
+      '请在手机上开启 PhoneBridge 无障碍服务',
+      'Turn on the PhoneBridge accessibility service on the phone',
+    ),
+    'locked' => t('请解锁手机，解锁后自动连接', 'Unlock the phone; it connects automatically'),
+    'connecting' || 'waiting' => t('正在通过 USB 连接…', 'Connecting over USB…'),
+    'connected_usb' => t('已通过 USB 连接', 'Connected over USB'),
+    'connected_wireless' => t(
+      '已通过无线网络连接，下次重连时改走 USB',
+      'Connected wirelessly; USB is used on the next reconnect',
+    ),
+    'tunnel_failed' => t('无法建立 USB 隧道，请重新插拔', 'Could not open the USB tunnel. Reconnect the cable'),
+    _ => t('暂时无法读取手机状态', 'Phone status unavailable'),
+  };
+
+  Widget _usbCard(UsbSummary usb) => card(
+    Column(
+      key: const Key('usb-quick-connect'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.usb_rounded, color: blue, size: 22),
+            const SizedBox(width: 10),
+            label(t('USB 快连', 'USB quick connect')),
+          ],
+        ),
+        const SizedBox(height: 10),
+        if (usb.serviceOutdated)
+          Text(
+            t(
+              '后台服务需要更新。重新打开 PhoneBridge 后即可使用 USB 快连。',
+              'The background service needs an update. Reopen PhoneBridge to use USB quick connect.',
+            ),
+          )
+        else if (!usb.adbFound) ...[
+          Text(
+            t(
+              '未找到 adb。安装 Android platform-tools 后，插上数据线即可连接，无需扫码。无线扫码仍然可用。',
+              'adb was not found. Install Android platform-tools, then plug in the cable to connect without scanning. Wireless QR pairing still works.',
+            ),
+          ),
+          const SizedBox(height: 6),
+          const SelectableText(
+            'https://developer.android.com/tools/releases/platform-tools',
+            style: TextStyle(fontSize: 12, color: muted),
+          ),
+        ] else if (usb.phones.isEmpty)
+          Text(
+            t(
+              '用数据线连接手机，并在手机「开发者选项」中开启 USB 调试。首次插线需在手机上允许这台电脑。',
+              'Connect the phone with a cable and turn on USB debugging in Developer options. Allow this computer on the phone the first time.',
+            ),
+          )
+        else
+          for (final phone in usb.phones)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.smartphone_rounded,
+                    size: 20,
+                    color: phone.state == 'connected_usb' ? blue : muted,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          phone.displayName,
+                          style: const TextStyle(fontWeight: FontWeight.w500),
+                        ),
+                        Text(
+                          usbStateLabel(phone),
+                          key: Key('usb-state-${phone.serial}'),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (phone.canRequestPairing)
+                    TextButton(
+                      key: Key('usb-pair-${phone.serial}'),
+                      onPressed: c.mutating || !c.ready
+                          ? null
+                          : () => c.mutate('usb-pair', {'serial': phone.serial}),
+                      child: Text(t('在手机上确认', 'Confirm on phone')),
+                    ),
+                ],
+              ),
+            ),
+      ],
+    ),
+  );
 
   List<Widget> _ai(BuildContext context) {
     final config = c.status?.mcpConfiguration;

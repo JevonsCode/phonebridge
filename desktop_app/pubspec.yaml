@@ -1,7 +1,7 @@
 name: phonebridge_desktop
 description: PhoneBridge desktop companion.
 publish_to: none
-version: 0.8.0+2031
+version: 0.9.0+2032
 environment:
   sdk: ^3.11.5
 dependencies:

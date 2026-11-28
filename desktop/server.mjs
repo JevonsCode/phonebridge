@@ -60,6 +60,19 @@ export async function authenticatedStatus(config, token, { interfaces, fetchImpl
   if (typeof status.connected !== 'boolean') throw new Error('Unexpected endpoint identity.');
   return status;
 }
+/** USB quick connect status from the always-on service; older services simply report none. */
+export async function usbStatus(config, token, { fetchImpl = fetch } = {}) {
+  try {
+    requireLocalAddress(config.hostAddress);
+    const response = await fetchImpl(`http://${config.hostAddress}:${config.port}/usb`, { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(2500), redirect: 'error' });
+    if (response.status === 404) return { available: false, adbFound: false, phones: [], serviceOutdated: true };
+    if (!response.ok) return { available: false, adbFound: false, phones: [] };
+    const value = await response.json();
+    const phones = Array.isArray(value.phones) ? value.phones.filter(phone => phone && typeof phone.serial === 'string' && typeof phone.state === 'string')
+      .slice(0, 16).map(({ serial, model, state, appVersion }) => ({ serial, state, ...(typeof model === 'string' ? { model } : {}), ...(typeof appVersion === 'string' ? { appVersion } : {}) })) : [];
+    return { available: value.available === true, adbFound: value.adbFound === true, phones };
+  } catch { return { available: false, adbFound: false, phones: [] }; }
+}
 export function createMcpConfiguration(config, credentialFile, { configFile, platform = config.schema === 'phonebridge-macos-desktop-v1' ? 'darwin' : 'win32' } = {}) {
   const activeConfig = configFile ?? process.env.PHONEBRIDGE_DESKTOP_CONFIG ?? join(homedir(), '.phonebridge', platform === 'darwin' ? 'desktop-macos.json' : 'desktop.json');
   const stable = join(dirname(resolve(activeConfig)), 'bin', platform === 'darwin' ? 'phonebridge-mcp' : 'PhoneBridgeMcp.exe');
@@ -111,7 +124,17 @@ export async function createDashboard({ config, token, status, startService, cha
       if (req.method === 'GET' && req.url === `${base}/status`) {
         let current; try { current = await status(); } catch { current = { connected: false, unavailable: true }; }
         const devices = Array.isArray(current.devices) ? current.devices.map(({ id, name, modelName, paused, connected, protocol, capabilities, busy, readOnly, connectionId, controlling, controlOwnerName, waitingCount, transfer }) => ({ id, name, modelName, paused, connected, protocol, capabilities, busy, readOnly, connectionId, controlling, controlOwnerName, ...(Number.isInteger(waitingCount) && waitingCount >= 0 && waitingCount <= 64 ? { waitingCount } : {}), ...(transfer ? { transfer: { name: transfer.name, state: transfer.state, size: transfer.size, mimeType: transfer.mimeType } } : {}) })) : [];
-        send(200, { connected: current.connected, devices, transfer: current.transfer, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? hostname(), error: startupError?.() }); return;
+        send(200, { connected: current.connected, devices, usb: await usbStatus(config, token), transfer: current.transfer, unavailable: !!current.unavailable, address: config.hostAddress, port: config.port, networks: networks().map(a => ({ name: a.name, address: a.address })), qr: await qr(), mcpConfiguration:mcpConfiguration?.(), name: process.env.COMPUTERNAME ?? hostname(), error: startupError?.() }); return;
+      }
+      if (req.method === 'POST' && req.url === `${base}/usb-pair`) {
+        let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 512) throw new Error('Request too large'); }
+        const { serial } = JSON.parse(body);
+        if (typeof serial !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(serial)) throw new Error('Invalid USB phone');
+        requireLocalAddress(config.hostAddress);
+        const response = await fetch(`http://${config.hostAddress}:${config.port}/usb/pair`, { method: 'POST',
+          headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ serial }), redirect: 'error', signal: AbortSignal.timeout(15000) });
+        if (!response.ok) throw new Error('The phone did not open PhoneBridge. Unlock it and make sure PhoneBridge 0.9.0 or later is installed.');
+        send(200, { ok: true }); return;
       }
       if (req.method === 'POST' && req.url === `${base}/start`) { req.resume(); await startService(); send(200, { ok: true }); return; }
       if (allowLan && req.method === 'POST' && req.url === `${base}/allow-lan`) { req.resume(); await allowLan(); send(200, { ok: true }); return; }
@@ -232,7 +255,7 @@ async function main() {
       readConfig: () => readOwnedConfig(path, sid),
       createCandidate: async next => {
         const { DesktopSupervisor, supervisorOptionsForPlatform } = await import('../bridge/dist/supervisor.js');
-        const candidate = new DesktopSupervisor(supervisorOptionsForPlatform({ token, phoneDirectoryPath: join(dirname(savedCredentialFile), 'phones.json'), host: next.hostAddress, port: next.port, allowLan: true,
+        const candidate = new DesktopSupervisor(supervisorOptionsForPlatform({ token, phoneDirectoryPath: join(dirname(savedCredentialFile), 'phones.json'), host: next.hostAddress, port: next.port, allowLan: true, usbLink: true,
           logFile: process.env.PHONEBRIDGE_LOG_FILE ?? join(dirname(savedCredentialFile), 'operations.jsonl') }));
         try { await candidate.start(); return candidate; }
         catch (error) { await candidate.close(); throw error; }

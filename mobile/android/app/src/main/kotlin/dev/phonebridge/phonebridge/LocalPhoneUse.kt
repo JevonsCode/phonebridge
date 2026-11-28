@@ -5,6 +5,7 @@ import android.view.accessibility.AccessibilityEvent
 /** Main-thread input arbitration. Only event type, package and monotonic time are used. */
 class LocalPhoneUse(private val uptime: () -> Long, private val quietMillis: Long = 10_000) {
     companion object {
+        const val FOREIGN_SETTLE_MILLIS = 2_000L
         fun requireFreshTarget(method: String) {
             if (method in setOf("tap", "long_press", "swipe", "node_action", "commit_text", "set_text", "global_action"))
                 throw BridgeFailure("OBSERVATION_REQUIRED", "Local input changed the screen. Request fresh state or a screenshot before acting.")
@@ -21,18 +22,21 @@ class LocalPhoneUse(private val uptime: () -> Long, private val quietMillis: Lon
 
     // App-generated accessibility events have no input origin. Ignore the expected app's
     // feedback around an actual native dispatch, including delayed delivery after completion.
+    // A remote tap may open another app (share sheet, composer). Its layout scrolls and pre-filled
+    // text are not owner input, so they count as feedback for a short while from any package.
     private data class Effect(val packageName: String, val start: Long, var end: Long, var touchUntil: Long,
-        var eventTypes: Int)
+        var eventTypes: Int, var foreignUntil: Long)
     private val effects = ArrayDeque<Effect>()
     private var gesture: Effect? = null
 
     fun expectFeedback(packageName: String, isGesture: Boolean = false, eventTypes: Int, start: Long = uptime()) {
         val now = uptime()
-        effects.removeAll { it.end < now - 1000 }
+        effects.removeAll { it.end < now - 1000 && it.foreignUntil < now - 1000 }
         if (effects.size == 32) effects.removeFirst()
         val touchEvents = AccessibilityEvent.TYPE_TOUCH_INTERACTION_START or AccessibilityEvent.TYPE_TOUCH_INTERACTION_END
         val effect = Effect(packageName, start, if (isGesture) Long.MAX_VALUE else now + 500,
-            if (isGesture) Long.MAX_VALUE else -1, if (isGesture) eventTypes or touchEvents else eventTypes)
+            if (isGesture) Long.MAX_VALUE else -1, if (isGesture) eventTypes or touchEvents else eventTypes,
+            if (isGesture) Long.MAX_VALUE else now + FOREIGN_SETTLE_MILLIS)
         effects.addLast(effect)
         if (isGesture) gesture = effect
     }
@@ -41,6 +45,7 @@ class LocalPhoneUse(private val uptime: () -> Long, private val quietMillis: Lon
         gesture?.let {
             it.touchUntil = uptime()
             it.end = it.touchUntil + 500
+            it.foreignUntil = it.touchUntil + FOREIGN_SETTLE_MILLIS
         }
         gesture = null
     }
@@ -67,6 +72,8 @@ class LocalPhoneUse(private val uptime: () -> Long, private val quietMillis: Lon
     }
 
     private fun consumeFeedback(type: Int, packageName: String?, time: Long, touch: Boolean): Boolean {
+        val foreignLayout = type == AccessibilityEvent.TYPE_VIEW_SCROLLED || type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+        if (!touch && foreignLayout && effects.any { time >= it.start && time <= it.foreignUntil }) return true
         val effect = effects.firstOrNull {
             (it.eventTypes and type) != 0 && time >= it.start &&
                 (if (touch) time <= it.touchUntil else it.packageName == packageName && time <= it.end)

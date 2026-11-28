@@ -17,6 +17,7 @@ void main() {
   var accessibility = true, reconnecting = false;
   bool? accessibilityAuthorized;
   var lastError = '';
+  var usbPending = false;
   Completer<void>? desktopStart;
   PlatformException? desktopFailure;
   setUp(() {
@@ -31,6 +32,7 @@ void main() {
     accessibility = true;
     accessibilityAuthorized = null;
     lastError = '';
+    usbPending = false;
     reconnecting = false;
     desktopStart = null;
     desktopFailure = null;
@@ -64,8 +66,17 @@ void main() {
           }.contains(call.method)) {
             return true;
           }
+          if (call.method == 'takeUsbPairing') {
+            usbPending = false;
+            return {
+              'endpoint': 'ws://192.168.1.10:8767/device',
+              'token': 'u' * 43,
+              'name': 'Studio Mac',
+            };
+          }
           if (call.method == 'status') {
             return {
+              'usbPairingPending': usbPending,
               'accessibilityEnabled': accessibility,
               'accessibilityAuthorized': ?accessibilityAuthorized,
               'reconnecting': reconnecting,
@@ -141,6 +152,22 @@ void main() {
     await tester.tap(find.byKey(const Key('manual-pairing')));
     await tester.pumpAndSettle();
   }
+
+  testWidgets('a USB pairing request pre-fills the form but still needs consent', (
+    tester,
+  ) async {
+    usbPending = true;
+    await tester.pumpWidget(const PhoneBridgeApp());
+    await tester.pumpAndSettle();
+    expect(find.text('确认 USB 连接的电脑'), findsOneWidget);
+    expect(find.byKey(const Key('pairing-usb-source')), findsOneWidget);
+    expect(find.text('Studio Mac · 192.168.1.10'), findsOneWidget);
+    expect(find.byKey(const Key('scan-pairing')), findsNothing);
+    final consent = tester.widget<CheckboxListTile>(find.byKey(const Key('consent')));
+    expect(consent.value, isFalse);
+    expect(calls.where((c) => c.method == 'connect'), isEmpty);
+    await tester.pumpWidget(const SizedBox());
+  });
 
   testWidgets('computer pause is a clear state without a generic error', (
     tester,

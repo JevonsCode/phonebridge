@@ -76,6 +76,8 @@ jobs:
         run: node --test desktop/test/macos.test.mjs
       - name: Test dashboard upgrade isolation
         run: node --test desktop/test/client-reuse.test.mjs
+      - name: Test dashboard USB status
+        run: node --test desktop/test/usb-status.test.mjs
       - name: Test stable MCP bootstrap
         run: node --test desktop/test/stable-mcp.test.mjs
       - name: Package signed Flutter App, DMG and ZIP
@@ -167,6 +169,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Bridge compilation failed.' }
       - name: Test dashboard upgrade isolation
         run: node --test desktop/test/client-reuse.test.mjs
+      - name: Test dashboard USB status
+        run: node --test desktop/test/usb-status.test.mjs
       - name: Test stable MCP bootstrap
         run: node --test desktop/test/stable-mcp.test.mjs
       - name: Package Windows preview

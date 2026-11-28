@@ -43,7 +43,7 @@ async function main(): Promise<void> {
     recovery = transactions.createNetworkRecovery({ config, networks: network.localNetworks,
       readConfig: () => desktop.readOwnedConfig(configFile, ownerSid),
       createCandidate: async (next: { hostAddress: string; port: number }) => {
-        const candidate = new DesktopSupervisor({ ...sharedOptions, host: next.hostAddress, port: next.port });
+        const candidate = new DesktopSupervisor({ ...sharedOptions, host: next.hostAddress, port: next.port, usbLink: true });
         try { await candidate.start(); return candidate; }
         catch (error) { await candidate.close(); throw error; }
       },
@@ -55,7 +55,7 @@ async function main(): Promise<void> {
     recovery.watch();
     url = supervisor.endpoint!;
   } else {
-    supervisor = new DesktopSupervisor({ ...sharedOptions, host: process.env.PHONEBRIDGE_HOST, port });
+    supervisor = new DesktopSupervisor({ ...sharedOptions, host: process.env.PHONEBRIDGE_HOST, port, usbLink: process.env.PHONEBRIDGE_USB_LINK === '1' });
     url = await supervisor.start();
   }
   let pairing: Awaited<ReturnType<typeof startPairingDisplay>> | undefined;

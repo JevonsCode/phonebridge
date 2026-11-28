@@ -7,5 +7,16 @@
     <string name="session_read_only">Read only</string>
     <string name="session_description">Trusted computer access. Pause stops access and automatic reconnection.</string>
     <string name="session_stop">Pause</string>
+    <string name="session_controlling">AI is controlling</string>
+    <string name="session_controlling_detail">%1$s is operating allowed apps. Touch the screen to pause AI.</string>
+    <string name="session_controlling_short">AI on</string>
+    <string name="session_queued">AI tasks waiting</string>
+    <string name="session_queued_detail">%1$d waiting for control, first come first served.</string>
+    <string name="session_queued_short">Queue %1$d</string>
+    <string name="session_local_use">AI paused while you use the phone</string>
+    <string name="session_local_use_detail">%1$d task(s) continue about 10 seconds after you stop.</string>
+    <string name="session_local_use_short">AI paused</string>
+    <string name="share_sheet">System share sheet</string>
+    <string name="session_via_usb">Connected over USB</string>
     <string name="accessibility_description">PhoneBridge lets your paired computer read the visible screen and, only after you enable actions locally, operate allowed apps. Screen text and screenshots leave this phone for your paired computer. Password fields are excluded from text observations, but screenshots may contain sensitive information. Stop the session at any time in PhoneBridge or its notification.</string>
 </resources>

@@ -21,11 +21,21 @@ object AppAccessCatalog {
         val pm = context.packageManager
         val protected = protectedPackages(context)
         val apps = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
-            .associate { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+            .associate { it.activityInfo.packageName to it.loadLabel(pm).toString() }.toMutableMap()
+        // The system share sheet has no launcher icon, so it could never be selected. Without it an
+        // AI cannot finish a share flow the owner started; targets still need their own approval.
+        shareSheetPackage(context)?.takeIf { it !in protected && it !in apps }?.let {
+            apps[it] = AppLanguage.resources(context).getString(R.string.share_sheet)
+        }
         val collator = Collator.getInstance()
         return (apps.keys + allowed).map { packageName ->
             mapOf<String, Any>("packageName" to packageName, "name" to (apps[packageName] ?: packageName),
                 "installed" to apps.containsKey(packageName), "protected" to (packageName in protected))
         }.sortedWith { a, b -> collator.compare(a["name"] as String, b["name"] as String) }
     }
+
+    fun shareSheetPackage(context: Context): String? = try {
+        context.packageManager.resolveActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("image/*"), null), 0)
+            ?.activityInfo?.packageName
+    } catch (_: Exception) { null }
 }

@@ -135,6 +135,7 @@ class DashboardApi {
           'allow-lan',
           'send-file',
           'device-management',
+          'usb-pair',
         ].contains(route)) {
       throw const BackendFailure('unavailable');
     }
@@ -284,6 +285,7 @@ class DesktopStatus {
           (n) => (address: n['address'] as String, name: n['name'] as String),
         )
         .toList();
+    usb = UsbSummary(data['usb'] is Map ? data['usb'] as Map : const {});
     mcpConfiguration = data['mcpConfiguration'] is Map<String, dynamic>
         ? data['mcpConfiguration']
         : null;
@@ -306,7 +308,51 @@ class DesktopStatus {
   late final List<DesktopDevice> devices;
   late final List<({String address, String name})> networks;
   late final Map<String, dynamic>? mcpConfiguration;
+  late final UsbSummary usb;
   Uint8List? qr;
+}
+
+/// USB quick connect state reported by the always-on service (adb + reverse tunnel).
+class UsbSummary {
+  UsbSummary(Map data)
+    : available = data['available'] == true,
+      adbFound = data['adbFound'] == true,
+      serviceOutdated = data['serviceOutdated'] == true,
+      phones = (data['phones'] is List ? data['phones'] as List : const [])
+          .whereType<Map>()
+          .where(
+            (p) =>
+                p['serial'] is String &&
+                RegExp(r'^[A-Za-z0-9._:-]{1,128}$').hasMatch(p['serial']) &&
+                p['state'] is String,
+          )
+          .map(
+            (p) => UsbPhone(
+              serial: p['serial'] as String,
+              state: p['state'] as String,
+              model: p['model'] is String ? p['model'] as String : null,
+              appVersion: p['appVersion'] is String
+                  ? p['appVersion'] as String
+                  : null,
+            ),
+          )
+          .toList();
+  final bool available, adbFound, serviceOutdated;
+  final List<UsbPhone> phones;
+}
+
+class UsbPhone {
+  const UsbPhone({
+    required this.serial,
+    required this.state,
+    this.model,
+    this.appVersion,
+  });
+  final String serial, state;
+  final String? model, appVersion;
+  String get displayName => model?.isNotEmpty == true ? model! : serial;
+  bool get canRequestPairing =>
+      const {'unknown', 'pairing_requested', 'waiting'}.contains(state);
 }
 
 class DesktopController extends ChangeNotifier {

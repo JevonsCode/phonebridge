@@ -38,6 +38,7 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 class PhoneAccessibilityService : AccessibilityService() {
+    private companion object { const val USB_STATE = "android.hardware.usb.action.USB_STATE" }
     private val nodes = mutableMapOf<String, AccessibilityNodeInfo>()
     private val imageWorker = Executors.newSingleThreadExecutor()
     private var uiEpoch = 0L
@@ -71,6 +72,33 @@ class PhoneAccessibilityService : AccessibilityService() {
             serviceInfo = serviceInfo.apply { flags = flags or AccessibilityServiceInfo.FLAG_INPUT_METHOD_EDITOR }
         }
         BridgeSession.attach(this)
+        registerSystemSignals()
+    }
+
+    private var systemSignals: android.content.BroadcastReceiver? = null
+    /** Unlock and USB state are system broadcasts; RECEIVER_NOT_EXPORTED still receives them. */
+    private fun registerSystemSignals() {
+        if (systemSignals != null) return
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context, intent: Intent) {
+                when (intent.action) {
+                    Intent.ACTION_USER_PRESENT -> BridgeSession.ownerUnlocked()
+                    USB_STATE -> if (!intent.getBooleanExtra("connected", false)) BridgeSession.usbDisconnected()
+                }
+            }
+        }
+        val filter = android.content.IntentFilter().apply { addAction(Intent.ACTION_USER_PRESENT); addAction(USB_STATE) }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED) else registerReceiver(receiver, filter)
+            systemSignals = receiver
+        } catch (error: RuntimeException) {
+            Log.w("PhoneBridgeConnection", "System signals unavailable: ${error.javaClass.simpleName}")
+        }
+    }
+    private fun unregisterSystemSignals() {
+        val receiver = systemSignals ?: return
+        systemSignals = null
+        runCatching { unregisterReceiver(receiver) }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -104,12 +132,14 @@ class PhoneAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        unregisterSystemSignals()
         clearOperationTrail()
         BridgeSession.detach(this)
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        unregisterSystemSignals()
         clearOperationTrail()
         AccessibilityFocusedOperation.cancel(this)
         BridgeSession.detach(this)

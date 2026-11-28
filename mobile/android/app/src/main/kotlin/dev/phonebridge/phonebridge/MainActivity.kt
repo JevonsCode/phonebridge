@@ -27,6 +27,11 @@ class MainActivity : FlutterActivity() {
     private var recoveryResult: MethodChannel.Result? = null
     private var updater: AppUpdater? = null
     private var updateEvents: EventChannel? = null
+    private companion object {
+        /** Process-wide: the DUMP-protected alias hands the request to the regular owner task. */
+        var pendingUsbPairing: Map<String, Any>? = null
+        const val FORWARDED_USB_PAIRING = "dev.phonebridge.phonebridge.FORWARDED_USB_PAIRING"
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -124,7 +129,23 @@ class MainActivity : FlutterActivity() {
                                 result.success(mapOf("operations" to (operations ?: "[]"), "files" to inbox.history(), "error" to error))
                             }
                         }
-                        "status" -> result.success(BridgeSession.status())
+                        "status" -> result.success(BridgeSession.status() + ("usbPairingPending" to (pendingUsbPairing != null)))
+                        "takeUsbPairing" -> { result.success(pendingUsbPairing); pendingUsbPairing = null }
+                        "openNotificationSettings" -> {
+                            startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName))
+                            result.success(null)
+                        }
+                        "openLiveUpdateSettings" -> {
+                            val promotion = Intent("android.settings.APP_NOTIFICATION_PROMOTION_SETTINGS").putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                            val target = if (promotion.resolveActivity(packageManager) != null) promotion
+                                else Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                            startActivity(target)
+                            result.success(null)
+                        }
+                        "openDeveloperSettings" -> {
+                            startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
+                            result.success(null)
+                        }
                         "getScreenAwakeMode" -> result.success(BridgeSession.getScreenAwakeMode())
                         "setScreenAwakeMode" -> {
                             BridgeSession.setScreenAwakeMode(call.argument<String>("mode") ?: "")
@@ -191,6 +212,7 @@ class MainActivity : FlutterActivity() {
                                 call.argument<List<String>>("packages") ?: listOf(packageName, "com.tencent.mm"),
                                 call.argument<Boolean>("remember") ?: true,
                                 call.argument<Boolean>("replaceAllowedPackages") == true,
+                                call.argument<String>("name") ?: "",
                             )
                             result.success(BridgeSession.status())
                         }
@@ -231,6 +253,74 @@ class MainActivity : FlutterActivity() {
                     result.error("UNAVAILABLE", "Android could not complete this request.", null)
                 }
             }
+    }
+
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        acceptUsbPairing(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        acceptUsbPairing(intent)
+    }
+
+    private fun viaUsbAlias(value: Intent?) = value?.component?.className == "$packageName.UsbPairingActivity"
+
+    /**
+     * Only the DUMP-protected alias (ADB shell of a USB-debugging-authorized computer) can carry
+     * a pairing request. The request only pre-fills the normal pairing form; the owner still
+     * reviews the computer and confirms consent before anything connects.
+     */
+    private fun acceptUsbPairing(value: Intent?) {
+        if (value?.getBooleanExtra(FORWARDED_USB_PAIRING, false) == true && !viaUsbAlias(value)) {
+            value.removeExtra(FORWARDED_USB_PAIRING)
+            if (pendingUsbPairing != null) requestOwnerUnlock()
+            return
+        }
+        if (value?.action != UsbLinkPolicy.ACTION_PAIR || !viaUsbAlias(value)) return
+        // Hand over to the regular PhoneBridge task, so the owner sees one App, not a second copy.
+        forwardToOwnerTask()
+        val token = value.getStringExtra("token") ?: return
+        val port = value.getIntExtra("port", -1)
+        val endpoint = value.getStringExtra("endpoint")
+        val name = (value.getStringExtra("name") ?: "").filter { !it.isISOControl() }.take(64)
+        value.removeExtra("token")
+        try {
+            EndpointPolicy.validateToken(token)
+            require(UsbLinkPolicy.validPort(port))
+            val normalized = if (endpoint.isNullOrEmpty()) UsbLinkPolicy.loopbackEndpoint(port) else EndpointPolicy.validate(endpoint, true)
+            BridgeSession.initialize(this)
+            BridgeSession.usbPairingOffered(token, port)
+            if (BridgeSession.isKnownToken(token)) return
+            pendingUsbPairing = mapOf("endpoint" to normalized, "token" to token, "name" to name)
+        } catch (_: Exception) {
+            Log.w("PhoneBridgeConnection", "Rejected USB pairing request.")
+        }
+    }
+
+    private fun forwardToOwnerTask() {
+        // Runs after the extras were read below; posting keeps the order explicit.
+        BridgeSession.main.post {
+            startActivity(Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                .putExtra(FORWARDED_USB_PAIRING, true))
+            finish()
+        }
+    }
+
+    /** Public API: wakes the display and asks the system to show its own unlock prompt. */
+    private fun requestOwnerUnlock() {
+        val keyguard = getSystemService(android.app.KeyguardManager::class.java)
+        if (!keyguard.isKeyguardLocked) return
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
+        keyguard.requestDismissKeyguard(this, object : android.app.KeyguardManager.KeyguardDismissCallback() {
+            override fun onDismissSucceeded() { setShowWhenLocked(false); setTurnScreenOn(false) }
+            override fun onDismissCancelled() { setShowWhenLocked(false); setTurnScreenOn(false) }
+            override fun onDismissError() { setShowWhenLocked(false); setTurnScreenOn(false) }
+        })
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {

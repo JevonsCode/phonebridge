@@ -7,5 +7,16 @@
     <string name="session_read_only">只读</string>
     <string name="session_description">可信电脑正在访问。暂停会停止访问和自动重连。</string>
     <string name="session_stop">暂停</string>
+    <string name="session_controlling">AI 正在控制</string>
+    <string name="session_controlling_detail">%1$s 正在操作已授权的应用。触摸屏幕即可暂停 AI。</string>
+    <string name="session_controlling_short">AI 控制</string>
+    <string name="session_queued">AI 任务排队中</string>
+    <string name="session_queued_detail">%1$d 个任务等待控制，按先来后到轮流。</string>
+    <string name="session_queued_short">排队 %1$d</string>
+    <string name="session_local_use">你正在使用手机，AI 已暂停</string>
+    <string name="session_local_use_detail">停止操作约 10 秒后，%1$d 个任务继续。</string>
+    <string name="session_local_use_short">AI 暂停</string>
+    <string name="share_sheet">系统分享面板</string>
+    <string name="session_via_usb">已通过 USB 连接</string>
     <string name="accessibility_description">PhoneBridge 允许配对电脑读取可见界面，只有你在手机上开启操作后，才能控制允许的应用。界面文字和截图会发送到配对电脑。文字读取排除密码字段，但截图可能包含敏感信息。你可以随时在 PhoneBridge 或连接通知中暂停。</string>
 </resources>

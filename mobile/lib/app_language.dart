@@ -548,6 +548,37 @@ const _english = <String, String>{
   '空闲时任意电脑可直接使用；有人操作时自动排队。':
       'Any computer can use the phone when idle. Tasks queue automatically while another is operating.',
   '其他系统': 'Other OS',
+  '确认 USB 连接的电脑': 'Confirm the USB computer',
+  '这台电脑已通过 USB 调试授权发起配对。核对名称和地址，勾选选项后点「连接」；之后插线会自动连接。':
+      'This computer started pairing through USB debugging you authorized. Check its name and address, tick the options and tap Connect. Afterwards, plugging in connects automatically.',
+  'AI 正在控制':
+      'AI is controlling',
+  '已通过 USB 连接':
+      'Connected over USB',
+  '通过 USB 识别电脑':
+      'Computer recognized over USB',
+  '连接通知':
+      'Connection notification',
+  '已关闭 · 连接需要此通知':
+      'Off · Required for the connection',
+  '已允许':
+      'Allowed',
+  '实时更新':
+      'Live Updates',
+  '本机系统不支持，显示为普通通知':
+      'Not supported by this system; shown as a normal notification',
+  '已开启 · AI 控制和排队时显示在状态栏':
+      'On · Shown in the status bar while AI controls or waits',
+  '已关闭 · 点击开启':
+      'Off · Tap to turn on',
+  'USB 快连':
+      'USB quick connect',
+  '已检测到 USB 电脑':
+      'USB computer detected',
+  '插上数据线，在电脑端完成 USB 调试授权':
+      'Plug in a cable and authorize USB debugging for your computer',
+  '在手机「开发者选项」开启 USB 调试，插上数据线后，在系统弹窗中确认电脑指纹并勾选「始终允许」。电脑端 PhoneBridge 检测到手机后会发起配对，你在手机上核对并确认一次即可；之后插线会自动走 USB 连接，拔线后自动改用无线网络。\n\n电脑需要安装 Android platform-tools（adb）。PhoneBridge 只使用 adb 建立网络隧道和发送配对请求，不安装 App、不模拟点击，也无需开启「USB 调试（安全设置）」。\n\n撤销：在「开发者选项」点「撤销 USB 调试授权」或关闭 USB 调试；在「设置 → 已记住的电脑」删除电脑会同时删除配对。锁屏、PIN 和指纹始终由系统处理。':
+      'Turn on USB debugging in Developer options, plug in the cable, confirm the computer fingerprint in the system dialog and tick "Always allow". When the desktop PhoneBridge detects the phone it starts pairing; check and confirm once on the phone. Afterwards, plugging in connects over USB automatically, and unplugging falls back to the wireless network.\n\nThe computer needs Android platform-tools (adb). PhoneBridge only uses adb for a network tunnel and the pairing request. It does not install apps or inject taps, and does not need "USB debugging (Security settings)".\n\nTo revoke, tap "Revoke USB debugging authorizations" or turn off USB debugging in Developer options. Deleting the computer in Settings → Saved computers also deletes its pairing. The lock screen, PIN and fingerprint are always handled by the system.',
 };
 const _chineseNative = <String, String>{
   'Accessibility was interrupted.': '无障碍服务已中断，正在尝试恢复连接',
