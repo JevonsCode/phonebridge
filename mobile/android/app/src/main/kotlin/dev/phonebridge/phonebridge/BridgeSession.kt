@@ -34,7 +34,7 @@ object BridgeSession {
         var connected: Boolean = false, var connecting: Boolean = false,
         var negotiatedV2: Boolean = false, var legacyNeedsObservation: Boolean = false,
         var error: String = "", var retryAttempt: Int = 0, var retry: Runnable? = null,
-        var connectTimeout: Runnable? = null)
+        var connectTimeout: Runnable? = null, var viaUsb: Boolean = false)
     private data class Operation(val id: String, val method: String, val transport: Transport,
         val lease: ControlLeaseManager.Lease, val record: TrustedPairing, val generation: Long,
         var timeout: Runnable? = null, var replied: Boolean = false, var invalidated: Boolean = false,
@@ -45,6 +45,9 @@ object BridgeSession {
     private val discoveryTimes = mutableMapOf<String, Long>()
     private val automaticStarts = mutableMapOf<String, DesktopServiceRecovery>()
     val localUse = LocalPhoneUse(SystemClock::uptimeMillis)
+    private val usbHints = UsbLinkHints(SystemClock::elapsedRealtime)
+    private var controlStartedAt = 0L
+    private var lastNotification: String? = null
     private val control = ControlLeaseManager(SystemClock::elapsedRealtime, localUseActive = { localUse.active })
     private val operationScope = SessionOperationScope()
     private var lastAuthority: ControlLeaseManager.Lease? = null
@@ -73,6 +76,8 @@ object BridgeSession {
         private set
     private const val CHANNEL = "phonebridge_session"
     private const val NOTIFICATION_ID = 8721
+    private const val LOCKED_NOTICE = "Waiting for the phone to be unlocked."
+    private const val REQUEST_PROMOTED_ONGOING = "android.requestPromotedOngoing"
     const val STOP_ACTION = "dev.phonebridge.phonebridge.STOP_SESSION"
     private val leaseTimer = object : Runnable {
         override fun run() {
@@ -170,7 +175,20 @@ object BridgeSession {
             "executorDiagnostic" to (if (operationScope.awaitingGestureSettlement) OperationTimeoutPolicy.awaitingGestureMessage else ""),
             "controlEvents" to control.events().map { mapOf("event" to it.event, "computerId" to it.computerId, "elapsedMillis" to it.elapsedMillis) },
             "controlling" to (owner != null), "screenAwakeMode" to getScreenAwakeMode(), "screenAwakeHeld" to (awake?.held == true),
-            "deviceId" to deviceId, "deviceName" to Build.MODEL)
+            "deviceId" to deviceId, "deviceName" to Build.MODEL,
+            "selectedViaUsb" to (selected?.connected == true && selected.viaUsb),
+            "usbRouteAvailable" to (usbHints.size > 0),
+            "controlStartedAt" to controlStartedAt) + notificationCapabilities()
+    }
+    private fun notificationCapabilities(): Map<String, Any> {
+        val value = context ?: return emptyMap()
+        val manager = value.getSystemService(NotificationManager::class.java)
+        val minor = runCatching { Build.VERSION::class.java.getField("SDK_INT_FULL").getInt(null) % 100000 }.getOrNull()
+        val api = SessionNotificationPolicy.promotionApiAvailable(Build.VERSION.SDK_INT, minor?.let { "${Build.VERSION.SDK_INT}.$it" })
+        val allowed = if (Build.VERSION.SDK_INT >= 36) runCatching { manager.canPostPromotedNotifications() }.getOrDefault(false) else false
+        return mapOf("notificationsEnabled" to manager.areNotificationsEnabled(),
+            "liveUpdatesApi" to api, "liveUpdatesAllowed" to allowed,
+            "systemSdk" to (if (minor != null) "${Build.VERSION.SDK_INT}.$minor" else Build.VERSION.SDK_INT.toString()))
     }
     fun computerList(): List<Map<String, Any>> = computers.entries.map { c ->
         val t = transports[c.id]
@@ -178,6 +196,7 @@ object BridgeSession {
             "active" to (c.id == computers.activeId), "connected" to (t?.connected == true),
             "connecting" to (t?.connecting == true || t?.retry != null),
             "controlling" to (control.lease?.computerId == c.id), "lastError" to (t?.error ?: ""),
+            "viaUsb" to (t?.connected == true && t.viaUsb),
             "state" to (if (control.lease?.computerId == c.id) "controlling" else if (t?.connected == true) "connected"
                 else if (t?.connecting == true || t?.retry != null) "connecting" else "paused"),
             "actionsEnabled" to c.pairing.actionsEnabled, "resumeAllowed" to c.pairing.resumeAllowed)
@@ -251,7 +270,7 @@ object BridgeSession {
         return native
     }
     fun connect(url: String, token: String, allowInsecureLocal: Boolean, allowed: List<String>, remember: Boolean = true,
-                replaceAllowedPackages: Boolean = false) {
+                replaceAllowedPackages: Boolean = false, suggestedName: String = "") {
         val native = requireReady(); initialize(native)
         val record = computers.forConnection(TrustedPairing(EndpointPolicy.validate(url, allowInsecureLocal), token,
             allowInsecureLocal, allowed.distinct(), false, true, UUID.randomUUID().toString()), replaceAllowedPackages)
@@ -260,6 +279,11 @@ object BridgeSession {
         if (remember) {
             updateTrust { store!!.save(record) }
             val id = computers.activeId!!
+            // A USB pairing carries the computer's own name; keep any name the owner chose earlier.
+            val label = suggestedName.filter { !it.isISOControl() }.trim().take(64)
+            if (label.isNotEmpty() && entry(id)?.name == TrustedComputers.hostName(record.endpoint)) {
+                runCatching { updateTrust { store!!.rename(id, label) } }
+            }
             // Updating a remembered identity must also replace its live consent/allowlist snapshot.
             transports.remove(id)?.let { close(it) }
             control.select(id); authorityChanged(); ensureTransport(id, record)
@@ -447,15 +471,85 @@ object BridgeSession {
     private fun tryAutoResume() {
         if (service == null || !loaded) return
         computers.entries.filter { it.pairing.resumeAllowed }.forEach { c ->
+            // A live or opening transport is unaffected by the current lock state; tagging it
+            // with "waiting for unlock" left a stale notice beside "connected" (issue #16).
+            val existing = transports[c.id]
+            if (existing?.connected == true || existing?.connecting == true) return@forEach
             try { requireReady(); ensureTransport(c.id, c.pairing) }
             catch (e: BridgeFailure) {
                 if (e.code == "DEVICE_LOCKED") {
                     val t = transports.getOrPut(c.id) { Transport(c.id, c.pairing, ++serial) }
-                    t.error = "Waiting for the phone to be unlocked."; scheduleReconnect(t)
+                    t.error = LOCKED_NOTICE; scheduleReconnect(t)
                 }
             }
         }
     }
+    /** Owner unlocked the phone: retry immediately instead of waiting for the backoff timer. */
+    fun ownerUnlocked() {
+        if (service == null || !loaded) return
+        transports.values.toList().filter { !it.connected && !it.connecting && it.retry != null && transportEnabled(it) }.forEach { t ->
+            t.retry?.let { main.removeCallbacks(it) }; t.retry = null
+            t.retryAttempt = 0
+            if (t.error == LOCKED_NOTICE) t.error = ""
+            try { ensureTransport(t.id, entry(t.id)?.pairing ?: t.record) } catch (_: Exception) { scheduleReconnect(t) }
+        }
+        tryAutoResume()
+        broadcastStatus(); showNotification()
+    }
+
+    /** Android reports the USB data connection ended; loopback routes are no longer reachable. */
+    fun usbDisconnected() {
+        if (usbHints.size == 0) return
+        usbHints.clear()
+        showNotification()
+    }
+
+    /**
+     * A USB-debugging-authorized computer announced its reverse tunnel. Known, resumable computers
+     * reconnect over it when not already connected; an unknown digest only reports "unknown".
+     */
+    fun usbLinkOffered(value: Context, digest: String, port: Int): String {
+        initialize(value)
+        if (!UsbLinkPolicy.validDigest(digest) || !UsbLinkPolicy.validPort(port)) return "invalid"
+        if (!loaded) return "storage_unavailable"
+        val c = computers.entries.find { UsbLinkPolicy.tokenDigest(it.pairing.token) == digest }
+        // Keep the route even for an unpaired computer: the owner may confirm its pairing later.
+        val fresh = usbHints.offer(digest, port)
+        if (c != null && c.pairing.resumeAllowed && service != null) {
+            val t = transports[c.id]
+            val idle = control.lease == null && control.pendingTaskCount == 0 && execution == null
+            if (fresh && t?.connected == true && !t.viaUsb && idle) {
+                // Plugging in moves an idle wireless connection to the cable; active tasks are never cut.
+                // Close politely and reconnect after the backoff delay so the Hub releases the old socket.
+                t.socket?.close(1000, "Switching to USB")
+                close(t, ""); t.retryAttempt = 0; scheduleReconnect(t)
+                return UsbLinkPolicy.linkState(true, true, true, true, false, false, true)
+            }
+            val current = transports[c.id]
+            if (current?.connected != true && current?.connecting != true) {
+                current?.retry?.let { main.removeCallbacks(it) }; current?.retry = null; current?.retryAttempt = 0
+                try { ensureTransport(c.id, c.pairing) }
+                catch (e: BridgeFailure) {
+                    if (e.code == "DEVICE_LOCKED") {
+                        val waiting = transports.getOrPut(c.id) { Transport(c.id, c.pairing, ++serial) }
+                        waiting.error = LOCKED_NOTICE; scheduleReconnect(waiting)
+                    }
+                } catch (_: Exception) { }
+            }
+        }
+        val t = c?.let { transports[it.id] }
+        return UsbLinkPolicy.linkState(c != null, c?.pairing?.resumeAllowed == true, service != null,
+            service?.let { runCatching { it.requireUnlocked() }.isSuccess } == true,
+            t?.connected == true, t?.viaUsb == true, t?.connecting == true || t?.retry != null)
+    }
+
+    /** First pairing over USB: remember the route so the owner's confirmation connects through it. */
+    fun usbPairingOffered(token: String, port: Int) {
+        EndpointPolicy.validateToken(token)
+        usbHints.offer(UsbLinkPolicy.tokenDigest(token), port)
+    }
+    fun isKnownToken(token: String): Boolean = computers.entries.any { it.pairing.token == token }
+
     private fun ensureTransport(id: String, record: TrustedPairing) {
         val old = transports[id]
         if (old?.connected == true || old?.connecting == true || old?.retry != null) return
@@ -477,12 +571,15 @@ object BridgeSession {
         val client = OkHttpClient.Builder().connectTimeout(10, TimeUnit.SECONDS).readTimeout(0, TimeUnit.SECONDS)
             .pingInterval(20, TimeUnit.SECONDS).retryOnConnectionFailure(false).followRedirects(false).followSslRedirects(false).build()
         t.client = client
-        val request = Request.Builder().url(t.record.endpoint).header("Authorization", "Bearer " + t.record.token).build()
+        val usbEndpoint = usbHints.endpointFor(t.record.token)
+        t.viaUsb = usbEndpoint != null && usbEndpoint != t.record.endpoint
+        val route = if (usbEndpoint != null) EndpointPolicy.validate(usbEndpoint, true) else t.record.endpoint
+        val request = Request.Builder().url(route).header("Authorization", "Bearer " + t.record.token).build()
         t.socket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) { main.post {
                 if (!current(t) || t.socket !== ws) { ws.cancel(); return@post }
                 try { native.requireUnlocked(); requireNotifications(native) }
-                catch (_: BridgeFailure) { lost(t, "Waiting for the phone to be unlocked."); return@post }
+                catch (_: BridgeFailure) { lost(t, LOCKED_NOTICE); return@post }
                 val system = response.header("X-PhoneBridge-System")
                 if (system in setOf("macOS", "Windows", "Linux", "Other") && entry(t.id)?.systemName != system && entry(t.id) != null) {
                     try { updateTrust { store!!.updateSystemName(t.id, system!!) } }
@@ -512,6 +609,9 @@ object BridgeSession {
                         else close(t, "This computer removed the phone. Pair again to reconnect.")
                     } catch (_: Exception) { close(t, "Saved pairing could not be removed. Try again.") }
                 } else if (code == 4003) lost(t, "Computer paused this phone. Resume it on the computer.")
+                // The Hub has not yet noticed the previous socket closing (Wi-Fi flap, USB switch).
+                // That is transient: retry with backoff instead of pausing the trusted computer.
+                else if (ReconnectPolicy.isStaleConnectionRejection(code, reason)) lost(t, "Desktop disconnected. Reconnecting to the trusted computer.")
                 else if (code in setOf(1002, 1003, 1007, 1008, 1009)) pause(t, "Desktop rejected this session. Resume locally after checking pairing.")
                 else lost(t, "Desktop disconnected. Reconnecting to the trusted computer.")
             } }
@@ -585,6 +685,10 @@ object BridgeSession {
     }
     private fun lost(t: Transport, error: String) {
         if (!current(t)) return
+        if (t.viaUsb) {
+            // The USB route failed or was unplugged; fall back to the saved network route at once.
+            usbHints.forget(t.record.token); t.retryAttempt = 0
+        }
         close(t, error); discoverComputer(t); scheduleReconnect(t)
     }
     private fun pause(t: Transport, error: String) {
@@ -613,6 +717,8 @@ object BridgeSession {
         execution?.let { if (!control.valid(it.lease)) { it.invalidated = true; operationScope.invalidate() } }
         val ownerChanged = lastAuthority !== control.lease
         if (ownerChanged) {
+            if (control.lease != null && lastAuthority?.computerId != control.lease?.computerId) controlStartedAt = System.currentTimeMillis()
+            if (control.lease == null) controlStartedAt = 0L
             lastAuthority = control.lease
             service?.clearOperationTrail(); service?.invalidateNodes()
         }
@@ -620,7 +726,9 @@ object BridgeSession {
         lastWaitingCount = control.waitingCount
         flushControlEvents()
         updateAwake(); showNotification()
+        refreshControlIndicator()
     }
+    fun refreshControlIndicator() { service?.showControlIndicator(control.lease != null && !localUse.active) }
     private fun receive(t: Transport, text: String) {
         if (!t.connected) return
         val request = try { JSONObject(text) } catch (_: Exception) { pause(t, "Invalid command format."); return }
@@ -749,7 +857,7 @@ object BridgeSession {
             if (current(t, socket)) lost(t, "Connection status could not be delivered.")
         }
     }
-    fun refreshNotificationLanguage() { showNotification() }
+    fun refreshNotificationLanguage() { lastNotification = null; showNotification() }
     private fun taskStatus(value: ControlLeaseManager.TaskStatus): JSONObject = JSONObject()
         .put("controlId", value.controlId).put("state", value.state).apply {
             value.position?.let { put("position", it) }
@@ -773,6 +881,7 @@ object BridgeSession {
         val value = context ?: return
         val manager = value.getSystemService(NotificationManager::class.java)
         if (transports.values.none { it.connected || it.connecting || it.retry != null }) {
+            lastNotification = null
             service?.connectionNotification(NOTIFICATION_ID, null)
             manager.cancel(NOTIFICATION_ID); return
         }
@@ -780,12 +889,46 @@ object BridgeSession {
         val open = PendingIntent.getActivity(value, 2, Intent(value, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val strings = AppLanguage.resources(value)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, strings.getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW))
-        val state = strings.getString(if (transports.values.any { it.retry != null }) R.string.session_reconnecting
-            else if (!connected) R.string.session_connecting else if (actionsEnabled) R.string.session_actions_enabled else R.string.session_read_only)
-        val notification = Notification.Builder(value, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentTitle("PhoneBridge • $state").setContentText(strings.getString(R.string.session_description))
+        val owner = control.lease
+        val presentation = SessionNotificationPolicy.present(transports.values.any { it.retry != null }, connected, actionsEnabled,
+            owner?.name, control.pendingTaskCount, localUse.active, transports.values.any { it.connected && it.viaUsb })
+        val (title, detail, short) = when (presentation.state) {
+            SessionNotificationPolicy.State.RECONNECTING -> Triple(strings.getString(R.string.session_reconnecting), strings.getString(R.string.session_description), null)
+            SessionNotificationPolicy.State.CONNECTING -> Triple(strings.getString(R.string.session_connecting), strings.getString(R.string.session_description), null)
+            SessionNotificationPolicy.State.LOCAL_USE -> Triple(strings.getString(R.string.session_local_use),
+                strings.getString(R.string.session_local_use_detail, presentation.waiting), strings.getString(R.string.session_local_use_short))
+            SessionNotificationPolicy.State.CONTROLLING -> Triple(strings.getString(R.string.session_controlling),
+                strings.getString(R.string.session_controlling_detail, presentation.ownerName) +
+                    (if (presentation.waiting > 0) " " + strings.getString(R.string.session_queued_detail, presentation.waiting) else ""),
+                strings.getString(R.string.session_controlling_short))
+            SessionNotificationPolicy.State.QUEUED -> Triple(strings.getString(R.string.session_queued),
+                strings.getString(R.string.session_queued_detail, presentation.waiting), strings.getString(R.string.session_queued_short, presentation.waiting))
+            SessionNotificationPolicy.State.ACTIONS -> Triple(strings.getString(R.string.session_actions_enabled), strings.getString(R.string.session_description), null)
+            SessionNotificationPolicy.State.READ_ONLY -> Triple(strings.getString(R.string.session_read_only), strings.getString(R.string.session_description), null)
+        }
+        val text = if (presentation.viaUsb) strings.getString(R.string.session_via_usb) + " · " + detail else detail
+        // The lease timer calls this every second. Re-posting identical content made SystemUI
+        // rebuild the notification about twice a second; only post real changes.
+        val signature = listOf(title, text, presentation.promote, controlStartedAt.takeIf { presentation.state == SessionNotificationPolicy.State.CONTROLLING },
+            service?.foregroundProtected, service != null).joinToString("\u0000")
+        if (signature == lastNotification && service?.foregroundProtected == true) return
+        lastNotification = signature
+        val builder = Notification.Builder(value, CHANNEL).setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentTitle(if (presentation.promote) title else "PhoneBridge • $title").setContentText(text)
+            .setStyle(Notification.BigTextStyle().bigText(text))
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true).setVisibility(Notification.VISIBILITY_PRIVATE)
-            .addAction(Notification.Action.Builder(null, strings.getString(R.string.session_stop), stop).build()).build()
+            .setCategory(if (presentation.promote) Notification.CATEGORY_PROGRESS else Notification.CATEGORY_SERVICE)
+            .addAction(Notification.Action.Builder(null, strings.getString(R.string.session_stop), stop).build())
+        if (presentation.state == SessionNotificationPolicy.State.CONTROLLING && controlStartedAt > 0) {
+            builder.setWhen(controlStartedAt).setShowWhen(true).setUsesChronometer(true)
+        }
+        if (presentation.promote) {
+            // Live Update request (Android 16 QPR1+). Earlier systems and OEM shades that do not
+            // support promotion show the same content as an ordinary ongoing notification.
+            builder.addExtras(android.os.Bundle().apply { putBoolean(REQUEST_PROMOTED_ONGOING, true) })
+            if (Build.VERSION.SDK_INT >= 36 && short != null) runCatching { builder.setShortCriticalText(short) }
+        }
+        val notification = builder.build()
         service?.connectionNotification(NOTIFICATION_ID, notification)
     }
 }

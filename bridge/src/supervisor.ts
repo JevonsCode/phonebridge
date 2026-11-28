@@ -8,6 +8,7 @@ import { networkInterfaces } from 'node:os';
 import { privateIPv4Range } from './hub-url.js';
 import { validateToken } from './protocol.js';
 import { TrustedDiscoveryResponder, trustedDiscoveryResponse } from './discovery.js';
+import { UsbLinkWatcher, type AdbRunner } from './usb-link.js';
 
 type Options = {
   token: string; host?: string; port?: number; allowLan?: boolean;
@@ -15,6 +16,8 @@ type Options = {
   restartDelayMs?: number; startupTimeoutMs?: number;
   logFile?: string; phoneDirectoryPath?: string;
   discovery?: false | { port?: number; host?: string; allowLoopback?: boolean };
+  /** USB quick connect: a loopback listener reached through `adb reverse`. */
+  usbLink?: boolean | { loopbackPort?: number; adbPath?: string | null; runner?: AdbRunner; intervalMs?: number; autoPair?: boolean };
 };
 
 export function supervisorOptionsForPlatform(options: Options, platform: NodeJS.Platform = process.platform): Options {
@@ -36,6 +39,8 @@ export class DesktopSupervisor {
   private publicUrl?: string;
   private discovery?: TrustedDiscoveryResponder;
   private discoveryError?: string;
+  private loopback?: http.Server;
+  private usb?: UsbLinkWatcher;
 
   constructor(private readonly options: Options) {
     validateToken(options.token);
@@ -53,6 +58,30 @@ export class DesktopSupervisor {
     this.server.headersTimeout = 5000;
     this.server.on('connection', socket => this.track(socket));
     this.server.on('upgrade', (req, socket, head) => this.upgrade(req, socket as Socket, head));
+  }
+
+  get usbStatus() { return this.usb?.status(); }
+
+  /** Same handlers as the main listener, bound to 127.0.0.1 for the phone's adb reverse tunnel. */
+  private async startUsbLink(port: number): Promise<void> {
+    const options = typeof this.options.usbLink === 'object' ? this.options.usbLink : {};
+    const loopback = http.createServer((req, res) => void this.handle(req, res));
+    loopback.requestTimeout = 60000; loopback.headersTimeout = 5000;
+    loopback.on('connection', socket => this.track(socket));
+    loopback.on('upgrade', (req, socket, head) => this.upgrade(req, socket as Socket, head));
+    const listen = (value: number) => new Promise<void>((resolve, reject) => {
+      loopback.once('error', reject);
+      loopback.listen(value, '127.0.0.1', () => { loopback.off('error', reject); resolve(); });
+    });
+    try { await listen(options.loopbackPort ?? port); }
+    catch { try { await listen(0); } catch { return; } }
+    this.loopback = loopback;
+    const address = loopback.address();
+    const loopbackPort = address && typeof address === 'object' ? address.port : undefined;
+    this.usb = new UsbLinkWatcher({ token: this.options.token, phonePort: port, loopbackPort: () => loopbackPort,
+      endpoint: () => this.publicUrl && !this.options.tls ? `${this.publicUrl.replace(/^http/, 'ws')}/device` : undefined,
+      adbPath: options.adbPath, runner: options.runner, intervalMs: options.intervalMs, autoPair: options.autoPair });
+    this.usb.start();
   }
 
   get managedProcessId(): number | undefined { return this.child?.pid; }
@@ -80,6 +109,9 @@ export class DesktopSupervisor {
     const address = this.server.address();
     if (!address || typeof address === 'string') throw new Error('Missing listen address.');
     this.publicUrl = `${this.options.tls ? 'https' : 'http'}://${address.family === 'IPv6' ? `[${address.address}]` : address.address}:${address.port}`;
+    // A loopback-only supervisor needs no second listener unless a port is requested explicitly.
+    if (this.options.usbLink && (!['127.0.0.1', '::1', 'localhost'].includes(address.address) ||
+      (typeof this.options.usbLink === 'object' && this.options.usbLink.loopbackPort !== undefined))) await this.startUsbLink(address.port);
     if (this.options.autoStart !== false) {
       // Leave management available even when the Hub cannot start yet.
       await this.ensureRunning().catch(() => undefined);
@@ -126,6 +158,19 @@ export class DesktopSupervisor {
       this.respond(res, reply ? 200 : 404, reply ?? { error: { code: 'NOT_FOUND' } }); return;
     }
     if (!this.authorized(req)) { req.resume(); this.respond(res, 401, { error: { code: 'UNAUTHORIZED' } }); return; }
+    if (req.url === '/usb' || req.url === '/usb/pair') {
+      if (req.url === '/usb' && req.method === 'GET') { req.resume(); this.respond(res, 200, this.usb?.status() ?? { available: false, adbFound: false, phones: [] }); return; }
+      if (req.url === '/usb/pair' && req.method === 'POST') {
+        let body = '';
+        try { for await (const chunk of req) { body += chunk; if (body.length > 512) throw new Error(); } } catch { this.respond(res, 400, { error: { code: 'INVALID_REQUEST' } }); return; }
+        let serial: unknown;
+        try { serial = JSON.parse(body).serial; } catch { /* reported below */ }
+        if (typeof serial !== 'string' || !this.usb) { this.respond(res, 400, { error: { code: 'INVALID_REQUEST' } }); return; }
+        const ok = await this.usb.requestPairing(serial);
+        this.respond(res, ok ? 200 : 409, ok ? { requested: true } : { error: { code: 'USB_PAIR_FAILED' } }); return;
+      }
+      req.resume(); this.respond(res, 405, { error: { code: 'METHOD_NOT_ALLOWED' } }); return;
+    }
     if (req.url === '/service/start') {
       if (req.method !== 'POST') { req.resume(); this.respond(res, 405, { error: { code: 'METHOD_NOT_ALLOWED' } }); return; }
       if (req.headers['transfer-encoding'] || (req.headers['content-length'] && req.headers['content-length'] !== '0')) {
@@ -243,6 +288,8 @@ export class DesktopSupervisor {
     clearTimeout(this.retry);
     await this.discovery?.close();
     this.discovery = undefined;
+    await this.usb?.close();
+    this.usb = undefined;
     const child = this.child;
     if (child && child.exitCode === null && child.signalCode === null) {
       const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
@@ -252,6 +299,7 @@ export class DesktopSupervisor {
     await this.starting?.catch(() => undefined);
     for (const socket of this.streams) socket.destroy();
     this.server.closeAllConnections();
+    if (this.loopback?.listening) { this.loopback.closeAllConnections(); await new Promise<void>(resolve => this.loopback!.close(() => resolve())); }
     if (this.server.listening) await new Promise<void>((resolve, reject) => this.server.close(error => error ? reject(error) : resolve()));
   }
 }

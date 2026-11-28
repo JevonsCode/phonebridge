@@ -99,3 +99,18 @@ QR pairing is a form-fill operation, not authorization. Payload: `phonebridge://
 ## Verification boundary
 
 Protocol, simulated multi-socket and widget tests are distinct from physical verification. Physical single-phone/two-computer queue handoff, notification and screen-awake evidence is pending for this addition; this document does not claim that test passed or that macOS hardware was verified. Public download links remain tied to published releases.
+
+## USB quick connect (0.9.0)
+
+The owner enables USB debugging and authorizes the computer in Android's own dialog. The desktop service (`DesktopSupervisor` with `usbLink`) then:
+
+1. Polls `adb devices -l` every 3 s. `unauthorized`/`offline` phones are only reported.
+2. Listens on `127.0.0.1` (same port as the LAN listener when free, otherwise an ephemeral port) with the same handlers and token authentication, and runs `adb -s SERIAL reverse tcp:PHONE_PORT tcp:LOOPBACK_PORT`. `PHONE_PORT` is the LAN port.
+3. Sends, over `adb shell` standard input, `am broadcast -a dev.phonebridge.phonebridge.USB_LINK -n dev.phonebridge.phonebridge/.UsbLinkReceiver --es computer DIGEST --ei port PHONE_PORT`, where `DIGEST = sha256("phonebridge-usb-v1:" + token)` in hex. It repeats every 30 s while the phone is attached.
+4. If the reply state is `unknown`, opens the phone's pairing form once per plug-in with `am start -n dev.phonebridge.phonebridge/.UsbPairingActivity -a dev.phonebridge.phonebridge.USB_PAIR --es token TOKEN --ei port PHONE_PORT [--es endpoint LAN_ENDPOINT] --es name NAME`. The token is passed only on standard input, never in a host process argument.
+
+`UsbLinkReceiver` and the `UsbPairingActivity` alias require `android.permission.DUMP`, which the ADB shell holds and ordinary apps cannot obtain. The pairing request only pre-fills the normal form; the owner still checks both consent boxes and taps **Confirm**. The receiver replies with `{"protocol":1,"state":...,"versionName":...,"versionCode":...}`; `state` is one of `unknown`, `paused`, `accessibility_disabled`, `connected_usb`, `connected_wireless`, `locked`, `connecting`, `waiting`, `invalid` or `storage_unavailable`. Phones without the receiver reply `result=0` and are shown as needing an update.
+
+On the phone a route hint is kept in memory for 90 s per computer digest. A transport opens `ws://127.0.0.1:PHONE_PORT/device` while a hint is fresh, otherwise the saved endpoint. A failed or dropped loopback connection forgets the hint, falls back to the saved endpoint immediately and ignores new hints for that computer for 5 minutes, or until Android reports the USB data connection ended (`android.hardware.usb.action.USB_STATE`). A new hint moves an idle wireless connection to USB; a connection with an active lease, queued task or running operation is never switched.
+
+Authenticated `GET /usb` on the supervisor returns `{available, adbFound, loopbackPort?, phonePort?, phones:[{serial, model?, state, appVersion?, updatedAt}]}`. `POST /usb/pair` with `{"serial":"..."}` repeats the pairing request for an attached, authorized phone. The desktop dashboard exposes these as `usb` in its status and `usb-pair`.

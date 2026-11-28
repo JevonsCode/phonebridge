@@ -72,6 +72,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
   bool openingScanner = false;
   String? error;
   bool pairingPrefilled = false;
+  // Set when the pairing form was pre-filled by a USB-debugging-authorized computer.
+  String? usbPairingName;
   int tab = 0;
   int automationRevision = 0;
   bool showPairing = false, manual = false;
@@ -171,6 +173,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
     return value is int && value >= 0 && value <= 65 ? value : 0;
   }
 
+  String get controlOwner => status['controlling'] == true
+      ? (status['controlOwnerName'] as String? ?? '')
+      : '';
+
   String get waitingLabel {
     final message = status['localUseActive'] == true
         ? '正在使用手机，AI 等待空闲'
@@ -203,6 +209,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
     polling = true;
     try {
       final next = await channel.invokeMapMethod<String, dynamic>('status');
+      if (next?['usbPairingPending'] == true) await takeUsbPairing();
       if (mounted) {
         final wasActive = connected || connecting;
         setState(() {
@@ -231,6 +238,32 @@ class _ConnectionPageState extends State<ConnectionPage> {
     } finally {
       polling = false;
     }
+  }
+
+  /// Pre-fills the regular pairing form; the owner still checks and confirms every option.
+  Future<void> takeUsbPairing() async {
+    final request = await channel.invokeMapMethod<String, dynamic>(
+      'takeUsbPairing',
+    );
+    final address = request?['endpoint'];
+    final key = request?['token'];
+    if (!mounted || address is! String || key is! String) return;
+    setState(() {
+      tab = 0;
+      showPairing = true;
+      manual = false;
+      endpoint.text = address;
+      token.text = key;
+      consent = false;
+      insecureLocal = false;
+      pairingPrefilled = true;
+      pairingTargetEndpoint = null;
+      pairingTargetComputerId = null;
+      packages.text = _defaultPairingPackages;
+      packagesEdited = false;
+      final name = request?['name'];
+      usbPairingName = name is String && name.isNotEmpty ? name : '';
+    });
   }
 
   Future<void> perform(String method, [Map<String, dynamic>? args]) async {
@@ -290,6 +323,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       'allowInsecureLocal': insecureLocal,
       'remember': remember,
       'replaceAllowedPackages': packagesEdited,
+      if (usbPairingName?.isNotEmpty == true) 'name': usbPairingName,
       'packages': packages.text
           .split(RegExp(r'[\s,;]+'))
           .where((s) => s.isNotEmpty)
@@ -334,6 +368,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
   }
 
   void pairingCredentialsChanged() => setState(() {
+    usbPairingName = null;
     packages.text = _defaultPairingPackages;
     packagesEdited = false;
     consent = false;
@@ -481,6 +516,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
       setState(() {
         endpoint.text = pairing.endpoint;
         token.text = pairing.token;
+        usbPairingName = null;
         // A different computer must never inherit an earlier acknowledgement.
         consent = false;
         insecureLocal = false;
@@ -792,6 +828,24 @@ class _ConnectionPageState extends State<ConnectionPage> {
         textAlign: TextAlign.center,
         style: Theme.of(context).textTheme.displaySmall,
       ),
+      if (controlOwner.isNotEmpty) ...[
+        const SizedBox(height: 10),
+        Text(
+          '${tr(context, 'AI 正在控制')} · $controlOwner',
+          key: const Key('control-owner'),
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: Color(0xFF26734D), fontSize: 13),
+        ),
+      ],
+      if (status['selectedViaUsb'] == true) ...[
+        const SizedBox(height: 6),
+        Text(
+          tr(context, '已通过 USB 连接'),
+          key: const Key('connected-via-usb'),
+          textAlign: TextAlign.center,
+          style: const TextStyle(color: muted, fontSize: 13),
+        ),
+      ],
       if (waitingCount > 0) ...[
         const SizedBox(height: 10),
         Text(
@@ -898,7 +952,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
         FileInboxEntry(files: files.value, onOpen: openFiles),
       ],
       const SizedBox(height: 24),
-      if (!active && hasSavedPairing)
+      // The selected computer can be paused while another one stays connected.
+      if (hasSavedPairing && (!active || (!connected && !connecting && !autoReconnect)))
         FilledButton.icon(
           key: const Key('resume-saved'),
           onPressed: busy || startingDesktop || !enabled
@@ -1002,6 +1057,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
           subtitle: '每次 AI 操作前随机等待 0.3～1.3 秒',
         ),
         OperationTrailSetting(),
+        AutomationSetting(
+          preference: 'ShowControlIndicator',
+          title: '显示 AI 控制提示',
+          subtitle: 'AI 控制时在屏幕顶部显示蓝色细线，通知中同步显示控制方',
+        ),
       ],
     ),
     const SizedBox(height: 12),
@@ -1046,6 +1106,49 @@ class _ConnectionPageState extends State<ConnectionPage> {
           ),
           appAccessEntry('settings-app-access'),
         ],
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Divider(),
+        ),
+        SettingsRow(
+          key: const Key('notification-permission'),
+          icon: Icons.notifications_none_rounded,
+          title: '连接通知',
+          subtitle: status['notificationsEnabled'] == false
+              ? '已关闭 · 连接需要此通知'
+              : '已允许',
+          onTap: busy ? null : () => perform('openNotificationSettings'),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Divider(),
+        ),
+        SettingsRow(
+          key: const Key('live-update-permission'),
+          icon: Icons.bolt_rounded,
+          title: '实时更新',
+          subtitle: status['liveUpdatesApi'] != true
+              ? '${tr(context, '本机系统不支持，显示为普通通知')} · Android ${status['systemSdk'] ?? ''}'
+              : status['liveUpdatesAllowed'] == true
+              ? '已开启 · AI 控制和排队时显示在状态栏'
+              : '已关闭 · 点击开启',
+          onTap: busy ? null : () => perform('openLiveUpdateSettings'),
+        ),
+        const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 20),
+          child: Divider(),
+        ),
+        SettingsRow(
+          key: const Key('usb-quick-connect'),
+          icon: Icons.usb_rounded,
+          title: 'USB 快连',
+          subtitle: status['selectedViaUsb'] == true
+              ? '已通过 USB 连接'
+              : status['usbRouteAvailable'] == true
+              ? '已检测到 USB 电脑'
+              : '插上数据线，在电脑端完成 USB 调试授权',
+          onTap: () => showInfo('USB 快连', usbHelp),
+        ),
       ],
     ),
     const SizedBox(height: 28),
@@ -1172,6 +1275,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
       ),
     ),
   ];
+
+  static const usbHelp =
+      '在手机「开发者选项」开启 USB 调试，插上数据线后，在系统弹窗中确认电脑指纹并勾选「始终允许」。电脑端 PhoneBridge 检测到手机后会发起配对，你在手机上核对并确认一次即可；之后插线会自动走 USB 连接，拔线后自动改用无线网络。\n\n电脑需要安装 Android platform-tools（adb）。PhoneBridge 只使用 adb 建立网络隧道和发送配对请求，不安装 App、不模拟点击，也无需开启「USB 调试（安全设置）」。\n\n撤销：在「开发者选项」点「撤销 USB 调试授权」或关闭 USB 调试；在「设置 → 已记住的电脑」删除电脑会同时删除配对。锁屏、PIN 和指纹始终由系统处理。';
 
   Future<void> showLanguage() async {
     final owner = AppLanguage.of(context);
@@ -1633,11 +1739,18 @@ class _ConnectionPageState extends State<ConnectionPage> {
       const SizedBox(height: 28),
     ],
     Text(
-      tr(context, '只需配对一次'),
+      tr(context, usbPairingName == null ? '只需配对一次' : '确认 USB 连接的电脑'),
       style: Theme.of(context).textTheme.headlineMedium,
     ),
     const SizedBox(height: 10),
-    Text(tr(context, '扫描电脑端的二维码。之后的连接，交给 PhoneBridge。')),
+    Text(
+      tr(
+        context,
+        usbPairingName == null
+            ? '扫描电脑端的二维码。之后的连接，交给 PhoneBridge。'
+            : '这台电脑已通过 USB 调试授权发起配对。核对名称和地址，勾选选项后点「连接」；之后插线会自动连接。',
+      ),
+    ),
     const SizedBox(height: 24),
     if (!enabled) ...[
       SurfaceGroup(
@@ -1652,13 +1765,17 @@ class _ConnectionPageState extends State<ConnectionPage> {
       ),
       const SizedBox(height: 16),
     ],
-    FilledButton.icon(
-      key: const Key('scan-pairing'),
-      onPressed: busy || openingScanner || startingDesktop ? null : scanPairing,
-      icon: const Icon(Icons.qr_code_scanner_rounded),
-      label: Text(tr(context, '扫描电脑配对码')),
-    ),
-    const SizedBox(height: 8),
+    if (usbPairingName == null) ...[
+      FilledButton.icon(
+        key: const Key('scan-pairing'),
+        onPressed: busy || openingScanner || startingDesktop
+            ? null
+            : scanPairing,
+        icon: const Icon(Icons.qr_code_scanner_rounded),
+        label: Text(tr(context, '扫描电脑配对码')),
+      ),
+      const SizedBox(height: 8),
+    ],
     TextButton(
       key: const Key('manual-pairing'),
       onPressed: busy || openingScanner
@@ -1671,9 +1788,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
       SurfaceGroup(
         children: [
           SettingsRow(
-            icon: Icons.check_circle_outline_rounded,
-            title: '已识别电脑',
-            subtitle: Uri.tryParse(endpoint.text)?.host,
+            key: Key(usbPairingName == null ? 'pairing-qr-source' : 'pairing-usb-source'),
+            icon: usbPairingName == null
+                ? Icons.check_circle_outline_rounded
+                : Icons.usb_rounded,
+            title: usbPairingName == null ? '已识别电脑' : '通过 USB 识别电脑',
+            subtitle: [
+              if (usbPairingName?.isNotEmpty == true) usbPairingName!,
+              Uri.tryParse(endpoint.text)?.host ?? '',
+            ].where((part) => part.isNotEmpty).join(' · '),
             trailing: const Icon(Icons.check_rounded, color: Color(0xFF18845A)),
           ),
         ],

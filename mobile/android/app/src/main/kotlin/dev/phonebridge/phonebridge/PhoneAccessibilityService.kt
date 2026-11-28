@@ -38,11 +38,14 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 class PhoneAccessibilityService : AccessibilityService() {
+    private companion object { const val USB_STATE = "android.hardware.usb.action.USB_STATE" }
     private val nodes = mutableMapOf<String, AccessibilityNodeInfo>()
     private val imageWorker = Executors.newSingleThreadExecutor()
     private var uiEpoch = 0L
     private var lastScreenshot: ScreenshotPolicy.Frame? = null
     private val operationTrail by lazy { OperationTrail(this) }
+    private val controlIndicator by lazy { ControlIndicator(this) }
+    fun showControlIndicator(visible: Boolean) = controlIndicator.update(visible)
     var foregroundProtected = false
         private set
 
@@ -71,6 +74,33 @@ class PhoneAccessibilityService : AccessibilityService() {
             serviceInfo = serviceInfo.apply { flags = flags or AccessibilityServiceInfo.FLAG_INPUT_METHOD_EDITOR }
         }
         BridgeSession.attach(this)
+        registerSystemSignals()
+    }
+
+    private var systemSignals: android.content.BroadcastReceiver? = null
+    /** Unlock and USB state are system broadcasts; RECEIVER_NOT_EXPORTED still receives them. */
+    private fun registerSystemSignals() {
+        if (systemSignals != null) return
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: android.content.Context, intent: Intent) {
+                when (intent.action) {
+                    Intent.ACTION_USER_PRESENT -> BridgeSession.ownerUnlocked()
+                    USB_STATE -> if (!intent.getBooleanExtra("connected", false)) BridgeSession.usbDisconnected()
+                }
+            }
+        }
+        val filter = android.content.IntentFilter().apply { addAction(Intent.ACTION_USER_PRESENT); addAction(USB_STATE) }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) registerReceiver(receiver, filter, RECEIVER_NOT_EXPORTED) else registerReceiver(receiver, filter)
+            systemSignals = receiver
+        } catch (error: RuntimeException) {
+            Log.w("PhoneBridgeConnection", "System signals unavailable: ${error.javaClass.simpleName}")
+        }
+    }
+    private fun unregisterSystemSignals() {
+        val receiver = systemSignals ?: return
+        systemSignals = null
+        runCatching { unregisterReceiver(receiver) }
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -104,12 +134,16 @@ class PhoneAccessibilityService : AccessibilityService() {
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        unregisterSystemSignals()
+        controlIndicator.hide()
         clearOperationTrail()
         BridgeSession.detach(this)
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        unregisterSystemSignals()
+        controlIndicator.hide()
         clearOperationTrail()
         AccessibilityFocusedOperation.cancel(this)
         BridgeSession.detach(this)
@@ -212,6 +246,8 @@ class PhoneAccessibilityService : AccessibilityService() {
             val occlusions = mutableListOf<Occlusion>()
             for (window in visible) {
                 if (window.id == rootId || window.displayId != Display.DEFAULT_DISPLAY) continue
+                // Our own status-bar control line: non-touchable and outside the crop.
+                if (controlIndicator.owns(window.id)) continue
                 val area = Rect().also { window.getBoundsInScreen(it) }
                 if (area.isEmpty) continue
                 val otherRoot = window.root
@@ -247,7 +283,7 @@ class PhoneAccessibilityService : AccessibilityService() {
             val excludedSystemWindowIds = visible.filter { window ->
                 val area = Rect().also { window.getBoundsInScreen(it) }
                 window.id != rootId && window.displayId == Display.DEFAULT_DISPLAY &&
-                    window.type == AccessibilityWindowInfo.TYPE_SYSTEM &&
+                    (window.type == AccessibilityWindowInfo.TYPE_SYSTEM || controlIndicator.owns(window.id)) &&
                     !window.isFocused && !window.isActive && !area.isEmpty &&
                     !Rect.intersects(area, bounds)
             }.map { it.id }.toSet()

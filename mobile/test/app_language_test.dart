@@ -165,6 +165,7 @@ void main() {
             'status',
             'getLanguagePreference',
             'getShowOperationTrails',
+            'getShowControlIndicator',
             'getTapJitter',
             'getRandomControlDelay',
             'getAutoReceiveFilesEnabled',

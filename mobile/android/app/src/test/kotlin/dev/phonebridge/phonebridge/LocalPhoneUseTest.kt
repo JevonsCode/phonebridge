@@ -109,4 +109,18 @@ class LocalPhoneUseTest {
         now++
         assertFalse(use.active)
     }
+
+    @Test fun appOpenedByARemoteTapDoesNotLookLikeOwnerInput() {
+        // Tapping Share in PhoneBridge opens the system chooser, which scrolls its list.
+        use.expectFeedback("dev.phonebridge.phonebridge", eventTypes = TYPE_VIEW_CLICKED)
+        assertFalse(use.accessibilityEvent(TYPE_VIEW_CLICKED, "dev.phonebridge.phonebridge", now))
+        now += 900
+        assertFalse(use.accessibilityEvent(TYPE_VIEW_SCROLLED, "com.android.intentresolver", now))
+        assertFalse(use.accessibilityEvent(TYPE_VIEW_TEXT_CHANGED, "com.twitter.android", now))
+        assertFalse(use.active)
+        // A click in the other app is still owner input, and so is a late scroll.
+        assertTrue(use.accessibilityEvent(TYPE_VIEW_CLICKED, "com.android.intentresolver", now))
+        now += 2_000
+        assertTrue(use.accessibilityEvent(TYPE_VIEW_SCROLLED, "com.android.intentresolver", now))
+    }
 }

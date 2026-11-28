@@ -40,6 +40,8 @@ object AutomationPreferences {
     fun setRandomControlDelay(context: Context, enabled: Boolean) = save(context, "randomControlDelay", enabled)
     fun clipboardAccessEnabled(context: Context): Boolean = read(context, "clipboardAccessEnabled")
     fun setClipboardAccessEnabled(context: Context, enabled: Boolean) = save(context, "clipboardAccessEnabled", enabled)
+    fun showControlIndicator(context: Context) = read(context, "showControlIndicator")
+    fun setShowControlIndicator(context: Context, enabled: Boolean) = save(context, "showControlIndicator", enabled)
     fun protectConnectionControls(context: Context): Boolean = read(context, "protectConnectionControls")
     fun setProtectConnectionControls(context: Context, enabled: Boolean) = save(context, "protectConnectionControls", enabled)
 }
